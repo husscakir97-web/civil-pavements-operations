@@ -1,0 +1,23 @@
+import { Document, Packer, Paragraph, HeadingLevel, Table, TableRow, TableCell, WidthType, TextRun } from 'docx';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import ExcelJS from 'exceljs';
+import type { PreparationRecord } from './preparation';
+export function exportLines(record:PreparationRecord,issues:string[]){return [record.title,`${record.status==='Approved'||record.status==='Submitted'?'APPROVED CONTENT':'DRAFT — NOT FOR ISSUE'} | Revision ${record.revision}`,`Prepared ${record.created_at.slice(0,10)}`,...(issues.length?['Unresolved requirements',...issues]:[]),...record.data.sections.flatMap(s=>[s.title,s.text,s.source?`Source: ${s.source}`:'']),...record.data.rows.flatMap(r=>[r.question,r.answer,...Object.entries(r.fields).map(([k,v])=>`${k}: ${v}`),`Owner: ${r.owner} | Due: ${r.due} | ${r.status}`,`Source: ${r.sourceId} / ${r.sourceRef}`,`Evidence: ${r.evidence.map(e=>`${e.id} rev ${e.revision}`).join(', ')}`,...(r.notApplicable?[`Not applicable: ${r.notApplicable.reason} (${r.notApplicable.by})`]:[]),...(r.acceptance?[`Client acceptance: ${r.acceptance.reference} (${r.acceptance.date})`]:[])]),record.data.notes];}
+export async function docxExport(record:PreparationRecord,issues:string[]){
+ const lines=exportLines(record,issues);const children=lines.filter(Boolean).map((text,i)=>new Paragraph({heading:i===0?HeadingLevel.TITLE:undefined,children:[new TextRun({text,size:i===0?36:22})],spacing:{after:120}}));
+ if(record.data.rows.length){const columns=['Requirement','Response','Owner','Due','Status'];children.push(new Paragraph({text:'Response index',heading:HeadingLevel.HEADING_1}));const table=new Table({width:{size:100,type:WidthType.PERCENTAGE},rows:[columns,...record.data.rows.map(r=>[r.question,r.answer,r.owner,r.due,r.status])].map(c=>new TableRow({children:c.map(text=>new TableCell({children:[new Paragraph(text)]}))}))});return new Uint8Array(await Packer.toArrayBuffer(new Document({sections:[{children:[...children,table]}]})));}
+ return new Uint8Array(await Packer.toArrayBuffer(new Document({sections:[{children}]})));
+}
+export async function pdfExport(record:PreparationRecord,issues:string[]){
+ const pdf=await PDFDocument.create(),font=await pdf.embedFont(StandardFonts.Helvetica);let page=pdf.addPage([595.28,841.89]),y=790,pageNo=1;
+ const footer=()=>page.drawText(`${record.status} | Revision ${record.revision} | Page ${pageNo}`,{x:45,y:25,size:9,font,color:rgb(.3,.3,.3)});
+ for(const raw of exportLines(record,issues))for(const paragraph of raw.split('\n')){
+ // Standard-font exports explicitly reject unsupported characters rather than silently losing content.
+ font.encodeText(paragraph);const words=paragraph.split(/\s+/);let line='';
+ const draw=(text:string)=>{if(y<60){footer();page=pdf.addPage([595.28,841.89]);pageNo++;y=790;}page.drawText(text,{x:45,y,size:11,font});y-=16;};
+ for(const word of words){if(font.widthOfTextAtSize(line+' '+word,11)>500&&line){draw(line);line='';}if(font.widthOfTextAtSize(word,11)>500){for(const char of word){if(font.widthOfTextAtSize(line+char,11)>500){draw(line);line='';}line+=char;}}else line+=(line?' ':'')+word;}
+ draw(line);y-=5;
+ }footer();return pdf.save();
+}
+export async function xlsxExport(record:PreparationRecord,issues:string[]){const book=new ExcelJS.Workbook(),sheet=book.addWorksheet('Register');const fields=[...new Set(record.data.rows.flatMap(r=>Object.keys(r.fields)))];sheet.addRow(['Requirement','Answer','Owner','Due','Status','Source file','Page / section',...fields,'Evidence revisions','Not applicable reason','Client acceptance']);for(const r of record.data.rows)sheet.addRow([r.question,r.answer,r.owner,r.due,r.status,r.sourceId,r.sourceRef,...fields.map(k=>r.fields[k]||''),r.evidence.map(e=>`${e.id} r${e.revision}`).join('; '),r.notApplicable?.reason||'',r.acceptance?.reference||'']);sheet.columns.forEach(c=>{c.width=28;c.alignment={wrapText:true,vertical:'top'};});sheet.getRow(1).font={bold:true};sheet.views=[{state:'frozen',ySplit:1}];const info=book.addWorksheet('Manifest');info.addRows([[record.title],[`Revision ${record.revision}`,record.status],['Unresolved requirements'],...issues.map(i=>[i])]);info.getColumn(1).width=100;return new Uint8Array(await book.xlsx.writeBuffer());}
+export function csvExport(record:PreparationRecord){const fields=[...new Set(record.data.rows.flatMap(r=>Object.keys(r.fields)))];const rows=[['Requirement','Answer','Owner','Due','Status','Source file','Page / section',...fields],...record.data.rows.map(r=>[r.question,r.answer,r.owner,r.due,r.status,r.sourceId,r.sourceRef,...fields.map(k=>r.fields[k]||'')])];return '\uFEFF'+rows.map(row=>row.map(v=>'"'+(/^[=+@\-\t\r]/.test(v)?"'":'')+v.replaceAll('"','""')+'"').join(',')).join('\r\n');}

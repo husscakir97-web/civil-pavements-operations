@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1788938486153,
+      "tag": "0000_jittery_forge",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789037408723,
+      "tag": "20260910105008_field",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789040256384,
+      "tag": "20260910110000_docket_enrichment",
+      "breakpoints": true
+    }
+  ]
+}

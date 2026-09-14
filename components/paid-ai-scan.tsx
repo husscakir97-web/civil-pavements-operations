@@ -1,0 +1,11 @@
+'use client';
+import {useState} from 'react';
+import {Sparkles} from 'lucide-react';
+import {Button} from '@/components/ui/button';
+import {Dialog,DialogContent,DialogDescription,DialogHeader,DialogTitle} from '@/components/ui/dialog';
+type Availability={available:boolean;priceMinor:number|null;currency:string;message:string};
+export function PaidAiScan({kind,sourceId}:{kind:'docket'|'invoice';sourceId?:string}){
+ const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[status,setStatus]=useState<Availability|null>(null),[error,setError]=useState('');
+ async function check(){setOpen(true);setStatus(null);setError('');if(!sourceId){setError('Upload and save the original document first. You can then request a handwriting scan from its review screen.');return;}setBusy(true);try{const r=await fetch(`/api/ai-scans?kind=${kind}&sourceId=${encodeURIComponent(sourceId)}`,{cache:'no-store'}),p=await r.json() as Availability & {error?:string};if(!r.ok)throw new Error(p.error||'Could not check AI scanning.');setStatus(p);}catch(e){setError(e instanceof Error?e.message:'Could not check AI scanning.');}finally{setBusy(false)}}
+ return <><Button type="button" variant="outline" onClick={()=>void check()}><Sparkles className="size-4"/>AI scan handwriting · paid</Button><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>AI handwriting scan</DialogTitle><DialogDescription>Optional image-based extraction for this {kind}. Standard text extraction and OCR remain available.</DialogDescription></DialogHeader>{busy?<p role="status">Checking availability…</p>:<><div className="rounded-lg border p-4"><p className="font-medium">Price: {status?.priceMinor!=null?new Intl.NumberFormat('en-AU',{style:'currency',currency:status.currency}).format(status.priceMinor/100):'Not available yet'}</p><p className="mt-2 text-sm text-slate-600">{error||status?.message}</p></div><p className="text-sm text-slate-600">A scan will require a displayed price and your confirmation. Opening this window does not send your document to AI or incur a charge. Results will be drafts for review.</p><Button type="button" variant="outline" onClick={()=>setOpen(false)}>Return to document</Button></>}</DialogContent></Dialog></>;
+}

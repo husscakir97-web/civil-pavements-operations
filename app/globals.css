@@ -1,0 +1,229 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "../vendor/shadcn-tailwind-4.13.0.css";
+
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+}
+
+:root {
+  --background: #f4f6f8;
+  --foreground: #18212b;
+  --card: #ffffff;
+  --card-foreground: #18212b;
+  --popover: #ffffff;
+  --popover-foreground: #18212b;
+  --primary: #e85d25;
+  --primary-foreground: #ffffff;
+  --secondary: #edf1f4;
+  --secondary-foreground: #263442;
+  --muted: #f1f4f6;
+  --muted-foreground: #64717f;
+  --accent: #fff0e9;
+  --accent-foreground: #a73d14;
+  --destructive: #c9362b;
+  --border: #dfe4e8;
+  --input: #d6dde2;
+  --ring: #e85d25;
+  --chart-1: #e85d25;
+  --chart-2: #167d69;
+  --chart-3: #2e5f87;
+  --chart-4: #d69c22;
+  --chart-5: #687583;
+  --radius: 0.75rem;
+  --sidebar: #101a24;
+  --sidebar-foreground: #f8fafc;
+  --sidebar-primary: #e85d25;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1a2835;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #2a3744;
+  --sidebar-ring: #e85d25;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: "Aptos", "Inter", "Segoe UI", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 85% -10%, rgba(232, 93, 37, 0.08), transparent 24rem),
+    var(--background);
+  color: var(--foreground);
+  font-family: "Aptos", "Inter", "Segoe UI", Arial, sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(232, 93, 37, 0.2);
+}
+
+.print-only {
+  display: none;
+}
+
+/* Shared phone behaviour, including dialogs rendered outside the app shell. */
+.mobile-quick-nav { padding-bottom: env(safe-area-inset-bottom); }
+main section, main article, main form, main .grid > * { min-width: 0; }
+[data-slot="table-container"] { max-width: 100%; overscroll-behavior-x: contain; }
+@media (max-width: 639px) {
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+    font-size: 16px;
+    max-width: 100%;
+    min-width: 0;
+  }
+  button:not([role="checkbox"]):not([role="switch"]), summary,
+  [data-slot="native-select"], [data-slot="select-trigger"] { min-height: 44px; }
+  [data-slot="button"] { height: auto; white-space: normal; padding-block: 10px; }
+  [data-slot="dialog-content"] {
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 20px 16px;
+  }
+  [data-slot="dialog-footer"] { flex-wrap: wrap; }
+  main h2 { font-size: 1.4rem; }
+  main p, main h3, main h4, main a { overflow-wrap: anywhere; }
+  main iframe { max-height: 45dvh; }
+}
+
+@media print {
+  @page {
+    margin: 14mm;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #18212b;
+  }
+
+  .no-print,
+  .mobile-quick-nav,
+  aside,
+  header {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .quote-print {
+    font-family: Arial, sans-serif;
+    font-size: 11pt;
+    line-height: 1.45;
+  }
+
+  .quote-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    border-bottom: 3px solid #e85d25;
+    padding-bottom: 18px;
+  }
+
+  .quote-header h1 {
+    margin: 4px 0;
+    font-size: 24pt;
+    color: #101a24;
+  }
+
+  .quote-header p {
+    margin: 0;
+    color: #64717f;
+  }
+
+  .quote-kicker {
+    font-size: 9pt;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: #e85d25 !important;
+  }
+
+  .quote-meta {
+    display: grid;
+    align-content: start;
+    justify-items: end;
+    gap: 4px;
+    color: #64717f;
+  }
+
+  .quote-meta strong {
+    color: #167d69;
+    font-size: 13pt;
+  }
+
+  .quote-grid,
+  .quote-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 28px;
+    margin-top: 24px;
+  }
+
+  .quote-print h2 {
+    margin: 0 0 8px;
+    font-size: 12pt;
+    color: #101a24;
+  }
+
+  .quote-print p {
+    margin: 5px 0;
+  }
+
+  .quote-footer {
+    margin-top: 30px !important;
+    border-top: 1px solid #dfe4e8;
+    padding-top: 12px;
+    font-size: 9pt;
+    color: #64717f;
+  }
+}

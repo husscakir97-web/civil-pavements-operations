@@ -1,0 +1,22 @@
+{
+  "app/api/delivery/route.ts -> ims": "Delivery gates a shift on IMS readiness. Seam: ims -> delivery readiness.",
+  "app/api/estimates/award/route.ts -> ims": "Award writes IMS pack statements. Seam: Award -> Job (CLAUDE.md §6).",
+  "app/api/field/route.ts -> delivery": "Field reads the delivery plan for the shift. Seam: delivery -> field.",
+  "app/api/invoices/route.ts -> dockets": "Invoices reuse the docket R2 bindings. requireBindings belongs in platform storage.",
+  "app/api/job-hub/route.ts -> ims": "Job hub surfaces IMS blockers. Seam: ims -> job-hub.",
+  "app/api/opportunities/convert/route.ts -> estimates": "Opportunity conversion builds an estimate. Seam: opportunity -> estimate.",
+  "app/api/os/records/route.ts -> delivery": "Platform record endpoint reaches into the delivery job merge. Platform must not import a module.",
+  "app/api/preparation/route.ts -> estimates": "Preparation allowances reuse estimate calculations. Seam: preparation -> estimate.",
+  "app/api/tenders/estimate/route.ts -> estimates": "Tender pricing builds an estimate. Seam: tender -> estimate.",
+  "components/commercial-workspace.tsx -> invoices": "Commercial workspace embeds the invoice scanner. Needs a slot, not an import.",
+  "components/field-preparation.tsx -> preparation": "Field preparation renders preparation records. Seam: preparation -> field.",
+  "components/field-workspace.tsx -> delivery": "Field workspace reads delivery plan types. Seam: delivery -> field.",
+  "components/field-workspace.tsx -> shell": "Module reaches back into the app shell for a nav type. The type belongs in platform.",
+  "components/invoice-scanner.tsx -> tenders": "Invoice scanner reuses the tender PDF/OCR reader. The reader belongs in platform.",
+  "components/job-hub.tsx -> ims": "Job hub embeds the IMS workspace. Needs a slot, not an import.",
+  "components/job-hub.tsx -> shell": "Module reaches back into the app shell for a nav type. The type belongs in platform.",
+  "components/preparation-workspace.tsx -> tenders": "Preparation reuses the tender PDF/OCR reader. The reader belongs in platform.",
+  "lib/field.ts -> delivery": "Field cost maths is built on the delivery plan. Seam: delivery -> field.",
+  "lib/ims-readiness.ts -> preparation": "IMS readiness is derived from preparation revisions. Seam: preparation -> ims.",
+  "lib/tender-reader.ts -> dockets": "Tender reader reuses the docket dashboard PDF/OCR loaders. The loaders belong in platform."
+}

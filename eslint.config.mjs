@@ -1,11 +1,19 @@
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
+import moduleBoundaries from "./tools/eslint-plugin-module-boundaries.mjs";
 
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
   {files:["scripts/*.cjs"],rules:{"@typescript-eslint/no-require-imports":"off"}},
+  {
+    // CLAUDE.md §10: a lint rule failing the build on cross-module imports.
+    // Ownership lives in tools/module-map.mjs; the rule scopes itself to
+    // app/, components/, lib/, db/, hooks/ and middleware.ts.
+    plugins: { "module-boundaries": moduleBoundaries },
+    rules: { "module-boundaries/no-cross-module-import": "error" },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

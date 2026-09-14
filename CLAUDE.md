@@ -42,6 +42,9 @@ lib/                        business logic (currently flat — see §4)
 db/schema.ts                Drizzle schema
 drizzle/                    migrations (append-only)
 scripts/                    build + ad-hoc test scripts
+tests/                      `pnpm test` suites (node --test)
+tools/                      lint/architecture tooling — module ownership map,
+                            boundary ESLint rule, boundary baseline
 ```
 
 ### Module list
@@ -63,6 +66,22 @@ signal you've found a seam — build it as a seam, not an import.
 
 `lib/utils.ts`, `lib/authz.ts`, and `db/` are platform and may be imported by
 anyone.
+
+Ownership is declared once, in `tools/module-map.mjs`, and enforced by
+`module-boundaries/no-cross-module-import` on every `pnpm lint`. Three owners:
+
+- **platform** — importable by anyone; may import only platform.
+- **shell** — the composition root (`app/page.tsx`, `app/pavement-os.tsx`,
+  `components/operations-workspace.tsx`) that assembles module workspaces. May
+  import anything; nothing may import it.
+- **module** — may import platform and itself, nothing else.
+
+A new file under `app/`, `components/`, `lib/`, `db/` or `hooks/` must be given
+an owner in `tools/module-map.mjs` or lint fails.
+
+`tools/module-boundary-baseline.json` grandfathers the cross-module imports that
+predate the rule. It is a ratchet: nothing may be added, and the boundary test
+fails if an entry becomes stale, so the list can only shrink.
 
 ---
 
@@ -224,17 +243,30 @@ document drafting) obeys these without exception:
 
 ## 10. Testing
 
-There is currently **no test runner wired up**. `scripts/test-*.cjs` are ad-hoc
-scripts with no `test` script in `package.json` and no CI.
+`pnpm test` runs `node --test` over `tests/`. CI (`.github/workflows/ci.yml`)
+runs `pnpm lint`, `pnpm typecheck` and `pnpm test` on every push to `main` and
+every pull request, plus `pnpm build` in a separate job.
 
-Fixing this is a priority task. Until it exists: when you add logic, add a test in
-the existing script style and note in the PR that it must be run manually.
+Shared harness in `tests/helpers/`:
+- `d1.mjs` — an in-memory SQLite database built from the committed migrations,
+  wrapped in the D1 surface the app uses, plus org/user seeding.
+- `load-ts.mjs` — loads `lib/*.ts` and `app/api/**/route.ts` into the test
+  process, resolving `@/*` and stubbing `cloudflare:workers`.
 
-Once a runner exists, these must be automated and run on every commit:
-- **Tenancy isolation** — two orgs cannot see each other's data
-- **Module boundaries** — a lint rule failing the build on cross-module imports
-- **AI governance** — no AI-authored record can reach an approved status without a
-  human action in the audit log
+The three mandated suites, run on every commit:
+- **Tenancy isolation** (`tests/tenancy-isolation.test.mjs`) — every table
+  carries `organisation_id` and an index led by it; `requireActor` fails closed
+  for a foreign org; org-scoped helpers return only the caller's rows.
+- **Module boundaries** (`tests/module-boundaries.test.mjs`) — guards the lint
+  rule and the shrink-only baseline. `pnpm lint` is what fails the build.
+- **AI governance** (`tests/ai-governance.test.mjs`) — extraction produces only
+  drafts, carries source/page/confidence, and every revision leaves an audit
+  event naming a human actor.
+
+`scripts/test-*.cjs` are the older ad-hoc scripts. They are not wired into
+`pnpm test` or CI; migrating them into `tests/` is a follow-up.
+
+When you add logic, add a test in `tests/`.
 
 ---
 

@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-// eslint-disable-next-line module-boundaries/no-cross-module-import
 import "./globals.css";
 
 export const metadata: Metadata = {

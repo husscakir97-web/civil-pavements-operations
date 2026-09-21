@@ -49,7 +49,8 @@ export function UniversalSearch(){
   try{
    if(target.projectId)window.localStorage.setItem('infrastruct.project',target.projectId);
   }catch{}
-  window.location.hash=encodeURIComponent(target.hash);
+  window.history.replaceState(null,'','#'+encodeURIComponent(target.hash));
+  window.dispatchEvent(new HashChangeEvent('hashchange'));
  }
 
  return <section className="space-y-5">

@@ -128,7 +128,7 @@ function WorkspaceShell() {
     const delivery = r.includes("project manager") || r.includes("supervisor") || r.includes("operations") || r.includes("scheduler");
     const hseq = r.includes("hseq") || r.includes("safety") || r.includes("quality");
     const actions:Array<{title:string;detail:string;area:AppArea;subview?:Subview;show:boolean}> = [
-      {title:"Review active pipeline",detail:s.openOpportunities+" open opportunity"+(s.openOpportunities===1?"":"ies"),area:"Pipeline",subview:"Opportunities",show:s.openOpportunities>0&&(admin||commercial)},
+      {title:"Review active pipeline",detail:s.openOpportunities+" open opportunit"+(s.openOpportunities===1?"y":"ies"),area:"Pipeline",subview:"Opportunities",show:s.openOpportunities>0&&(admin||commercial)},
       {title:"Review upcoming shifts",detail:s.upcomingShifts+" upcoming shift"+(s.upcomingShifts===1?"":"s"),area:"Operations",subview:"Schedule",show:s.upcomingShifts>0&&(admin||delivery)},
       {title:"Resolve docket review queue",detail:s.reviewCount+" docket"+(s.reviewCount===1?"":"s")+" need review",area:"Operations",subview:"Dockets",show:s.reviewCount>0&&(admin||delivery||commercial)},
       {title:"Review potential / unapproved variations",detail:s.unapprovedVariations+" variation"+(s.unapprovedVariations===1?"":"s")+" require attention",area:"Commercial",show:s.unapprovedVariations>0&&(admin||commercial||delivery)},
@@ -137,7 +137,7 @@ function WorkspaceShell() {
       {title:"Review worker compliance",detail:s.expiredWorkers+" worker record"+(s.expiredWorkers===1?"":"s")+" with expired evidence",area:"Operations",subview:"Resources",show:s.expiredWorkers>0&&(admin||delivery||hseq)},
       {title:"Review unavailable plant",detail:s.unavailablePlant+" plant item"+(s.unavailablePlant===1?"":"s")+" unavailable, overdue or in maintenance",area:"Operations",subview:"Resources",show:s.unavailablePlant>0&&(admin||delivery)},
     ];
-    return actions.filter(action=>action.show).map(({show:_,...action})=>action);
+    return actions.filter(action=>action.show).map(action=>({title:action.title,detail:action.detail,area:action.area,subview:action.subview}));
   }, [report.summary, role]);
 
   function navigate(nextArea: AppArea, nextSubview?: Subview) {

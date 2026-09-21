@@ -41,7 +41,7 @@ function serialiseRow(row: Record<string, unknown>) {
 
 export async function GET(request: Request) {
   try {
-    const db = requireEstimateDb(); const actor=await requireActor(request, db, 'read');
+    const db = requireEstimateDb(); const actor=await requireActor(request, db, 'read', true);
     const params = new URL(request.url).searchParams;
     const moduleKey = cleanText(params.get("module"), 40);
     const resourceType = cleanText(params.get("resourceType"), 40);
@@ -60,7 +60,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const db = requireEstimateDb(); const actor=await requireActor(request, db, 'write');
+    const db = requireEstimateDb(); const actor=await requireActor(request, db, 'write', true);
     const body = await request.json() as Record<string, unknown>;
     const moduleKey = cleanText(body.module, 40);
     const resourceType = cleanText(body.resourceType, 40);

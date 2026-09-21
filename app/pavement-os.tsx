@@ -184,6 +184,25 @@ function WorkspaceShell() {
     navigate(next[0], next[1]);
   }
 
+  const visiblePrimaryNav = useMemo(() => {
+    const r=role.toLowerCase();
+    const isAdmin=r.includes('owner')||r.includes('admin');
+    const field=r.includes('field worker')||r.includes('supervisor');
+    const accounts=r.includes('accounts');
+    const hseq=r.includes('hseq')||r.includes('safety')||r.includes('quality');
+    const operations=r.includes('operations')||r.includes('scheduler');
+    const commercial=r.includes('commercial')||r.includes('estimator');
+    const allowed = isAdmin ? null :
+      field ? new Set<AppArea>(['Home','Projects','Operations','IMS & HSEQ']) :
+      accounts ? new Set<AppArea>(['Home','Commercial','Reports']) :
+      hseq ? new Set<AppArea>(['Home','Projects','IMS & HSEQ','Reports']) :
+      operations ? new Set<AppArea>(['Home','Projects','Operations','IMS & HSEQ','Reports']) :
+      commercial ? new Set<AppArea>(['Home','Pipeline','Projects','Commercial','Reports']) :
+      new Set<AppArea>(['Home','Pipeline','Projects','Operations','Commercial','IMS & HSEQ','Reports']);
+    return primaryNav.filter(([label])=>!allowed||allowed.has(label));
+  },[role]);
+  const mobileAreas=visiblePrimaryNav.map(([label])=>label).filter(label=>!['Admin','Reports'].includes(label)).slice(0,4);
+
   const navigation = (
     <>
       <div className="flex h-16 items-center border-b border-white/10 px-5">
@@ -227,24 +246,6 @@ function WorkspaceShell() {
     </>
   );
 
-  const visiblePrimaryNav = useMemo(() => {
-    const r=role.toLowerCase();
-    const isAdmin=r.includes('owner')||r.includes('admin');
-    const field=r.includes('field worker')||r.includes('supervisor');
-    const accounts=r.includes('accounts');
-    const hseq=r.includes('hseq')||r.includes('safety')||r.includes('quality');
-    const operations=r.includes('operations')||r.includes('scheduler');
-    const commercial=r.includes('commercial')||r.includes('estimator');
-    const allowed = isAdmin ? null :
-      field ? new Set<AppArea>(['Home','Projects','Operations','IMS & HSEQ']) :
-      accounts ? new Set<AppArea>(['Home','Commercial','Reports']) :
-      hseq ? new Set<AppArea>(['Home','Projects','IMS & HSEQ','Reports']) :
-      operations ? new Set<AppArea>(['Home','Projects','Operations','IMS & HSEQ','Reports']) :
-      commercial ? new Set<AppArea>(['Home','Pipeline','Projects','Commercial','Reports']) :
-      new Set<AppArea>(['Home','Pipeline','Projects','Operations','Commercial','IMS & HSEQ','Reports']);
-    return primaryNav.filter(([label])=>!allowed||allowed.has(label));
-  },[role]);
-  const mobileAreas=visiblePrimaryNav.map(([label])=>label).filter(label=>!['Admin','Reports'].includes(label)).slice(0,4);
   const areaSubviews = subviews[area] ?? [];
   const activeSubview = subview ?? defaults[area];
 

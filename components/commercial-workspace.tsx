@@ -1,5 +1,5 @@
 'use client';
-import {useEffect,useEffectEvent,useMemo,useState} from 'react';import {Button} from '@/components/ui/button';import {Input} from '@/components/ui/input';import {Textarea} from '@/components/ui/textarea';import {NativeSelect,NativeSelectOption} from '@/components/ui/native-select';
+import {useEffect,useEffectEvent,useState} from 'react';import {Button} from '@/components/ui/button';import {Input} from '@/components/ui/input';import {Textarea} from '@/components/ui/textarea';import {NativeSelect,NativeSelectOption} from '@/components/ui/native-select';
 type Job={id:string;name:string;client:string;baseline:Record<string,number>;current:Record<string,number>;metrics:Record<string,number>;categories:Record<string,number>;alerts:string[]};type Variation={id:string;name:string;status:string;metadata:Record<string,unknown>};
 const n=(v:number)=>new Intl.NumberFormat('en-AU',{style:'currency',currency:'AUD',maximumFractionDigits:0}).format(v||0);const pct=(v:number)=>`${(v||0).toFixed(1)}%`;
 import { InvoiceScanner } from '@/components/invoice-scanner';

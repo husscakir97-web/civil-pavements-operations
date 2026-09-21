@@ -22,7 +22,7 @@ export function JobHub({onNavigate}:{onNavigate:(label:NavLabel)=>void}){
  const [data,setData]=useState<Data|null>(null);
  const [error,setError]=useState('');
 
- useEffect(()=>{try{const saved=window.localStorage.getItem('infrastruct.project');if(saved)setJobId(saved);}catch{}},[]);
+ useEffect(()=>{try{const saved=window.localStorage.getItem('infrastruct.project');if(saved)queueMicrotask(()=>setJobId(saved));}catch{}},[]);
  useEffect(()=>{try{if(jobId)window.localStorage.setItem('infrastruct.project',jobId);else window.localStorage.removeItem('infrastruct.project');}catch{}},[jobId]);
  useEffect(()=>{let live=true;fetch('/api/job-hub?jobId='+encodeURIComponent(jobId),{cache:'no-store'}).then(async r=>{const d=await r.json() as Data&{error?:string};if(!r.ok)throw new Error(d.error||'Project could not be loaded');if(live){setData(d);setError('');}}).catch(e=>{if(live)setError(e instanceof Error?e.message:String(e));});return()=>{live=false;};},[jobId]);
 

@@ -7,7 +7,7 @@ export async function GET(request:Request){try{
  const db=requireEstimateDb(),actor=await requireActor(request,db);
  const organisation=await db.prepare('SELECT name FROM organisations WHERE id=?').bind(actor.organisationId).first<{name:string}>();
  const row=await db.prepare("SELECT metadata FROM attachments WHERE organisation_id=? AND id=? AND status='workspace-settings'").bind(actor.organisationId,`workspace-brand:${actor.organisationId}`).first<{metadata:string}>();
- return Response.json({brand:{...defaultBrand,companyName:organisation?.name||defaultBrand.companyName,...safeJson(row?.metadata,{})},canEdit:['owner/admin','admin'].includes(actor.role),userEmail:actor.email});
+ return Response.json({brand:{...defaultBrand,companyName:organisation?.name||defaultBrand.companyName,...safeJson(row?.metadata,{})},canEdit:['owner/admin','admin'].includes(actor.role),userEmail:actor.email,role:actor.role});
 }catch(e){return authError(e)}}
 export async function PUT(request:Request){try{
  const db=requireEstimateDb(),actor=await requireActor(request,db,'admin'),brand=schema.parse(await request.json()),now=new Date().toISOString(),id=`workspace-brand:${actor.organisationId}`;

@@ -27,6 +27,7 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/
 import { WorkspaceBrandProvider, useWorkspaceBrand } from "@/components/workspace-brand";
 import { JobHub } from "@/components/job-hub";
 import { UniversalSearch } from "@/components/universal-search";
+import { PipelineWorkspace } from "@/components/pipeline-workspace";
 import { PreparationWorkspace } from "@/components/preparation-workspace";
 import { IMSWorkspace } from "@/components/ims-workspace";
 
@@ -296,17 +297,8 @@ function WorkspaceShell() {
               </section>
               <LiveReport {...report} overview />
             </div>}
-            {area === "Pipeline" && activeSubview === "Opportunities" && <OperationsPage key="pipeline-opportunities" module="Opportunities" onNavigate={navigateLegacy} />}
-            {area === "Pipeline" && activeSubview === "Tenders" && (
-              <div className="space-y-4">
-                <section className="rounded-xl border bg-white p-4">
-                  <p className="text-sm font-medium text-slate-500">Tender workspace</p>
-                  <h1 className="text-2xl font-bold">Tenders</h1>
-                  <p className="mt-1 text-sm text-slate-600">Select an opportunity below to open its tender documents, source-linked findings and tender review workflow. This reuses the existing tender engine while keeping tender work inside Pipeline.</p>
-                </section>
-                <OperationsPage key="pipeline-tenders" module="Opportunities" onNavigate={navigateLegacy} />
-              </div>
-            )}
+            {area === "Pipeline" && activeSubview === "Opportunities" && <PipelineWorkspace mode="pipeline" onOpenTender={()=>navigate("Pipeline","Tenders")} />}
+            {area === "Pipeline" && activeSubview === "Tenders" && <PipelineWorkspace mode="tenders" />}
             {area === "Pipeline" && activeSubview === "Estimates" && <EstimatesQuotes />}
             {area === "Projects" && <JobHub onNavigate={navigateLegacy} />}
             {area === "Operations" && activeSubview === "Schedule" && <OperationsPage key="operations-schedule" module="Planning" onNavigate={navigateLegacy} />}
@@ -316,7 +308,7 @@ function WorkspaceShell() {
             {area === "Commercial" && <CommercialWorkspace />}
             {area === "IMS & HSEQ" && <IMSWorkspace onNavigate={label => navigateLegacy(label as NavLabel)} />}
             {area === "Reports" && <LiveReport {...report} overview={false} />}
-            {area === "Admin" && activeSubview === "Company Library" && <PreparationWorkspace />}
+            {area === "Admin" && activeSubview === "Company Library" && <PreparationWorkspace scope="company" />}
             {area === "Admin" && activeSubview === "Settings" && <OperationsPage key="admin-settings" module="Settings" onNavigate={navigateLegacy} />}
             {area === "Search" && <UniversalSearch />}
           </main>

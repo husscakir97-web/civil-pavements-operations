@@ -86,6 +86,9 @@ const currencyExact = new Intl.NumberFormat("en-AU", {
 });
 const decimal = new Intl.NumberFormat("en-AU", { maximumFractionDigits: 1 });
 
+const estimateSteps = ["Scope & Quantities","Production & Resources","Subcontractors & Indirects","Price & Margin","Assumptions & Exclusions","Review & Approval"] as const;
+type EstimateStep=(typeof estimateSteps)[number];
+
 const rateCategories: Array<{ key: "materials" | "labour" | "plant" | "traffic" | "subcontractors" | "allowances"; label: string }> = [
   { key: "materials", label: "Materials & external" },
   { key: "labour", label: "Labour" },
@@ -142,7 +145,7 @@ function newId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
-export function EstimatesQuotes() {
+export function EstimatesQuotes({opportunityId,opportunityName}:{opportunityId?:string;opportunityName?:string}={}) {
   const [estimates, setEstimates] = useState<EstimateRecord[]>([]);
   const [form, setForm] = useState<EstimateData>(() => makeDefaultEstimate());
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -158,6 +161,7 @@ export function EstimatesQuotes() {
   const [showRates, setShowRates] = useState(false);
   const [rateSaving, setRateSaving] = useState(false);
   const [filter, setFilter] = useState("");
+  const [estimateStep,setEstimateStep]=useState<EstimateStep>("Scope & Quantities");
 
   const totals = useMemo(() => calculateEstimate(form), [form]);
   const validation = useMemo(() => validateEstimate(form, totals), [form, totals]);
@@ -182,12 +186,14 @@ export function EstimatesQuotes() {
     setClients(payload.clients ?? []);
     setOpportunities(payload.opportunities ?? []);
     setJobs(payload.jobs ?? []);
-    const id = preferredId ?? selectedId ?? payload.estimates?.[0]?.id;
+    const linkedId = opportunityId ? payload.estimates?.find(estimate => estimate.data.opportunityId === opportunityId)?.id : undefined;
+    const id = preferredId ?? selectedId ?? linkedId ?? (opportunityId ? undefined : payload.estimates?.[0]?.id);
     if (id) await openEstimate(id);
     else {
       setSelectedId(null);
       setCurrentStatus("Draft");
-      setForm(makeDefaultEstimate(library));
+      const next = makeDefaultEstimate(library);
+      setForm(opportunityId ? {...next,opportunityId,opportunityName:opportunityName||next.opportunityName} : next);
       setRevisions([]);
     }
   }
@@ -411,7 +417,21 @@ export function EstimatesQuotes() {
             </div>
           </section>
 
-          <Section icon={FileText} title="Client, project & scope" description="Link the estimate to the opportunity and describe the work being priced.">
+          <div className="sticky top-16 z-10 space-y-3 rounded-xl border bg-white/95 p-3 shadow-sm backdrop-blur no-print">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
+              <Metric label="Direct cost" value={<Money value={totals.directCost}/>} />
+              <Metric label="Total cost" value={<Money value={totals.totalCost}/>} />
+              <Metric label="Sell ex GST" value={<Money value={totals.sellRate}/>} tone="green" />
+              <Metric label="Gross profit" value={<Money value={totals.grossProfit}/>} />
+              <Metric label="Margin" value={decimal.format(totals.grossMargin)+"%"} tone={totals.grossMargin>=form.targetMarginPct?"green":"amber"} />
+              <Metric label="$/t" value={<Money value={totals.sellRatePerTonne} exact/>} />
+              <Metric label="$/m²" value={<Money value={totals.sellRatePerM2} exact/>} />
+              <Metric label="Shifts" value={totals.estimatedShifts} />
+            </div>
+            <nav aria-label="Estimate sections" className="flex gap-2 overflow-x-auto">{estimateSteps.map(step=><Button key={step} size="sm" className="shrink-0" variant={estimateStep===step?"default":"outline"} onClick={()=>setEstimateStep(step)}>{step}</Button>)}</nav>
+          </div>
+
+          <Section className={estimateStep==="Scope & Quantities"?"":"hidden"} icon={FileText} title="Client, project & scope" description="Link the estimate to the opportunity and describe the work being priced.">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <Field label="Client" hint="Select a known client or enter a new name." className="lg:col-span-2"><NativeSelect value={form.clientId || "__custom"} onChange={(event) => { const value = event.target.value; const client = clients.find((item) => item.id === value); setForm((previous) => ({ ...previous, clientId: value === "__custom" ? "" : value, clientName: client?.name ?? previous.clientName })); }}><NativeSelectOption value="__custom">Enter client name…</NativeSelectOption>{clients.map((client) => <NativeSelectOption key={client.id} value={client.id}>{client.name}{client.source === "docket" ? " · from dockets" : ""}</NativeSelectOption>)}</NativeSelect><Input className="mt-2" value={form.clientName} onChange={(event) => setField("clientName", event.target.value)} placeholder="Client / principal contractor" /></Field>
               <Field label="Opportunity" className="lg:col-span-2"><NativeSelect value={form.opportunityId || "__custom"} onChange={(event) => { const value = event.target.value; const opportunity = opportunities.find((item) => item.id === value); setForm((previous) => ({ ...previous, opportunityId: value === "__custom" ? "" : value, opportunityName: opportunity?.name ?? previous.opportunityName })); }}><NativeSelectOption value="__custom">No linked opportunity / enter name…</NativeSelectOption>{opportunities.map((opportunity) => <NativeSelectOption key={opportunity.id} value={opportunity.id}>{opportunity.name}</NativeSelectOption>)}</NativeSelect><Input className="mt-2" value={form.opportunityName} onChange={(event) => setField("opportunityName", event.target.value)} placeholder="Opportunity or tender reference" /></Field>
@@ -422,7 +442,7 @@ export function EstimatesQuotes() {
             </div>
           </Section>
 
-          <Section icon={Calculator} title="Quantity & material build-up" description="Tonnage uses area × compacted depth × density, including waste. Length × width is available as a cross-check.">
+          <Section className={estimateStep==="Scope & Quantities"?"":"hidden"} icon={Calculator} title="Quantity & material build-up" description="Tonnage uses area × compacted depth × density, including waste. Length × width is available as a cross-check.">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <Field label="Area (m²)" hint={form.lengthM > 0 && form.widthM > 0 ? `Length × width = ${decimal.format(form.lengthM * form.widthM)} m²` : "Use area or length × width."}><Input type="number" min="0" step="0.1" value={form.areaM2} onChange={(event) => setNumberField("areaM2", event.target.value)} /></Field>
               <Field label="Length (m)"><Input type="number" min="0" step="0.1" value={form.lengthM} onChange={(event) => setNumberField("lengthM", event.target.value)} /></Field>
@@ -442,7 +462,7 @@ export function EstimatesQuotes() {
             <div className="mt-4 grid gap-3 sm:grid-cols-3"><Metric label="Raw tonnes" value={decimal.format(totals.rawTonnes)} note="Before waste" tone="blue" /><Metric label="Total tonnes" value={decimal.format(totals.totalTonnes)} note={`${form.wastePct}% waste included`} tone="orange" /><Metric label="Required truck trips" value={totals.requiredTrips} note={`${form.truckPayloadT || 0} t payload`} /></div>
           </Section>
 
-          <Section icon={Truck} title="Shift plan & delivery resources" description="Shift duration, production capacity and crew/plant rates drive the estimated shift count and delivery cost.">
+          <Section className={estimateStep==="Production & Resources"?"":"hidden"} icon={Truck} title="Shift plan & delivery resources" description="Shift duration, production capacity and crew/plant rates drive the estimated shift count and delivery cost.">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <Field label="Shift type"><NativeSelect value={form.shiftType} onChange={(event) => setField("shiftType", event.target.value)}><NativeSelectOption value="Day shift">Day shift</NativeSelectOption><NativeSelectOption value="Night shift">Night shift</NativeSelectOption><NativeSelectOption value="Saturday">Saturday</NativeSelectOption><NativeSelectOption value="Sunday / public holiday">Sunday / public holiday</NativeSelectOption></NativeSelect></Field>
               <Field label="Shift duration (hours)"><Input type="number" min="0" step="0.5" value={form.shiftDurationHours} onChange={(event) => setNumberField("shiftDurationHours", event.target.value)} /></Field>
@@ -457,7 +477,7 @@ export function EstimatesQuotes() {
             <div className="mt-5"><div className="mb-2 flex items-center justify-between"><div><h4 className="text-sm font-semibold text-slate-900">Traffic-control resources</h4><p className="text-xs text-slate-500">Resource quantity × days × estimated shifts × rate</p></div><Button variant="outline" size="sm" onClick={() => setForm((previous) => ({ ...previous, traffic: [...previous.traffic, { id: newId("traffic"), name: "New traffic resource", units: 1, days: 1, ratePerDay: 0 }] }))}><Plus className="size-3.5" /> Add resource</Button></div><div className="space-y-2">{form.traffic.map((line, index) => <div key={line.id} className="grid max-w-3xl grid-cols-[minmax(0,1fr)_80px_80px_100px_32px] gap-2"><Input aria-label="Traffic resource" value={line.name} onChange={(event) => updateTraffic(index, { name: event.target.value })} /><Input aria-label="Traffic units" type="number" min="0" step="1" value={line.units} onChange={(event) => updateTraffic(index, { units: Number(event.target.value) || 0 })} /><Input aria-label="Traffic days" type="number" min="0" step="1" value={line.days} onChange={(event) => updateTraffic(index, { days: Number(event.target.value) || 0 })} /><Input aria-label="Traffic rate" type="number" min="0" step="0.01" value={line.ratePerDay} onChange={(event) => updateTraffic(index, { ratePerDay: Number(event.target.value) || 0 })} /><Button aria-label="Remove traffic resource" variant="ghost" size="icon-xs" onClick={() => setForm((previous) => ({ ...previous, traffic: previous.traffic.filter((_, row) => row !== index) }))}><Trash2 className="size-3.5 text-slate-400" /></Button></div>)}</div><div className="mt-1 grid max-w-3xl grid-cols-[minmax(0,1fr)_80px_80px_100px_32px] gap-2 px-1 text-[11px] text-slate-400"><span>Resource</span><span>Units</span><span>Days</span><span>$/day</span></div></div>
           </Section>
 
-          <Section icon={Settings2} title="Mobilisation, allowances & subcontractors" description="Keep establishment, float, accommodation, travel and external work visible in the cost build-up.">
+          <Section className={estimateStep==="Subcontractors & Indirects"?"":"hidden"} icon={Settings2} title="Mobilisation, allowances & subcontractors" description="Keep establishment, float, accommodation, travel and external work visible in the cost build-up.">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <Field label="Mobilisations"><Input type="number" min="0" step="1" value={form.mobilisations} onChange={(event) => setNumberField("mobilisations", event.target.value)} /></Field>
               <Field label="Mobilisation rate ($)"><Input type="number" min="0" step="1" value={form.mobilisationRate} onChange={(event) => setNumberField("mobilisationRate", event.target.value)} /></Field>
@@ -473,7 +493,7 @@ export function EstimatesQuotes() {
             <div className="mt-5"><div className="mb-2 flex items-center justify-between"><div><h4 className="text-sm font-semibold text-slate-900">Subcontractor costs</h4><p className="text-xs text-slate-500">External quote line items, hire or specialist work.</p></div><Button variant="outline" size="sm" onClick={() => setForm((previous) => ({ ...previous, subcontractors: [...previous.subcontractors, { id: newId("subcontractor"), name: "New subcontractor", quantity: 1, unit: "item", unitRate: 0 }] }))}><Plus className="size-3.5" /> Add subcontractor</Button></div><div className="space-y-2">{form.subcontractors.map((line, index) => <div key={line.id} className="grid max-w-3xl grid-cols-[minmax(0,1fr)_80px_90px_100px_32px] gap-2"><Input aria-label="Subcontractor" value={line.name} onChange={(event) => updateSubcontractor(index, { name: event.target.value })} /><Input aria-label="Subcontractor quantity" type="number" min="0" step="0.1" value={line.quantity} onChange={(event) => updateSubcontractor(index, { quantity: Number(event.target.value) || 0 })} /><Input aria-label="Subcontractor unit" value={line.unit} onChange={(event) => updateSubcontractor(index, { unit: event.target.value })} /><Input aria-label="Subcontractor rate" type="number" min="0" step="0.01" value={line.unitRate} onChange={(event) => updateSubcontractor(index, { unitRate: Number(event.target.value) || 0 })} /><Button aria-label="Remove subcontractor" variant="ghost" size="icon-xs" onClick={() => setForm((previous) => ({ ...previous, subcontractors: previous.subcontractors.filter((_, row) => row !== index) }))}><Trash2 className="size-3.5 text-slate-400" /></Button></div>)}</div><div className="mt-1 grid max-w-3xl grid-cols-[minmax(0,1fr)_80px_90px_100px_32px] gap-2 px-1 text-[11px] text-slate-400"><span>Subcontractor</span><span>Qty</span><span>Unit</span><span>Rate</span></div></div>
           </Section>
 
-          <Section icon={CircleDollarSign} title="Commercial rules" description="Overheads, contingency, margin/markup and GST are applied to the calculated cost base.">
+          <Section className={estimateStep==="Price & Margin"?"":"hidden"} icon={CircleDollarSign} title="Commercial rules" description="Overheads, contingency, margin/markup and GST are applied to the calculated cost base.">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
               <Field label="Overheads (%)"><Input type="number" min="0" step="0.1" value={form.overheadsPct} onChange={(event) => setNumberField("overheadsPct", event.target.value)} /></Field>
               <Field label="Contingency (%)"><Input type="number" min="0" step="0.1" value={form.contingencyPct} onChange={(event) => setNumberField("contingencyPct", event.target.value)} /></Field>
@@ -484,13 +504,13 @@ export function EstimatesQuotes() {
             <div className="mt-4 grid gap-3 sm:grid-cols-4"><Metric label="Direct cost" value={<Money value={totals.directCost} />} note="Before overheads & contingency" /><Metric label="Total cost" value={<Money value={totals.totalCost} />} note={`${decimal.format(totals.costPerTonne)} / t cost`} tone="blue" /><Metric label="Gross profit" value={<Money value={totals.grossProfit} />} note={`${decimal.format(totals.grossMargin)}% margin`} tone={totals.grossMargin >= form.targetMarginPct ? "green" : "amber"} /><Metric label="Quote incl. GST" value={<Money value={totals.totalQuoteValue} />} note={`${currencyExact.format(totals.sellRate)} ex GST`} tone="orange" /></div>
           </Section>
 
-          <Section icon={FileText} title="Notes, exclusions & assumptions" description="These fields are retained with every estimate revision and appear in the printable quote summary.">
+          <Section className={estimateStep==="Assumptions & Exclusions"?"":"hidden"} icon={FileText} title="Notes, exclusions & assumptions" description="These fields are retained with every estimate revision and appear in the printable quote summary.">
             <div className="grid gap-4 lg:grid-cols-3"><Field label="Internal notes"><Textarea value={form.notes} onChange={(event) => setField("notes", event.target.value)} rows={4} placeholder="Estimator notes, source documents or internal review points" /></Field><Field label="Exclusions"><Textarea value={form.exclusions} onChange={(event) => setField("exclusions", event.target.value)} rows={4} placeholder="What is excluded from this price" /></Field><Field label="Assumptions"><Textarea value={form.assumptions} onChange={(event) => setField("assumptions", event.target.value)} rows={4} placeholder="Pricing and delivery assumptions" /></Field></div>
           </Section>
 
-          {(validation.errors.length > 0 || validation.warnings.length > 0) && <section className="no-print rounded-xl border border-amber-200 bg-amber-50/70 p-4"><div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 size-5 text-amber-700" /><div><h3 className="font-semibold text-amber-950">Estimate validation</h3>{validation.errors.length > 0 && <div className="mt-2 space-y-1 text-sm text-rose-800">{validation.errors.map((message) => <p key={message} className="flex gap-2"><X className="mt-0.5 size-4 shrink-0" />{message}</p>)}</div>}{validation.warnings.length > 0 && <div className="mt-2 space-y-1 text-sm text-amber-900">{validation.warnings.map((message) => <p key={message} className="flex gap-2"><AlertTriangle className="mt-0.5 size-4 shrink-0" />{message}</p>)}</div>}</div></div></section>}
+          {estimateStep==="Review & Approval" && (validation.errors.length > 0 || validation.warnings.length > 0) && <section className="no-print rounded-xl border border-amber-200 bg-amber-50/70 p-4"><div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 size-5 text-amber-700" /><div><h3 className="font-semibold text-amber-950">Estimate validation</h3>{validation.errors.length > 0 && <div className="mt-2 space-y-1 text-sm text-rose-800">{validation.errors.map((message) => <p key={message} className="flex gap-2"><X className="mt-0.5 size-4 shrink-0" />{message}</p>)}</div>}{validation.warnings.length > 0 && <div className="mt-2 space-y-1 text-sm text-amber-900">{validation.warnings.map((message) => <p key={message} className="flex gap-2"><AlertTriangle className="mt-0.5 size-4 shrink-0" />{message}</p>)}</div>}</div></div></section>}
 
-          <section className="no-print rounded-xl border bg-[#101a24] p-4 text-white shadow-sm sm:p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-wider text-orange-300">Quote control</p><h3 className="mt-1 text-lg font-semibold">{currentStatus === "Awarded" ? "Approved budget baseline" : "Save and progress this estimate"}</h3><p className="mt-1 text-sm text-slate-300">{currentStatus === "Awarded" ? `Job ${estimates.find((estimate) => estimate.id === selectedId)?.jobId?.slice(0, 8) ?? "created"} retains the awarded snapshot.` : "Every save creates a revision so the original pricing remains traceable."}</p></div><div className="flex flex-wrap justify-end gap-2">{currentStatus !== "Awarded" && <><Button variant="secondary" onClick={() => saveEstimate("Draft", "Saved draft")} disabled={busy}><Save className="size-4" /> Save draft</Button><Button variant="outline" className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white" onClick={() => saveEstimate("Internal Review", "Sent to internal review")} disabled={busy}><ShieldAlert className="size-4" /> Internal review</Button><Button variant="outline" className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white" onClick={() => saveEstimate("Submitted", "Submitted to client")} disabled={busy}><FileCheck2 className="size-4" /> Submit</Button>{["Revised", "Lost", "Cancelled"].includes(currentStatus) && <Button variant="outline" className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white" onClick={() => saveEstimate(currentStatus, `Saved as ${currentStatus}`)} disabled={busy}><Save className="size-4" /> Save {currentStatus}</Button>}<Button onClick={awardEstimate} disabled={busy || !selectedId}><CheckCircle2 className="size-4" /> Award &amp; create job</Button></>}{currentStatus === "Awarded" && <Button onClick={reopenEstimate} disabled={busy}><RefreshCw className="size-4" /> Reopen estimate</Button>}</div></div></section>
+          <section className={`no-print rounded-xl border bg-[#101a24] p-4 text-white shadow-sm sm:p-5 ${estimateStep==="Review & Approval"?"":"hidden"}`}><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-wider text-orange-300">Quote control</p><h3 className="mt-1 text-lg font-semibold">{currentStatus === "Awarded" ? "Approved budget baseline" : "Save and progress this estimate"}</h3><p className="mt-1 text-sm text-slate-300">{currentStatus === "Awarded" ? `Job ${estimates.find((estimate) => estimate.id === selectedId)?.jobId?.slice(0, 8) ?? "created"} retains the awarded snapshot.` : "Every save creates a revision so the original pricing remains traceable."}</p></div><div className="flex flex-wrap justify-end gap-2">{currentStatus !== "Awarded" && <><Button variant="secondary" onClick={() => saveEstimate("Draft", "Saved draft")} disabled={busy}><Save className="size-4" /> Save draft</Button><Button variant="outline" className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white" onClick={() => saveEstimate("Internal Review", "Sent to internal review")} disabled={busy}><ShieldAlert className="size-4" /> Internal review</Button><Button variant="outline" className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white" onClick={() => saveEstimate("Submitted", "Submitted to client")} disabled={busy}><FileCheck2 className="size-4" /> Submit</Button>{["Revised", "Lost", "Cancelled"].includes(currentStatus) && <Button variant="outline" className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white" onClick={() => saveEstimate(currentStatus, `Saved as ${currentStatus}`)} disabled={busy}><Save className="size-4" /> Save {currentStatus}</Button>}<Button onClick={awardEstimate} disabled={busy || !selectedId}><CheckCircle2 className="size-4" /> Award &amp; create job</Button></>}{currentStatus === "Awarded" && <Button onClick={reopenEstimate} disabled={busy}><RefreshCw className="size-4" /> Reopen estimate</Button>}</div></div></section>
         </div>
       </div>
 

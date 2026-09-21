@@ -27,6 +27,7 @@ async function report(){const r=await reports.GET(new Request('https://test.inva
  sql.prepare('INSERT INTO field_records VALUES (?,?,?,?,?,?,?,?)').run(shift.id,'roadworx-sydney',1,'Submitted',JSON.stringify({tonnes:45,area:200}),'{}','{}',new Date().toISOString());
  p=await report();assert.equal(p.summary.counts.field_records,1);assert.equal(p.summary.completedFields,1);assert.equal(p.summary.actualTonnes,45);
  sql.prepare('INSERT INTO opportunities VALUES (?,?,?,?,?,?)').run('foreign','other-org','Foreign','Open','{}',new Date().toISOString());
+ const operationsPayload=await (await records.GET(new Request('https://test.invalid?module=opportunities',{headers:{'oai-authenticated-user-id':'test-owner','oai-authenticated-user-email':'huss.cakir97@gmail.com'}}))).json();assert(!operationsPayload.records.some(r=>r.id==='foreign'),'Generic operations records must remain organisation-scoped');
  const refreshed=await report();assert.deepEqual(refreshed.summary,p.summary);assert.equal(files.size,1);
  const {easternDate}=load('lib/reporting.ts');assert.equal(easternDate(new Date('2026-09-10T15:00:00Z')),'2026-09-11');assert.equal(easternDate(new Date('2026-12-10T13:30:00Z')),'2026-12-11');
  console.log('PASS: zero database; Reports 200; opportunity and pipeline; planned shift; docket upload/review badge source; field_records; refreshed saved values; organisation isolation; source retained; Australian Eastern date and daylight saving.');

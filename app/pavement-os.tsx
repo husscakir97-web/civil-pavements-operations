@@ -198,7 +198,7 @@ function WorkspaceShell() {
         </div>
       </div>
       <nav aria-label="Primary application areas" className="space-y-1 p-3">
-        {primaryNav.map(([label, Icon]) => (
+        {visiblePrimaryNav.map(([label, Icon]) => (
           <button
             key={label}
             aria-current={area === label ? "page" : undefined}
@@ -227,6 +227,24 @@ function WorkspaceShell() {
     </>
   );
 
+  const visiblePrimaryNav = useMemo(() => {
+    const r=role.toLowerCase();
+    const isAdmin=r.includes('owner')||r.includes('admin');
+    const field=r.includes('field worker')||r.includes('supervisor');
+    const accounts=r.includes('accounts');
+    const hseq=r.includes('hseq')||r.includes('safety')||r.includes('quality');
+    const operations=r.includes('operations')||r.includes('scheduler');
+    const commercial=r.includes('commercial')||r.includes('estimator');
+    const allowed = isAdmin ? null :
+      field ? new Set<AppArea>(['Home','Projects','Operations','IMS & HSEQ']) :
+      accounts ? new Set<AppArea>(['Home','Commercial','Reports']) :
+      hseq ? new Set<AppArea>(['Home','Projects','IMS & HSEQ','Reports']) :
+      operations ? new Set<AppArea>(['Home','Projects','Operations','IMS & HSEQ','Reports']) :
+      commercial ? new Set<AppArea>(['Home','Pipeline','Projects','Commercial','Reports']) :
+      new Set<AppArea>(['Home','Pipeline','Projects','Operations','Commercial','IMS & HSEQ','Reports']);
+    return primaryNav.filter(([label])=>!allowed||allowed.has(label));
+  },[role]);
+  const mobileAreas=visiblePrimaryNav.map(([label])=>label).filter(label=>!['Admin','Reports'].includes(label)).slice(0,4);
   const areaSubviews = subviews[area] ?? [];
   const activeSubview = subview ?? defaults[area];
 
@@ -234,7 +252,7 @@ function WorkspaceShell() {
     <div className="min-h-screen bg-[#f4f6f8] text-slate-900">
       <a href="#main-content" className="sr-only focus:not-sr-only">Skip to content</a>
       <nav aria-label="Quick navigation" className="mobile-quick-nav fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t bg-white lg:hidden">
-        {(["Home", "Pipeline", "Projects", "Operations"] as AppArea[]).map(label => (
+        {mobileAreas.map(label => (
           <button key={label} onClick={() => navigate(label)} aria-current={area === label ? "page" : undefined} className={`min-h-14 px-1 text-xs font-medium sm:text-sm ${area === label ? "bg-orange-50 text-orange-800" : "text-slate-600"}`}>
             {label}
           </button>

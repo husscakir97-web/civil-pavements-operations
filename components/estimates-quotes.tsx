@@ -142,7 +142,7 @@ function newId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
-export function EstimatesQuotes() {
+export function EstimatesQuotes({opportunityId,opportunityName}:{opportunityId?:string;opportunityName?:string}={}) {
   const [estimates, setEstimates] = useState<EstimateRecord[]>([]);
   const [form, setForm] = useState<EstimateData>(() => makeDefaultEstimate());
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -182,12 +182,14 @@ export function EstimatesQuotes() {
     setClients(payload.clients ?? []);
     setOpportunities(payload.opportunities ?? []);
     setJobs(payload.jobs ?? []);
-    const id = preferredId ?? selectedId ?? payload.estimates?.[0]?.id;
+    const linkedId = opportunityId ? payload.estimates?.find(estimate => estimate.data.opportunityId === opportunityId)?.id : undefined;
+    const id = preferredId ?? selectedId ?? linkedId ?? (opportunityId ? undefined : payload.estimates?.[0]?.id);
     if (id) await openEstimate(id);
     else {
       setSelectedId(null);
       setCurrentStatus("Draft");
-      setForm(makeDefaultEstimate(library));
+      const next = makeDefaultEstimate(library);
+      setForm(opportunityId ? {...next,opportunityId,opportunityName:opportunityName||next.opportunityName} : next);
       setRevisions([]);
     }
   }

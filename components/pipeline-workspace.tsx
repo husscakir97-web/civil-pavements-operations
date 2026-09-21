@@ -164,7 +164,7 @@ export function PipelineWorkspace({mode='pipeline',onOpenTender}:{mode?:'pipelin
   try{setRecords(await readRecords());setError('');}catch(e){setError(e instanceof Error?e.message:'Pipeline could not be loaded.');}
   finally{setLoading(false);}
  }
- useEffect(()=>{void load();},[]);
+ useEffect(()=>{queueMicrotask(()=>{void load();});},[]);
  useEffect(()=>{if(mode!=='tenders')return;try{const saved=window.localStorage.getItem('infrastruct.tender');if(saved)queueMicrotask(()=>setSelectedId(saved));}catch{}},[mode]);
  const selected=records.find(r=>r.id===selectedId)||null;
  const grouped=useMemo(()=>Object.fromEntries(pipelineStages.map(stage=>[stage,records.filter(r=>stageOf(r.status)===stage)])) as Record<string,Opportunity[]>,[records]);

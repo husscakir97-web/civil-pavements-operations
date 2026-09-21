@@ -3,10 +3,10 @@ import {createContext,useContext,useEffect,useState,type ReactNode,type CSSPrope
 import {defaultBrand,type WorkspaceBrand} from '@/lib/workspace-brand';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
-const Context=createContext({brand:defaultBrand,canEdit:false,userEmail:'',refresh:async()=>{}});
+const Context=createContext({brand:defaultBrand,canEdit:false,userEmail:'',role:'read-only',refresh:async()=>{}});
 export const useWorkspaceBrand=()=>useContext(Context);
 export function WorkspaceBrandProvider({children}:{children:ReactNode}){
- const [data,setData]=useState({brand:defaultBrand,canEdit:false,userEmail:''});
+ const [data,setData]=useState({brand:defaultBrand,canEdit:false,userEmail:'',role:'read-only'});
  async function refresh(){const r=await fetch('/api/workspace',{cache:'no-store'});if(r.ok)setData(await r.json());}
  useEffect(()=>{let active=true;fetch('/api/workspace',{cache:'no-store'}).then(async r=>{if(r.ok&&active)setData(await r.json());}).catch(()=>{});return()=>{active=false;};},[]);
  useEffect(()=>{document.title=data.brand.productName;},[data.brand.productName]);

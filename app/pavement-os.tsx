@@ -96,7 +96,7 @@ export function PavementOS() {
 }
 
 function WorkspaceShell() {
-  const { brand, userEmail } = useWorkspaceBrand();
+  const { brand, userEmail, role } = useWorkspaceBrand();
   const initial = useMemo(() => ({ area: "Home" as AppArea, subview: undefined as Subview | undefined }), []);
   const [area, setArea] = useState<AppArea>(initial.area);
   const [subview, setSubview] = useState<Subview | undefined>(initial.subview);
@@ -119,6 +119,26 @@ function WorkspaceShell() {
   }, []);
 
   const report = useLiveReport(area === "Reports" ? "Reports" : "Overview");
+  const homeActions = useMemo(() => {
+    const s = report.summary;
+    if (!s) return [] as Array<{title:string;detail:string;area:AppArea;subview?:Subview}>;
+    const r = role.toLowerCase();
+    const admin = r.includes("owner") || r === "admin" || r.includes("admin");
+    const commercial = r.includes("commercial") || r.includes("estimator") || r.includes("accounts");
+    const delivery = r.includes("project manager") || r.includes("supervisor") || r.includes("operations") || r.includes("scheduler");
+    const hseq = r.includes("hseq") || r.includes("safety") || r.includes("quality");
+    const actions:Array<{title:string;detail:string;area:AppArea;subview?:Subview;show:boolean}> = [
+      {title:"Review active pipeline",detail:s.openOpportunities+" open opportunity"+(s.openOpportunities===1?"":"ies"),area:"Pipeline",subview:"Opportunities",show:s.openOpportunities>0&&(admin||commercial)},
+      {title:"Review upcoming shifts",detail:s.upcomingShifts+" upcoming shift"+(s.upcomingShifts===1?"":"s"),area:"Operations",subview:"Schedule",show:s.upcomingShifts>0&&(admin||delivery)},
+      {title:"Resolve docket review queue",detail:s.reviewCount+" docket"+(s.reviewCount===1?"":"s")+" need review",area:"Operations",subview:"Dockets",show:s.reviewCount>0&&(admin||delivery||commercial)},
+      {title:"Review potential / unapproved variations",detail:s.unapprovedVariations+" variation"+(s.unapprovedVariations===1?"":"s")+" require attention",area:"Commercial",show:s.unapprovedVariations>0&&(admin||commercial||delivery)},
+      {title:"Review unbilled completed work",detail:new Intl.NumberFormat("en-AU",{style:"currency",currency:"AUD",maximumFractionDigits:0}).format(s.unbilledValue)+" currently unbilled",area:"Commercial",show:s.unbilledValue>0&&(admin||commercial)},
+      {title:"Resolve QA / HSEQ actions",detail:s.openQA+" open QA / HSEQ record"+(s.openQA===1?"":"s"),area:"IMS & HSEQ",show:s.openQA>0&&(admin||delivery||hseq)},
+      {title:"Review worker compliance",detail:s.expiredWorkers+" worker record"+(s.expiredWorkers===1?"":"s")+" with expired evidence",area:"Operations",subview:"Resources",show:s.expiredWorkers>0&&(admin||delivery||hseq)},
+      {title:"Review unavailable plant",detail:s.unavailablePlant+" plant item"+(s.unavailablePlant===1?"":"s")+" unavailable, overdue or in maintenance",area:"Operations",subview:"Resources",show:s.unavailablePlant>0&&(admin||delivery)},
+    ];
+    return actions.filter(action=>action.show).map(({show:_,...action})=>action);
+  }, [report.summary, role]);
 
   function navigate(nextArea: AppArea, nextSubview?: Subview) {
     const resolvedSubview = nextSubview ?? defaults[nextArea];
@@ -266,7 +286,16 @@ function WorkspaceShell() {
               </nav>
             )}
 
-            {area === "Home" && <LiveReport {...report} overview />}
+            {area === "Home" && <div className="space-y-5">
+              <section className="rounded-xl border bg-white p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div><p className="text-sm font-medium text-slate-500">Home</p><h1 className="text-2xl font-bold">My Actions</h1><p className="mt-1 text-sm text-slate-600">Priority work is derived from your role and current organisation exceptions.</p></div>
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">{role || "read-only"}</span>
+                </div>
+                {!report.summary ? <p className="mt-4 text-sm text-slate-500">Loading current actions…</p> : homeActions.length ? <div className="mt-4 grid gap-3 lg:grid-cols-2">{homeActions.map(action=><button key={action.title} onClick={()=>navigate(action.area,action.subview)} className="rounded-lg border p-4 text-left transition hover:border-orange-300 hover:bg-orange-50"><p className="font-semibold">{action.title}</p><p className="mt-1 text-sm text-slate-600">{action.detail}</p></button>)}</div> : <p className="mt-4 rounded-lg border border-dashed p-4 text-sm text-slate-600">No current priority exceptions are assigned by the dashboard rules. Review your active workspaces below.</p>}
+              </section>
+              <LiveReport {...report} overview />
+            </div>}
             {area === "Pipeline" && activeSubview === "Opportunities" && <OperationsPage key="pipeline-opportunities" module="Opportunities" onNavigate={navigateLegacy} />}
             {area === "Pipeline" && activeSubview === "Tenders" && (
               <div className="space-y-4">

@@ -3,6 +3,7 @@ import {useEffect,useMemo,useState} from 'react';
 import {Button} from '@/components/ui/button';
 import {NativeSelect,NativeSelectOption} from '@/components/ui/native-select';
 import {IMSWorkspace} from '@/components/ims-workspace';
+import {PreparationWorkspace} from '@/components/preparation-workspace';
 import type {NavLabel} from '@/components/operations-workspace';
 
 type Row={id:string;name:string;status:string;created_at?:string;work_date?:string;amount?:number;metadata?:Record<string,unknown>};
@@ -57,6 +58,7 @@ export function JobHub({onNavigate}:{onNavigate:(label:NavLabel)=>void}){
    {tab==='Setup'&&<div className="grid gap-4 lg:grid-cols-2">
     <section className="rounded-xl border bg-white p-4"><h3 className="font-semibold">Tender handover & approved baseline</h3><p className="mt-1 text-sm text-slate-500">The awarded estimate remains the commercial baseline for the project.</p><pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-3 text-xs">{JSON.stringify(data.job.metadata?.approvedBudget||{},null,2)}</pre></section>
     <section className="rounded-xl border bg-white p-4"><h3 className="font-semibold">Pre-commencement</h3>{data.blockers?.length?<ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-amber-900">{data.blockers.map(x=><li key={x}>{x}</li>)}</ul>:<p className="mt-3 text-sm text-slate-600">Mandatory IMS evidence is complete in the current readiness check.</p>}<Button className="mt-4" onClick={()=>setTab('Quality & HSEQ')}>Review IMS / HSEQ evidence</Button></section>
+    <div className="lg:col-span-2"><PreparationWorkspace scope="project" jobId={jobId}/></div>
    </div>}
 
    {tab==='Delivery'&&<div className="space-y-4">

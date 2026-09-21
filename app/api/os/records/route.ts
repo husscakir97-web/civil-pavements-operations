@@ -88,7 +88,7 @@ export async function POST(request: Request) {
 
 export async function PUT(request: Request) {
   try {
-    const db = requireEstimateDb(); await requireActor(request, db, 'write');
+    const db = requireEstimateDb(); const actor=await requireActor(request, db, 'write');
     const body = await request.json() as Record<string, unknown>;
     const moduleKey = cleanText(body.module, 40);
     const resourceType = cleanText(body.resourceType, 40);
@@ -116,5 +116,5 @@ export async function PUT(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  try { const db=requireEstimateDb(); await requireActor(request,db,'write'); const p=new URL(request.url).searchParams; const moduleKey=cleanText(p.get('module'),40); const resourceType=cleanText(p.get('resourceType'),40); const table=resolveTable(moduleKey,resourceType); const id=cleanText(p.get('id'),100); if(!table||!id) return jsonError('A record and module are required.'); const r=await db.prepare(`UPDATE ${table} SET status='Archived' WHERE organisation_id=? AND id=?`).bind(actor.organisationId,id).run(); if(!r.success||r.meta.changes===0) return jsonError('Record not found.',404); await db.prepare(`INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)`).bind(crypto.randomUUID(),actor.organisationId,`record.archived:${moduleKey}`,'recorded',JSON.stringify({recordId:id}),nowIso()).run(); return Response.json({archived:true,id}); } catch(e){ return jsonError('The record could not be archived.',503); }
+  try { const db=requireEstimateDb(); const actor=await requireActor(request,db,'write'); const p=new URL(request.url).searchParams; const moduleKey=cleanText(p.get('module'),40); const resourceType=cleanText(p.get('resourceType'),40); const table=resolveTable(moduleKey,resourceType); const id=cleanText(p.get('id'),100); if(!table||!id) return jsonError('A record and module are required.'); const r=await db.prepare(`UPDATE ${table} SET status='Archived' WHERE organisation_id=? AND id=?`).bind(actor.organisationId,id).run(); if(!r.success||r.meta.changes===0) return jsonError('Record not found.',404); await db.prepare(`INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)`).bind(crypto.randomUUID(),actor.organisationId,`record.archived:${moduleKey}`,'recorded',JSON.stringify({recordId:id}),nowIso()).run(); return Response.json({archived:true,id}); } catch(e){ return jsonError('The record could not be archived.',503); }
 }

@@ -1,13 +1,15 @@
+import {getAuth} from '@/lib/platform/auth';
 import {randomBytes,createHash} from 'node:crypto';
 import {z} from 'zod';
 import {withActor} from '@/lib/platform/route';
 import {actorContext} from '@/lib/platform/context';
 import {getPool} from '@/lib/platform/database';
-import {sendEmail} from '@/lib/platform/email';
+import {sendEmail,isEmailEnabled} from '@/lib/platform/email';
 import type {RowDataPacket} from 'mysql2';
 const digest=(token:string)=>createHash('sha256').update(token).digest('hex');
-export const GET=withActor(async()=>{const actor=actorContext.getStore()!;return Response.json({userId:actor.userId,email:actor.email,role:actor.role,organisationId:actor.organisationId});},'read');
+export const GET=withActor(async()=>{const actor=actorContext.getStore()!;return Response.json({userId:actor.userId,email:actor.email,role:actor.role,organisationId:actor.organisationId,emailEnabled:isEmailEnabled()});},'read');
 export const POST=withActor(async(request)=>{
+ if(!isEmailEnabled())return Response.json({error:'Email invitations are unavailable until email is configured.'},{status:503});
  const input=z.object({email:z.string().email(),role:z.enum(['admin','office','field'])}).strict().safeParse(await request.json());if(!input.success)return Response.json({error:'A valid email and role are required.'},{status:400});
  const actor=actorContext.getStore()!,id=crypto.randomUUID(),token=randomBytes(32).toString('hex'),email=input.data.email.toLowerCase();
  await getPool().execute('INSERT INTO organisation_invitations (id,organisation_id,email,role,token_hash,invited_by,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?)',[id,actor.organisationId,email,input.data.role,digest(token),actor.userId,new Date(Date.now()+72*3600000),new Date()]);
@@ -15,6 +17,9 @@ export const POST=withActor(async(request)=>{
  return Response.json({sent:true},{status:201});
 },'admin');
 export const PUT=withActor(async(request)=>{
+ if(!isEmailEnabled())return Response.json({error:'Email invitations are unavailable until email is configured.'},{status:503});
+ const session=await getAuth().api.getSession({headers:request.headers});
+ if(!session?.user.emailVerified)return Response.json({error:'Verify your email before accepting an invitation.'},{status:403});
  const body=z.object({token:z.string().regex(/^[a-f0-9]{64}$/)}).strict().safeParse(await request.json());if(!body.success)return Response.json({error:'Invalid invitation'},{status:400});
  const actor=actorContext.getStore()!,conn=await getPool().getConnection();
  try{await conn.beginTransaction();const [rows]=await conn.execute<RowDataPacket[]>('SELECT * FROM organisation_invitations WHERE token_hash=? FOR UPDATE',[digest(body.data.token)]);const invite=rows[0];

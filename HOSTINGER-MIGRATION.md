@@ -2,6 +2,12 @@
 
 Deploy the `hostinger-migration` branch. Leave `main` unchanged. The old 64 dockets are test data: do not export, import, attach an old organisation, or connect the old Sites bucket. This setup creates a new database workspace and uses your own R2 bucket.
 
+## Launch without email (current choice)
+
+Set **EMAIL_ENABLED=false** in hPanel. Skip step 3 and omit all SMTP variables and MAIL_FROM. Signup/sign-in work immediately with an email address and password; no verification message is needed. The first signup still becomes admin and optional demo seeding still works. Invitations and password resets are unavailable, including their server endpoints. Keep your password in a password manager: there is no emailed recovery in this mode. Independent signups create separate organisations, not colleagues in yours.
+
+To enable email later, add the SMTP values below, set EMAIL_ENABLED=true, and restart. New sign-ins must then verify the address; trying to sign in sends the verification message. Existing unverified sessions cannot accept invitations until verification. No accounts, organisations or data are deleted when changing this setting.
+
 ## 1. Prepare your empty MySQL database in hPanel
 
 1. Open **Websites → your website → Dashboard → Databases → Management**.
@@ -71,6 +77,7 @@ In that deployment's **Environment variables** section, add each required row be
 
 | Exact name | Value / what it does | Where to get it |
 | --- | --- | --- |
+| `EMAIL_ENABLED` | `false` for the current launch without email; defaults to `true` when omitted | Type this value in hPanel. SMTP and MAIL_FROM are only required when true. |
 | `NODE_ENV` | `production` | Type this literal value. |
 | `BETTER_AUTH_URL` | The complete public HTTPS app address, e.g. `https://operations.your-domain.com`; no trailing slash or path | hPanel website domain/temporary HTTPS address. Use the same address you open in your browser. Update and redeploy when changing domains. |
 | `BETTER_AUTH_SECRET` | The generated 64-character secret | Browser secret generator in step 4. |
@@ -106,7 +113,7 @@ There is no `DATABASE_URL`, R2 region variable, ChatGPT auth header, old bucket 
 
 1. Click **Deploy/Redeploy**. Check the deployment/runtime logs in hPanel. Initial startup should show `Applied ...` for the MySQL migrations, then `Database migrations ready`, then Next.js ready. Later restarts skip completed migrations.
 2. Open the app's HTTPS address. Click **Create an account**, enter your name, email and a password of at least 12 characters. Be the first person to register if you want the demo in your organisation.
-3. Open the verification email and click its link. Sign in if prompted. Your account is automatically **admin** of a new organisation. There is no old-owner email, account-ID attachment, database edit, or terminal step.
+3. With email disabled, signup signs you in immediately. With email enabled, open the verification email and click its link. Sign in if prompted. Your account is automatically **admin** of a new organisation. There is no old-owner email, account-ID attachment, database edit, or terminal step.
 4. With `SEED_DEMO_DATA=true`, your organisation gets a clearly labelled demo job, an estimate and frozen historical rate/budget revision, a planned shift, worker/client, and **six synthetic dockets** dated on signup. Three are approved and three await review. These are newly generated examples, not the old 64 records.
 5. Explore Jobs, Planning, Field, Dockets, Commercial and Reports. The planned shift can be opened in Field. Other screens retain their normal empty states and creation forms. IMS readiness checks still need to be completed; demo data does not bypass approval gates. Demo dockets have no source files: upload your own sample through the app to test document storage and previews.
 6. Open **Account / Team** to invite colleagues by email as **admin**, **office**, or **field**. They register/verify using the invited email, sign in, and reopen the invitation link to accept. An independent signup gets its own organisation and never access to yours; accepting your invitation attaches their membership to yours.

@@ -17,12 +17,13 @@ await new Promise(r=>s3.listen(0,'127.0.0.1',r));
 Object.assign(process.env,{R2_ENDPOINT:`http://127.0.0.1:${s3.address().port}`,R2_ACCESS_KEY_ID:'fixture-key',R2_SECRET_ACCESS_KEY:'fixture-secret',R2_BUCKET_NAME:'test-bucket',SMTP_HOST:'127.0.0.1',SMTP_PORT:String(smtp.address().port),SMTP_SECURE:'false',SMTP_USER:'fixture',SMTP_PASSWORD:'fixture',MAIL_FROM:'test@example.invalid',BETTER_AUTH_SECRET:'integration-test-secret-with-at-least-32-characters',BETTER_AUTH_URL:'http://localhost:33179'});
 
 let app,appLog='';
+process.env.EMAIL_ENABLED='true';
 const originalDatabase=process.env.MYSQL_DATABASE;
-const freshDatabase=originalDatabase+'_fresh_test',emptyDatabase=originalDatabase+'_empty_test',created=[];
+const freshDatabase=originalDatabase+'_fresh_test',emptyDatabase=originalDatabase+'_empty_test',noEmailDatabase=originalDatabase+'_noemail_test',created=[];
 const stop=async()=>{if(app&&app.exitCode===null){await new Promise(resolve=>{app.once('exit',resolve);app.kill();});}app=undefined;};
 const start=async(database,demo)=>{process.env.MYSQL_DATABASE=database;process.env.SEED_DEMO_DATA=demo;appLog='';app=spawn(process.execPath,['scripts/start.mjs'],{env:{...process.env,PORT:'33179'},stdio:['ignore','pipe','pipe']});app.stdout.on('data',b=>appLog+=b);app.stderr.on('data',b=>appLog+=b);for(let i=0;i<120;i++){try{if((await fetch(process.env.BETTER_AUTH_URL+'/login')).ok)return;}catch{}if(app.exitCode!==null||i===119)throw new Error(appLog);await new Promise(r=>setTimeout(r,500));}};
 try{
- for(const name of [freshDatabase,emptyDatabase]){await db.query('CREATE DATABASE '+identifier(name)+' CHARACTER SET utf8mb4 COLLATE utf8mb4_bin');created.push(name);}
+ for(const name of [freshDatabase,emptyDatabase,noEmailDatabase]){await db.query('CREATE DATABASE '+identifier(name)+' CHARACTER SET utf8mb4 COLLATE utf8mb4_bin');created.push(name);}
  await start(freshDatabase,'true');
  const fresh=await connect();
  try{
@@ -73,4 +74,21 @@ try{
  await stop();await start(emptyDatabase,'true');await signup('later-empty@example.invalid');assert.equal((await empty.query('SELECT COUNT(*) AS n FROM dockets'))[0][0].n,0);
  console.log('PASS untracked schema rejected, first account without demo empty, enabling demo later does not backfill');
  }finally{await empty.end();}
+ await stop();process.env.EMAIL_ENABLED='false';
+ const smtpValues=Object.fromEntries(['SMTP_HOST','SMTP_USER','SMTP_PASSWORD','MAIL_FROM'].map(k=>[k,process.env[k]]));for(const key of Object.keys(smtpValues))delete process.env[key];
+ await start(noEmailDatabase,'true');
+ const base=process.env.BETTER_AUTH_URL,before=mails.length;
+ const post=(path,body,cookie)=>fetch(base+path,{method:'POST',headers:{origin:base,'Content-Type':'application/json',...(cookie?{cookie}:{})},body:JSON.stringify(body)});
+ let response=await post('/api/auth/sign-up/email',{name:'No email admin',email:'no-email@example.invalid',password:'Strong-no-email-password-42'});assert.equal(response.status,200,await response.clone().text());const account=(await response.json()).user;assert.equal(account.emailVerified,false);
+ response=await post('/api/auth/sign-in/email',{email:account.email,password:'Strong-no-email-password-42'});assert.equal(response.status,200,await response.clone().text());const cookie=response.headers.getSetCookie().map(c=>c.split(';')[0]).filter(c=>!c.endsWith('=')).join('; ');assert(cookie);
+ response=await fetch(base+'/api/invitations',{headers:{cookie}});const membership=await response.json();assert.equal(membership.role,'admin');assert.equal(membership.emailEnabled,false);
+ response=await fetch(base+'/api/dockets',{headers:{cookie}});assert.equal(response.status,200);assert((await response.text()).includes('DEMO-006'));
+ response=await fetch(base+'/api/auth-config');assert.equal((await response.json()).emailEnabled,false);
+ response=await post('/api/invitations',{email:'colleague@example.invalid',role:'field'},cookie);assert.equal(response.status,503);
+ for(const path of ['/api/auth/request-password-reset','/api/auth/reset-password','/api/auth/send-verification-email']){response=await post(path,{email:account.email});assert.equal(response.status,503);}
+ response=await fetch(base+'/api/invitations',{method:'PUT',headers:{cookie,origin:base,'Content-Type':'application/json'},body:JSON.stringify({token:'a'.repeat(64)})});assert.equal(response.status,503);assert.equal(mails.length,before,'Disabled email must never send messages');
+ await stop();process.env.EMAIL_ENABLED='true';Object.assign(process.env,smtpValues);await start(noEmailDatabase,'false');
+ response=await fetch(base+'/api/invitations',{method:'PUT',headers:{cookie,origin:base,'Content-Type':'application/json'},body:JSON.stringify({token:'a'.repeat(64)})});assert.equal(response.status,403);assert.match(await response.text(),/Verify your email/);
+ response=await post('/api/auth/sign-in/email',{email:account.email,password:'Strong-no-email-password-42'});assert.equal(response.status,403);assert(mails.length>before,'Enabling email must require verification on sign-in');
+ console.log('PASS first admin and demo without SMTP, immediate login, email endpoints blocked, no email sent, later verification required before invite acceptance');
 }catch(error){console.error(appLog);throw error;}finally{await stop();smtp.close();s3.close();process.env.MYSQL_DATABASE=originalDatabase;for(const name of created)await db.query('DROP DATABASE '+identifier(name));await db.end();}

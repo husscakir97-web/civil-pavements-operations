@@ -11,7 +11,7 @@ type Event={id:string;created_at:string;metadata:{actorEmail:string;email:string
 const roles:Role[]=['admin','office','field'];
 const label=(r:string)=>r.charAt(0).toUpperCase()+r.slice(1);
 const descriptions={admin:'Full access, team management, settings and rate libraries.',office:'Operational and commercial records, pricing and approvals. No team or admin settings.',field:'Shift records, quantities, site evidence and approved assigned-job documents. No financial data.'};
-const control='min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm disabled:opacity-50';
+const control='min-h-11 rounded-lg border border-slate-300 px-3 text-sm disabled:opacity-50';
 async function json(url:string,init?:RequestInit){const r=await fetch(url,{cache:'no-store',...init});const data=await r.json();if(!r.ok)throw Object.assign(new Error(data.error||'Request failed.'),{status:r.status});return data;}
 export default function Account(){
  const [me,setMe]=useState<Me>(),[members,setMembers]=useState<Member[]>([]),[events,setEvents]=useState<Event[]>([]),[drafts,setDrafts]=useState<Record<string,State>>({}),[pending,setPending]=useState<{member:Member;next:State}|null>(null);

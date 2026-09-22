@@ -29,6 +29,8 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      - name: Match Hostinger production-only dependency installation
+        run: npm prune --omit=dev
       - run: npm run build
       - name: MySQL migrations and production integration
         env:

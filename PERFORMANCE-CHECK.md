@@ -32,3 +32,13 @@ The commercial suite checks approved docket value before a claim and zero unbill
 Browser smoke checks should cover Home, all top-level areas, Operations / Field including reload, project selection, Council search (including six dockets), Commercial ($4,500 unbilled with the untouched demo), Reports and Account / Team. Do not create or modify operational records just to perform this navigation check.
 
 Large OCR scans, first visits to deferred workspaces, network conditions and hosting response times can still take time. These changes do not claim zero latency or high-volume load-test results. No schema, credentials or Hostinger settings change is required for this update.
+
+## Lightweight workspace refresh
+
+The follow-up interface refresh uses the existing React, CSS and icon dependencies: no new UI framework, web fonts, animation library or chart package. It introduces a compact sidebar/header, grouped dashboard metrics and action list, clearer workspace tabs, responsive icon navigation, static loading placeholders and visible keyboard focus. Account & Team remains available from the header avatar.
+
+Global search opens with Ctrl/Cmd+K, focuses the input and searches after a 300 ms typing pause. Query changes and unmount cancel obsolete requests; a manual submission cancels the scheduled duplicate. Results are displayed only for the current query. Workspace navigation now adds history entries, allowing browser Back/Forward between areas. The skip link does not reset the active workspace.
+
+The change leaves server permissions, financial logic, historical rates and database/storage configuration intact. Verify desktop and phone layouts, keyboard search, result navigation, Back/Forward, account access and existing workspace screens after deployment.
+
+The refreshed interface measures 216,448 uncompressed / 63,937 gzip bytes for the same initial workspace manifest entry (about 64 KB compressed, versus 152 KB before the performance work). The visual changes add about 4.2 KB gzip to the previous optimized build. This remains a 57.9% reduction from the original baseline.

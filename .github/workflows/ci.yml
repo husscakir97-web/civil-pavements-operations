@@ -38,5 +38,6 @@ jobs:
           MYSQL_USER: root
           MYSQL_PASSWORD: integration-only
         run: |
+          npm run test:fresh
           npm run db:migrate
           npm run test:mysql

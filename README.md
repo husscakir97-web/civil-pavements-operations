@@ -3,8 +3,10 @@
 Next.js 16 / React 19 on Node.js 22, MySQL (Drizzle + mysql2), Better Auth sessions,
 and Cloudflare R2 through its S3-compatible API.
 
-Start with [HOSTINGER-MIGRATION.md](HOSTINGER-MIGRATION.md) for live-data export,
-import, account attachment, environment variables, and exact hosting settings.
+Start with [HOSTINGER-MIGRATION.md](HOSTINGER-MIGRATION.md) for browser-only fresh deployment,
+optional demo content, SMTP/R2 setup, environment variables, and exact hosting settings.
+
+Hostinger setup requires no local commands. The following commands are only for developers running a local checkout. Production `npm start` applies migrations automatically before accepting requests.
 
 ```sh
 npm ci
@@ -25,7 +27,7 @@ npm start
 ```
 
 The eight existing business suites use isolated SQLite fixtures and external
-service doubles. `npm run test:mysql` adds production HTTP tests against an empty
+service doubles. `npm run test:fresh` checks automatic startup on new disposable databases (the test user needs CREATE/DROP DATABASE privileges). `npm run test:mysql` adds production HTTP tests against an empty
 MySQL/MariaDB database whose name ends in `_test`; run `npm run db:migrate` first.
 It uses real Better Auth, MySQL sessions and SQL, plus local SMTP/S3 fixtures. CI
 runs both suites and a production build on Node 22 with MySQL 8.

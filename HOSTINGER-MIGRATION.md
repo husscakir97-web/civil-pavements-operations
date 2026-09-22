@@ -1,198 +1,133 @@
-# Hostinger migration and cutover
+# Hostinger: fresh setup entirely in your browser
 
-This branch uses **npm**, a committed `package-lock.json`, `packageManager:
-"npm@10.9.2"`, and Node 22. There is no pnpm/Corepack install step. The checked-out
-source had pnpm 11.19.0 (the failed deployment reported 12.5.1); both are removed
-from this deployment path.
+Deploy the `hostinger-migration` branch. Leave `main` unchanged. The old 64 dockets are test data: do not export, import, attach an old organisation, or connect the old Sites bucket. This setup creates a new database workspace and uses your own R2 bucket.
 
-## 1. Export the live D1 data and inventory R2
+## 1. Prepare your empty MySQL database in hPanel
 
-1. Keep the old Site available until the new deployment is verified. For the final
-   export, ask staff to stop writes/uploads on the old Site and keep them stopped
-   through cutover. Cloudflare's SQL export briefly makes D1 unavailable.
-2. Check out `hostinger-migration` on a computer with Node 22, then run `npm ci`.
-3. Copy `.env.example` to `.env`. Fill in `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID`
-   and `CLOUDFLARE_API_TOKEN` from the account owning the live D1 database. The API
-   token needs D1 export access (Cloudflare D1 Edit permission). These are NOT the
-   Sites project ID or the `DB` binding name.
-4. In R2, create an API credential restricted to the existing bucket. Set
-   `R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com`,
-   `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET_NAME`. Export requires
-   list/read access; the running app needs object read/write access.
-5. Run:
+1. Open **Websites → your website → Dashboard → Databases → Management**.
+2. Use the empty database `u840559204_infrastruct`, with user `u840559204_infra_app`. Confirm the user is assigned to this database. If the database already contains app tables from an earlier trial, create a separate empty database and use its full name instead; do not delete anything to complete this guide.
+3. Copy the full database name and username. Save the database user's password in your password manager. If you do not know it, use hPanel's change-password option for this database user and copy the new value.
+4. The host for a database on the same Hostinger hosting account is normally `localhost`, port `3306`. Use the host shown by hPanel if different. Do not use your website URL as the database host.
+5. No SQL needs to be pasted into phpMyAdmin. The app creates its own tables when Hostinger starts it. Its database user needs permission to create/alter tables and indexes as well as read/write records; the normal hPanel user assigned to the database supplies this access.
 
-   ```sh
-   npm run data:export -- --out exports/live-before-hostinger --expected-dockets 64
-   ```
+[Hostinger's Node.js/MySQL instructions](https://www.hostinger.com/support/connecting-a-hostinger-mysql-database-to-a-node-js-application/).
 
-6. Check the completion message: **64 dockets**. Open `manifest.json` for every
-   table count and `r2-files.csv` for every object key, size and ETag. Keep the
-   export folder private and back it up. The script follows all R2 listing pages.
-   A mismatch stops completion; investigate it rather than changing the expected
-   count merely to pass. If live data legitimately increased, record the new
-   count and rerun with that expected count.
-7. The folder contains `all-tables.sql`, one SQL and CSV per table, JSON lossless
-   import copies, checksums, and R2 inventory. CSV is for review; don't round-trip
-   through Excel. The importer uses JSON to preserve nulls, numbers and JSON text.
-   No R2 objects are copied, renamed or deleted.
+## 2. Create your own R2 bucket and access keys
 
-If ChatGPT Sites owns the Cloudflare account and you cannot obtain D1/R2 access,
-you must obtain the database export and bucket API credentials from the account
-administrator/Sites support. GitHub source does not contain live data. An
-administrator-provided full SQL dump can be processed with:
+1. Create/sign into your free account at [Cloudflare Dashboard](https://dash.cloudflare.com/).
+2. Open **Storage & databases → R2 → Overview**. Complete the R2 subscription checkout/activation if prompted. R2 includes free monthly usage; usage above the free allowance is billed, and activation may request billing details. Choose **Standard** storage for this setup.
+3. Select **Create bucket**, enter a name such as `civil-operations-files`, leave the location automatic unless you need a specific region, and create it. Save the exact bucket name.
+4. Return to **R2 → Overview → API Tokens → Manage**. Choose **Create Account API token**. Name it `Hostinger civil operations`.
+5. Select **Object Read & Write**, then **Apply to specific buckets only**, and select your new bucket. Create the token.
+6. Copy **Access Key ID** and **Secret Access Key** from the result into your password manager. The secret is displayed only once. These are the S3 credentials; do not substitute the separate API token string.
+7. Copy the **S3 API endpoint** from the confirmation page or R2 overview. It looks like `https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com`. Use the endpoint exactly as shown, without adding the bucket name.
+8. Keep the bucket private. No public `r2.dev` URL, custom domain, Workers binding, or CORS rule is needed: authenticated app routes handle uploads/downloads on the server.
 
-```sh
-npm run data:export -- --sql /path/to/live.sql --out exports/live-before-hostinger --expected-dockets 64
-```
+[Cloudflare browser setup and keys](https://developers.cloudflare.com/r2/get-started/s3/) · [R2 activation](https://developers.cloudflare.com/r2/get-started/) · [Free allowance and pricing](https://developers.cloudflare.com/r2/pricing/).
 
-This still needs R2 credentials to create the inventory. Unknown live tables or
-columns are preserved in the export and cause import to stop until their MySQL
-schema is reviewed; nothing is silently discarded.
+## 3. Prepare Hostinger email
 
-## 2. Prepare and import MySQL
+1. In hPanel open **Emails → Manage** beside your domain. Create a mailbox such as `operations@your-domain.com`, or choose an existing mailbox you control.
+2. Finish any domain/email DNS setup shown by hPanel, including the recommended SPF/DKIM records. Confirm you can sign into that mailbox's webmail.
+3. Open **Connect Apps & Devices / Configuration settings** and find **SMTP (outgoing)**. Copy the outgoing hostname and port. Hostinger Email normally shows `smtp.hostinger.com`, **465**, **SSL**.
+4. Copy the full mailbox address for the SMTP username and use that mailbox's password. This is not your hPanel login password. Reset the mailbox password in hPanel if necessary.
+5. Use the same mailbox address as the sender (`MAIL_FROM`). The app sends verification, invitation, and password-reset messages through this mailbox. No separate email provider is required.
+6. If your mailbox explicitly uses STARTTLS on port 587, set `SMTP_PORT=587` and `SMTP_SECURE=false`. For the standard SSL/465 setup, use `SMTP_SECURE=true`.
 
-1. In Hostinger, create/select database **u840559204_infrastruct** and user
-   **u840559204_infra_app** and grant that user access. Use an EMPTY application
-   database. Do not point these commands at an existing populated application.
-2. Put the actual database host from hPanel in `MYSQL_HOST`; don't assume
-   localhost for a command running on your computer. Set `MYSQL_PORT` (usually
-   `3306`), `MYSQL_DATABASE`, `MYSQL_USER`, and `MYSQL_PASSWORD` in `.env`.
-   If accessing remotely, enable Hostinger Remote MySQL for your IP, or run the
-   commands through Hostinger SSH where that database endpoint is accessible.
-   If TLS is required, set `MYSQL_SSL_CA` to the provider's PEM CA certificate.
-3. Apply the new schema and import before anyone signs up:
+[Hostinger email settings](https://www.hostinger.com/support/4305847-set-up-hostinger-email-on-your-applications-and-devices/). Mailbox sending limits still apply.
 
-   ```sh
-   npm run db:migrate
-   npm run data:import -- exports/live-before-hostinger
-   npm run data:import -- exports/live-before-hostinger --verify-only
-   ```
+## 4. Generate the auth secret without a terminal
 
-4. Check `mysql-verification.json` inside the export folder: every application
-   table must show equal source/destination counts and `match: true`; dockets must
-   show `64` on both sides. Verification also compares hashes of every field,
-   including historical rate snapshots and immutable revisions. Import is one
-   transaction and rolls back on a mismatch. It refuses to overwrite nonempty
-   destination tables. D1's own migration/control tables remain in the backup
-   and are not applied as application tables.
-5. MySQL schema migrations use `migrations/mysql/`; never run the old SQLite SQL
-   in `drizzle/` on Hostinger. MySQL DDL is not transactional. If a first migration
-   fails part-way, fix the cause and use a fresh empty destination; don't mark it
-   applied or run an unreviewed destructive reset. Subsequent runs verify applied
-   migration checksums.
+Open the supplied **Generate-Auth-Secret.html** file in your browser, click **Generate secret**, then **Copy**. If you are reading this on GitHub, open `public/secret-generator.html` on the `hostinger-migration` branch, choose **Download raw file**, and open that downloaded HTML file in your browser.
 
-## 3. Exact Hostinger deployment settings
+The page uses the browser's cryptographic random generator to create 64 hexadecimal characters (32 random bytes). It makes no network requests and saves nothing. Paste the result into Hostinger's `BETTER_AUTH_SECRET` field and your password manager. Do not paste it into GitHub or send it in chat. Keep the same secret across redeployments. Generating a new one invalidates existing login sessions.
 
-In hPanel: **Websites → Add Website → Node.js Web App → Import Git repository**.
-Connect GitHub and select `husscakir97-web/civil-pavements-operations`.
+## 5. Connect GitHub and fill in deployment settings
 
-| Setting | Value |
-|---|---|
+Open **Websites → your Node.js website → Dashboard → Deployments → Redeploy** (or add a Node.js web app and connect GitHub if it has not been created). Select this repository and branch. Enter these values in the dashboard; these are settings for Hostinger to execute, not commands you must run on a computer.
+
+| Setting | Exact value |
+| --- | --- |
+| Repository | `husscakir97-web/civil-pavements-operations` |
 | Branch | `hostinger-migration` |
-| Application/root directory | repository root (`.`) |
-| Framework preset | `Next.js` |
-| Package manager | `npm` |
-| Install command, if editable | `npm ci` |
+| Root directory | Repository root (`.` if a value is required) |
+| Framework preset | **Next.js** |
+| Package manager | **npm** |
+| Install command, if shown | `npm ci` |
 | Build command | `npm run build` |
 | Output directory | `.next` |
 | Start command | `npm start` |
-| Underlying start command | `next start --hostname 0.0.0.0` |
-| Node version | `22.x` (tested with `22.22.0`) |
+| Node version | **22.x** |
 
-Keep development dependencies available during the build (`next`, TypeScript,
-Tailwind and build tooling must be installed). Do not set `NPM_CONFIG_OMIT=dev`.
-The output is a server app, not a static export. The Next.js preset must retain
-the runtime dependencies and public assets; don't upload only `.next/static`.
-Hostinger supplies the listening port through `PORT`; don't hardcode a different
-port. If the UI only shows framework defaults, select Next.js and use these
-commands wherever the settings are editable.
+The install fix uses **npm**, with `packageManager: npm@10.9.2` and a committed `package-lock.json`. There is no pnpm 12.5.1 dependency. Keep development dependencies enabled during the build; do not set `NPM_CONFIG_PRODUCTION=true` or omit dev dependencies.
 
-Add these **runtime** environment variables in hPanel before starting the app:
+**Keep the start command as `npm start`.** It applies migrations first and then runs Next.js. A direct `next start` would bypass database setup. Do not select a static-site/export preset or an `out` output folder. Hostinger must retain the app's server files, including `scripts/` and `migrations/mysql/`, as part of its Node deployment.
 
-| Name | Value to enter |
-|---|---|
-| `NODE_ENV` | `production` |
-| `BETTER_AUTH_URL` | Your exact HTTPS app origin, e.g. `https://app.example.com` |
-| `BETTER_AUTH_SECRET` | A persistent randomly generated secret of at least 32 characters |
-| `MYSQL_HOST` | Hostinger database hostname from hPanel |
-| `MYSQL_PORT` | `3306`, unless Hostinger specifies another port |
-| `MYSQL_DATABASE` | `u840559204_infrastruct` |
-| `MYSQL_USER` | `u840559204_infra_app` |
-| `MYSQL_PASSWORD` | Your database user's password |
-| `MYSQL_SSL_CA` | Optional provider PEM certificate for database TLS; omit otherwise |
-| `R2_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` |
-| `R2_ACCESS_KEY_ID` | Existing bucket's S3 API access key ID |
-| `R2_SECRET_ACCESS_KEY` | Matching S3 secret |
-| `R2_BUCKET_NAME` | Existing bucket name, unchanged |
-| `SMTP_HOST` | Your outbound email provider's SMTP hostname |
-| `SMTP_PORT` | `465` for implicit TLS, or provider-specified port |
-| `SMTP_SECURE` | `true` for port 465; `false` for STARTTLS on port 587 |
-| `SMTP_USER` | SMTP username |
-| `SMTP_PASSWORD` | SMTP password/app password |
-| `MAIL_FROM` | An authorised sender, e.g. `Operations <noreply@example.com>` |
-| `OPENAI_API_KEY` | Optional; needed only for existing paid AI scans |
-| `OPENAI_DOCUMENT_MODEL` | Optional existing model override; leave unset to use app default |
-| `PORT` | Leave to Hostinger unless its setup explicitly asks you to supply it |
+[Hostinger redeployment settings](https://www.hostinger.com/support/how-to-redeploy-a-node-js-application/).
 
-Generate the auth secret locally with:
+## 6. Add environment variables in hPanel
 
-```sh
-node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
-```
+In that deployment's **Environment variables** section, add each required row below. Paste values without surrounding quote marks. Use server-side names exactly as written: no `NEXT_PUBLIC_` prefix. Save and redeploy after changing values.
 
-Do not put export credentials (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`,
-`D1_DATABASE_ID`) or account-attachment variables on the hosted app. No credentials
-belong in GitHub source, build logs or client-side `NEXT_PUBLIC_*` variables.
+| Exact name | Value / what it does | Where to get it |
+| --- | --- | --- |
+| `NODE_ENV` | `production` | Type this literal value. |
+| `BETTER_AUTH_URL` | The complete public HTTPS app address, e.g. `https://operations.your-domain.com`; no trailing slash or path | hPanel website domain/temporary HTTPS address. Use the same address you open in your browser. Update and redeploy when changing domains. |
+| `BETTER_AUTH_SECRET` | The generated 64-character secret | Browser secret generator in step 4. |
+| `MYSQL_HOST` | Usually `localhost` for this hosting account | hPanel database details in step 1. |
+| `MYSQL_PORT` | `3306` | Hostinger's MySQL port; type this value unless hPanel specifies otherwise. |
+| `MYSQL_DATABASE` | `u840559204_infrastruct` | Full name in hPanel → Databases → Management. If you created a new empty database, use its full name instead. |
+| `MYSQL_USER` | `u840559204_infra_app` | Database username in the same hPanel section. |
+| `MYSQL_PASSWORD` | Database user's password | Password saved when creating/changing this database user in hPanel. |
+| `R2_ENDPOINT` | S3 API endpoint, beginning `https://` | Cloudflare token confirmation / R2 overview, step 2. |
+| `R2_BUCKET_NAME` | Your new bucket's exact name | Cloudflare → R2 → bucket list. |
+| `R2_ACCESS_KEY_ID` | S3 Access Key ID | Cloudflare R2 token result, step 2. |
+| `R2_SECRET_ACCESS_KEY` | S3 Secret Access Key | Same token result; shown once. Create replacement keys if lost. |
+| `SMTP_HOST` | Normally `smtp.hostinger.com` | hPanel → Emails → your domain → Connect Apps & Devices → SMTP outgoing server. |
+| `SMTP_PORT` | Normally `465` | Same SMTP settings. |
+| `SMTP_SECURE` | `true` for SSL/465; `false` for STARTTLS/587 | Match the encryption/port from the SMTP settings. |
+| `SMTP_USER` | Full mailbox address | hPanel → Emails → mailbox list. |
+| `SMTP_PASSWORD` | That mailbox's password | Mailbox creation/change-password screen; not your hPanel password. |
+| `MAIL_FROM` | Same full mailbox address as `SMTP_USER` | Your chosen Hostinger mailbox. |
 
-## 4. Attach your existing organisation to your new admin account
+Optional/provider-managed variables:
 
-1. After importing and deploying, open `/login`, create your email/password
-   account and verify the email. Signup creates a separate new organisation.
-2. Sign in, open **Account & team**, and copy your **Account ID**. Confirm it is
-   your account. Find the existing organisation ID in exported
-   `organisations.csv` (the original workspace is normally `roadworx-sydney`).
-3. In your LOCAL `.env`, set `MIGRATION_ADMIN_USER_ID` to that account ID and
-   `MIGRATION_ORGANISATION_ID` to the exact imported organisation ID. Run:
+| Exact name | Value / effect | Where to get it |
+| --- | --- | --- |
+| `SEED_DEMO_DATA` | Set `true` **before the first signup** for demo content; omit or use `false` for a completely empty workspace | Your choice in hPanel. Only the first newly created membership is eligible; later signup/restart never adds it again. |
+| `MYSQL_SSL_CA` | Omit for normal same-host MySQL. Only set if your database provider requires TLS; full PEM CA certificate, including line breaks | Hostinger support/database provider, if a TLS endpoint is supplied. Do not invent a certificate or disable verification. |
+| `PORT` | Leave unset; Hostinger supplies the listening port | Hostinger runtime. The start script honours it. |
+| `OPENAI_API_KEY` | Optional; enables the existing AI document extraction features | Not from hPanel/Cloudflare: create an API key in your own [OpenAI API account](https://platform.openai.com/api-keys), with API billing enabled, then paste into hPanel. Manual workflows still work without it. |
+| `OPENAI_DOCUMENT_MODEL` | Optional model override; omit to use the application's existing default (`gpt-4o-mini`) | Your OpenAI account's supported model ID; only needed if you want to override the default. |
 
-   ```sh
-   npm run data:attach-admin
-   ```
+There is no `DATABASE_URL`, R2 region variable, ChatGPT auth header, old bucket credential, or D1 credential to configure. Do **not** add `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID`, `CLOUDFLARE_API_TOKEN`, `MIGRATION_ADMIN_USER_ID`, or `MIGRATION_ORGANISATION_ID` for this fresh deployment. Those belong only to the retained optional legacy tools.
 
-4. Refresh the app. Your verified account now has the `admin` role on the imported
-   organisation. This operation is recorded in the audit log and can happen only
-   once per organisation. It does not reprice, re-ID, or rewrite historical data.
-   Old Sites user records remain as historical references and cannot authenticate
-   without a Better Auth account. Invite colleagues to establish new memberships.
-5. Remove the two `MIGRATION_*` values from your local environment. The temporary
-   empty signup organisation remains as a record; no customer data is deleted.
-6. Admins can use **Account & team → Invite a colleague** to email an admin,
-   office or field invitation. The recipient registers/verifies the invited
-   address, opens the email link, then accepts it. Invitations expire in 72 hours,
-   are bound to the email and are single-use. Accepting switches active membership;
-   records in a previous organisation stay there.
+## 7. Deploy and create your account
 
-## 5. Cutover checks and rollback
+1. Click **Deploy/Redeploy**. Check the deployment/runtime logs in hPanel. Initial startup should show `Applied ...` for the MySQL migrations, then `Database migrations ready`, then Next.js ready. Later restarts skip completed migrations.
+2. Open the app's HTTPS address. Click **Create an account**, enter your name, email and a password of at least 12 characters. Be the first person to register if you want the demo in your organisation.
+3. Open the verification email and click its link. Sign in if prompted. Your account is automatically **admin** of a new organisation. There is no old-owner email, account-ID attachment, database edit, or terminal step.
+4. With `SEED_DEMO_DATA=true`, your organisation gets a clearly labelled demo job, an estimate and frozen historical rate/budget revision, a planned shift, worker/client, and **six synthetic dockets** dated on signup. Three are approved and three await review. These are newly generated examples, not the old 64 records.
+5. Explore Jobs, Planning, Field, Dockets, Commercial and Reports. The planned shift can be opened in Field. Other screens retain their normal empty states and creation forms. IMS readiness checks still need to be completed; demo data does not bypass approval gates. Demo dockets have no source files: upload your own sample through the app to test document storage and previews.
+6. Open **Account / Team** to invite colleagues by email as **admin**, **office**, or **field**. They register/verify using the invited email, sign in, and reopen the invitation link to accept. An independent signup gets its own organisation and never access to yours; accepting your invitation attaches their membership to yours.
+7. Test **Forgot your password?** on the login page. The email link opens the reset screen. A successful reset invalidates old sessions and the reset token cannot be reused.
+8. You may set `SEED_DEMO_DATA=false` and restart after setup. This does not erase existing demo records. Turning it on after your first signup does not backfill data.
 
-- Verify the 64 imported dockets, date filters, source-file downloads and one new
-  upload; check invoices, tender documents, estimates, saved revisions, rates,
-  field records, planning, claims, IMS, preparation exports and reporting.
-- Check a second organisation cannot access the first organisation's records or
-  files, and a field user cannot change rates, branding, claims or membership.
-- Confirm email delivery and invites on the real domain. Update `BETTER_AUTH_URL`
-  if changing from a temporary Hostinger domain, then redeploy/restart.
-- Only redirect users to Hostinger after these checks. Keep the original D1 and
-  SQL backup intact. There is no automated reverse sync from MySQL to D1: after
-  new writes start on Hostinger, rolling back requires reconciling those writes.
-- Keep R2 keys unchanged and retain the bucket. Removing Sites must not delete
-  its D1/R2 resources. Confirm bucket ownership and retention before cancellation.
+## 8. Browser checks and recovery
 
-The branch can be deployed directly; merging to `main` is a separate user action.
-This work does not change `main` or export/modify your live Cloudflare data.
+- Upload a small file in the app, reopen/download it, and check it appears in your new R2 bucket. The old Sites bucket is never used.
+- Send one field invitation and confirm the field account cannot change branding/rates or perform office/admin writes.
+- Click **Restart** in hPanel and sign in again. Your job and docket count must remain unchanged.
+- MySQL connection/access errors: verify full database/user names, password, assigned user and hostname in hPanel; correct environment variables and redeploy.
+- Migration interrupted: click Redeploy/Restart. A database advisory lock serialises deployments, checksums protect applied files, and a per-statement journal resumes the shipped CREATE/table/index/foreign-key statements after interruption. Successful migrations are recorded once; startup refuses to serve if migration fails. Do not manually edit migration tables or schemas in phpMyAdmin.
+- A checksum or untracked-object error needs investigation, not deletion of tables. This fresh setup expects an empty database. Choose another empty database in hPanel if an earlier unrelated trial used the current one. Future non-repeatable data migrations must supply an explicit safe recovery strategy; the runner stops rather than replaying uncertain data writes.
+- No verification/reset/invite email: check spam, mailbox password and outgoing SMTP settings, and the domain's email DNS setup in hPanel. Existing users can request a fresh verification email by trying to sign in again after SMTP is fixed. Invite delivery failures are reported in Account / Team and can be retried.
+- Invalid-origin/login-link problems: match `BETTER_AUTH_URL` to the exact HTTPS address, without a trailing slash, and redeploy.
 
-## Reference documentation
+## What is automatic, and what you do
 
-- [Hostinger Node.js GitHub deployment](https://www.hostinger.com/support/how-to-deploy-a-nodejs-website-in-hostinger/)
-- [Hostinger build/start settings](https://www.hostinger.com/support/how-to-redeploy-a-node-js-application/)
-- [Cloudflare D1 SQL export](https://developers.cloudflare.com/api/resources/d1/subresources/database/methods/export/)
-- [R2 S3 credentials](https://developers.cloudflare.com/r2/api/s3/tokens/)
-- [Better Auth Drizzle adapter](https://better-auth.com/docs/adapters/drizzle)
+The repository supplies npm installation, Next.js build/start, automatic MySQL migrations, account/organisation creation, optional demo fixtures, MySQL sessions, server role checks, SMTP auth/invitation email, and private R2 S3 access. GitHub Actions runs lint, TypeScript, all eight business suites, a production build, fresh-start tests, and the retained migration/integration tests.
+
+You create the database/mailbox/bucket in their dashboards, enter environment values, select the branch, deploy, and register/verify your account. Production credentials and your actual Hostinger/Cloudflare services must be checked by this browser smoke test; automated tests use disposable databases and local SMTP/S3 fixtures.
+
+The export/import/attach scripts remain in `scripts/` for optional legacy administration. Nothing in install, build, startup, or first signup invokes them. You do not need to run them or any other local command.

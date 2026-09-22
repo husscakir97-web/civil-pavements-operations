@@ -9,7 +9,7 @@
     "install:ci": "npm ci",
     "dev": "next dev",
     "build": "next build",
-    "start": "next start --hostname 0.0.0.0",
+    "start": "node --env-file-if-exists=.env scripts/start.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit",
@@ -18,7 +18,8 @@
     "data:export": "node --env-file-if-exists=.env scripts/export-live.mjs",
     "data:import": "node --env-file-if-exists=.env scripts/import-data.mjs",
     "data:attach-admin": "node --env-file-if-exists=.env scripts/attach-admin.mjs",
-    "test:mysql": "node --env-file-if-exists=.env scripts/test-mysql.mjs"
+    "test:mysql": "node --env-file-if-exists=.env scripts/test-mysql.mjs",
+    "test:fresh": "node --env-file-if-exists=.env scripts/test-fresh-start.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

@@ -331,6 +331,7 @@ export const users=mysqlTable('users',{
  email:longtext('email').notNull(),
  name:longtext('name').notNull(),
  role:longtext('role').notNull(),
+ active:int('active').notNull().default(1),
  createdAt:longtext('created_at').notNull(),
 },t=>[index('idx_users_org').on(t.organisationId)]);
 

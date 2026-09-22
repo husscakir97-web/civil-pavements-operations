@@ -30,7 +30,7 @@ function req(body,email='admin@example.invalid'){return new Request('https://tes
  assert.deepEqual(fns.incomplete(draft),[]);
  res=await field.POST(req({shiftId:shift.id,revision:1,action:'save',data:draft}));assert.equal(res.status,200);
  let getReq=new Request('https://test.invalid/api?shiftId='+shift.id,{headers:req().headers});
- let loaded=await (await field.GET(getReq)).json();assert.deepEqual(loaded.record.data,draft);assert.deepEqual(loaded.record.job.metadata.approvedBudget,baseline);
+ let loaded=await (await field.GET(getReq)).json();assert.deepEqual(loaded.record.data,{...draft,pricingReviewRequired:false});assert.deepEqual(loaded.record.job.metadata.approvedBudget,baseline);
  res=await field.POST(req({shiftId:shift.id,revision:1,action:'save',data:draft}));assert.equal(res.status,409);
  res=await field.POST(req({shiftId:shift.id,revision:2,action:'submit',data:draft},'worker@example.com'));assert.equal(res.status,403);
  res=await field.POST(req({shiftId:shift.id,revision:2,action:'submit',data:draft}));assert.equal(res.status,200);

@@ -12,6 +12,8 @@ async function objectExists(db,sql){
  match=sql.match(/^ALTER TABLE `([^`]+)` ADD CONSTRAINT `([^`]+)`/);
  if(match){const [rows]=await db.execute('SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME=? AND CONSTRAINT_NAME=?',[match[1],match[2]]);return rows.length>0;}
  if(sql==='ALTER TABLE `dockets` MODIFY COLUMN `organisation_id` varchar(191) NOT NULL;')return false;
+ match=sql.match(/^ALTER TABLE `([^`]+)` ADD `([^`]+)` /);
+ if(match){const [rows]=await db.execute('SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?',[match[1],match[2]]);return rows.length>0;}
  return null;
 }
 const db=await connect(),lockName='civil_migrations_'+hash(process.env.MYSQL_DATABASE).slice(0,32);

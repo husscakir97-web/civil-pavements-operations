@@ -119,9 +119,16 @@ function parseHash(): { area: AppArea; subview?: Subview } {
 export function PavementOS() {
   return (
     <WorkspaceBrandProvider>
-      <WorkspaceShell />
+      <RoleWorkspace />
     </WorkspaceBrandProvider>
   );
+}
+
+function RoleWorkspace(){
+ const {role,brand,userEmail}=useWorkspaceBrand();
+ if(role==='read-only')return loading();
+ if(role==='field')return <div className="min-h-screen bg-[#f6f7f9] text-slate-900"><header className="flex items-center justify-between gap-4 border-b bg-white px-5 py-4"><div><p className="font-semibold">{brand.companyName}</p><p className="text-xs text-slate-500">Field workspace</p></div><Link href="/account" className="rounded-lg border px-3 py-2 text-sm" title={userEmail}>Account</Link></header><main className="p-4 sm:p-6"><FieldWorkspace/></main></div>;
+ return <WorkspaceShell/>;
 }
 
 function WorkspaceShell() {
@@ -283,7 +290,7 @@ function WorkspaceShell() {
           <Search className="size-4" /> Global search
         </button>
       </div>
-      <div className="mt-auto p-4 text-xs text-slate-400">
+      <Link href="/account" className="mx-6 mb-4 text-sm text-slate-400 hover:text-white">{role==='admin'?'Team & permissions':'Account'}</Link><div className="mt-auto p-4 text-xs text-slate-400">
         <div className="rounded-xl border border-white/10 p-3"><p className="font-medium text-slate-200">{brand.workspaceName}</p><p className="mt-1">Your company workspace</p></div>
       </div>
     </>

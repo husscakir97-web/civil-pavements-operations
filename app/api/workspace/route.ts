@@ -5,7 +5,7 @@ import {defaultBrand} from '@/lib/workspace-brand';
 import {z} from 'zod';
 const schema=z.object({productName:z.string().trim().min(1).max(60),companyName:z.string().trim().min(1).max(120),workspaceName:z.string().trim().min(1).max(60),accentColor:z.string().regex(/^#[0-9a-f]{6}$/i)}).strict();
 async function handleGET(request:Request){try{
- const db=requireEstimateDb(),actor=await requireActor(request,db);
+ const db=requireEstimateDb(),actor=await requireActor(request,db,'field-read');
  const organisation=await db.prepare('SELECT name FROM organisations WHERE id=?').bind(actor.organisationId).first<{name:string}>();
  const row=await db.prepare("SELECT metadata FROM attachments WHERE organisation_id=? AND id=? AND status='workspace-settings'").bind(actor.organisationId,`workspace-brand:${actor.organisationId}`).first<{metadata:string}>();
  return Response.json({brand:{...defaultBrand,companyName:organisation?.name||defaultBrand.companyName,...safeJson(row?.metadata,{})},canEdit:['admin'].includes(actor.role),userEmail:actor.email,role:actor.role});
@@ -16,6 +16,6 @@ async function handlePUT(request:Request){try{
  return Response.json({brand});
 }catch(e){if(e instanceof z.ZodError)return Response.json({error:'Check the company name, product name, workspace name and colour.'},{status:400});return authError(e)}}
 
-export const GET=withActor(handleGET,'read');
+export const GET=withActor(handleGET,'field-read');
 
 export const PUT=withActor(handlePUT,'admin');

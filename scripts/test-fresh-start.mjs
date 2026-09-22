@@ -66,8 +66,13 @@ try{
  await fresh.query("UPDATE app_migration_steps SET complete=FALSE WHERE name='0000_clear_doctor_faustus.sql' AND step IN (0,38,40)");
  await fresh.query('DROP INDEX idx_attachments_org ON attachments'); // Simulate interruption before this index DDL.
  await Promise.all([run('scripts/migrate.mjs'),run('scripts/migrate.mjs')]);
- assert.equal((await fresh.query('SELECT COUNT(*) AS n FROM app_migrations'))[0][0].n,2);
+ assert.equal((await fresh.query('SELECT COUNT(*) AS n FROM app_migrations'))[0][0].n,3);
  assert.equal((await fresh.query('SELECT COUNT(*) AS n FROM dockets'))[0][0].n,6);
+ // An interrupted ADD COLUMN is recoverable without changing existing access.
+ await fresh.query("DELETE FROM app_migrations WHERE name='0002_team_access.sql'");
+ await fresh.query("UPDATE app_migration_steps SET complete=FALSE WHERE name='0002_team_access.sql'");
+ await run('scripts/migrate.mjs');
+ assert.equal((await fresh.query('SELECT MIN(active) AS active FROM users'))[0][0].active,1);
  await fresh.query("UPDATE app_migrations SET sha256=REPEAT('0',64) WHERE name='0001_amusing_cable.sql'");
  await assert.rejects(run('scripts/start.mjs'),/checksum changed/);
  console.log('PASS fresh automatic startup, first admin, demo scope/once, module screens, SMTP reset, revoked sessions, restart persistence, concurrent/recoverable migrations, checksum fail-closed');

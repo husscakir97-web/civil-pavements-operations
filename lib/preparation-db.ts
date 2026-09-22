@@ -4,7 +4,7 @@ import { requireActor, type Actor } from './authz';
 import { type PreparationRecord, type EvidenceRef, dataSchema, recordIssues } from './preparation';
 export function fail(message:string,status=422):never{throw Object.assign(new Error(message),{status});}
 export async function preparationActor(request:Request,db:Database,action='read'){
- const actor=await requireActor(request,db,'read',true);
+ const actor=await requireActor(request,db,'field-read',true);
  const admins=['admin'];
  const editors=[...admins,'office','estimator/commercial manager','commercial manager','estimator','bid coordinator','ims/qa/safety lead','project manager','operations/scheduler'];
  const approvers=[...admins,'office','estimator/commercial manager','commercial manager','ims/qa/safety lead','project manager'];

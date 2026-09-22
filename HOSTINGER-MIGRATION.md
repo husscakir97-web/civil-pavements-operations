@@ -142,3 +142,15 @@ The repository supplies npm installation, Next.js build/start, automatic MySQL m
 You create the database/mailbox/bucket in their dashboards, enter environment values, select the branch, deploy, and register/verify your account. Production credentials and your actual Hostinger/Cloudflare services must be checked by this browser smoke test; automated tests use disposable databases and local SMTP/S3 fixtures.
 
 The export/import/attach scripts remain in `scripts/` for optional legacy administration. Nothing in install, build, startup, or first signup invokes them. You do not need to run them or any other local command.
+
+## Team & permissions
+
+Open your account avatar or **Team & permissions** in the sidebar. Admins can see their own organisation's members, choose Admin / Office / Field, and review and confirm access changes. Choose **Inactive** to revoke sessions and block workspace access; **Active** restores access without deleting any records. The last active admin cannot be deactivated or demoted, including simultaneous requests. Access changes are recorded in the screen's audit history. No new environment variables are required; the `active` membership column is added automatically during deployment/startup.
+
+- **Admin:** all business features, organisation settings, rate libraries and team administration.
+- **Office:** operational and commercial work, prices and approvals; no team management or admin-only changes.
+- **Field:** daily shifts, operational quantities, attendance, site evidence and approved preparation documents for assigned shifts. All organisation shifts remain available; this is not assigned-job-only access. Commercial APIs, rates, invoices, dockets, tenders, reports, global search and generic record access are blocked. The field workspace does not load office dashboards.
+
+Field API responses and saved-history views omit structured rates, costs, budgets and estimate snapshots. Field saves preserve server-side prices and flag missing prices for office review. Office staff reconcile these costs through an authorised amendment. Do not put confidential prices into free-text site instructions or documents approved for field use. Newly uploaded field evidence is available to field staff in that organisation; office uploads and legacy unclassified files are restricted to Admin/Office. Field document export cannot download a ZIP containing linked source/evidence files.
+
+With `EMAIL_ENABLED=false`, invitations remain off. Separate signups create separate organisations and do not join your team. Existing members can still be managed. When email is enabled, invitations cannot be used to change an existing member's role or bypass last-admin protection; use this screen for role changes.

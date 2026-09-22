@@ -1,3 +1,4 @@
+import {fieldDelivery} from '@/lib/field-access';
 import {withActor} from '@/lib/platform/route';
 import type { Database } from '@/lib/platform/database';
 import { imsBlockers } from '@/lib/ims-readiness';
@@ -11,7 +12,7 @@ async function load(db: Database, table: string): Promise<DeliveryRecord[]> {
   return r.results.map(r => ({id:String(r.id), name:String(r.name), status:String(r.status), metadata:safeJson<Meta>(r.metadata,{}), createdAt:String(r.created_at)}));
 }
 async function handleGET(request: Request) {
-  try { const db=requireEstimateDb(); await requireActor(request, db, 'read'); const rows=await Promise.all(tables.map(t=>load(db,t))); return Response.json(Object.fromEntries(tables.map((t,i)=>[t,rows[i]]))); }
+  try { const db=requireEstimateDb(); const actor=await requireActor(request, db, 'field-read'); if(actor.role==='field'){const [jobs,shifts]=await Promise.all([load(db,'jobs'),load(db,'shifts')]);return Response.json({jobs:jobs.map(r=>fieldDelivery(r,'jobs')),shifts:shifts.map(r=>fieldDelivery(r,'shifts')),workers:[],crews:[],plant:[],suppliers:[],subcontractors:[]},{headers:{'Cache-Control':'private, no-store'}});} const rows=await Promise.all(tables.map(t=>load(db,t))); return Response.json(Object.fromEntries(tables.map((t,i)=>[t,rows[i]]))); }
   catch(e) { console.error(e); return jsonError('Unable to load dispatch records. Please retry.',503); }
 }
 async function handlePOST(request:Request) {
@@ -47,6 +48,6 @@ async function handlePOST(request:Request) {
   } catch(e) { console.error(e);return jsonError('Unable to save. Your changes are still in the form.',503); }
 }
 
-export const GET=withActor(handleGET,'read');
+export const GET=withActor(handleGET,'field-read');
 
 export const POST=withActor(handlePOST,'write');

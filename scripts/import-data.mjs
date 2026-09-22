@@ -17,7 +17,8 @@ try{
   const raw=await readFile(resolve(dir,table+'.json'),'utf8');if(createHash('sha256').update(raw).digest('hex')!==info.sha256)throw new Error(`Export checksum mismatch: ${table}`);
   const {columns,rows}=JSON.parse(raw);if(rows.length!==info.count)throw new Error(`Export count mismatch: ${table}`);
   const target=schema.filter(c=>c.tableName===table).map(c=>c.columnName);
-  if(target.length!==columns.length||columns.some(c=>!target.includes(c)))throw new Error(`Schema mismatch: ${table}. Add a reviewed migration; no columns will be discarded.`);
+  const expected=table==='users'&&!columns.includes('active')?target.filter(c=>c!=='active'):target;
+  if(expected.length!==columns.length||columns.some(c=>!expected.includes(c)))throw new Error(`Schema mismatch: ${table}. Add a reviewed migration; no columns will be discarded.`);
   const names=columns.map(identifier).join(',');
   if(!process.argv.includes('--verify-only')){
    const [existing]=await db.query(`SELECT COUNT(*) AS n FROM ${identifier(table)}`);if(Number(existing[0].n)!==0)throw new Error(`Destination ${table} is not empty; import refuses to overwrite data`);

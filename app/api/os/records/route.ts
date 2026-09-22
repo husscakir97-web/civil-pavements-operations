@@ -1,3 +1,4 @@
+import {withActor} from '@/lib/platform/route';
 import { cleanText, jsonError, nowIso, requireEstimateDb, safeJson } from "@/lib/estimates-db";
 import { mergeJob } from '@/lib/planning';
 import { requireActor } from '@/lib/authz';
@@ -39,7 +40,7 @@ function serialiseRow(row: Record<string, unknown>) {
   };
 }
 
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
   try {
     const db = requireEstimateDb(); const actor=await requireActor(request, db, 'read', true);
     const params = new URL(request.url).searchParams;
@@ -58,7 +59,7 @@ export async function GET(request: Request) {
   }
 }
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   try {
     const db = requireEstimateDb(); const actor=await requireActor(request, db, 'write', true);
     const body = await request.json() as Record<string, unknown>;
@@ -86,7 +87,7 @@ export async function POST(request: Request) {
   }
 }
 
-export async function PUT(request: Request) {
+async function handlePUT(request: Request) {
   try {
     const db = requireEstimateDb(); const actor=await requireActor(request, db, 'write', true);
     const body = await request.json() as Record<string, unknown>;
@@ -115,6 +116,14 @@ export async function PUT(request: Request) {
   }
 }
 
-export async function DELETE(request: Request) {
+async function handleDELETE(request: Request) {
   try { const db=requireEstimateDb(); const actor=await requireActor(request,db,'write',true); const p=new URL(request.url).searchParams; const moduleKey=cleanText(p.get('module'),40); const resourceType=cleanText(p.get('resourceType'),40); const table=resolveTable(moduleKey,resourceType); const id=cleanText(p.get('id'),100); if(!table||!id) return jsonError('A record and module are required.'); const r=await db.prepare(`UPDATE ${table} SET status='Archived' WHERE organisation_id=? AND id=?`).bind(actor.organisationId,id).run(); if(!r.success||r.meta.changes===0) return jsonError('Record not found.',404); await db.prepare(`INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)`).bind(crypto.randomUUID(),actor.organisationId,`record.archived:${moduleKey}`,'recorded',JSON.stringify({recordId:id}),nowIso()).run(); return Response.json({archived:true,id}); } catch(e){ return jsonError('The record could not be archived.',503); }
 }
+
+export const GET=withActor(handleGET,'read');
+
+export const POST=withActor(handlePOST,'write');
+
+export const PUT=withActor(handlePUT,'write');
+
+export const DELETE=withActor(handleDELETE,'write');

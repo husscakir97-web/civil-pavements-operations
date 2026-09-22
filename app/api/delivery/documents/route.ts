@@ -1,9 +1,10 @@
-import { env } from 'cloudflare:workers';
+import {withActor} from '@/lib/platform/route';
+import { env } from '@/lib/platform/runtime';
 import { requireEstimateDb, jsonError } from '@/lib/estimates-db';
 import { requireActor, authError } from '@/lib/authz';
 export const dynamic='force-dynamic';
-export async function POST(request:Request) {
-  try { const db = requireEstimateDb(); const actor = await requireActor(request, db, 'write');
+async function handlePOST(request:Request) {
+  try { const db = requireEstimateDb(); const actor = await requireActor(request, db, 'field');
     const form=await request.formData();const file=form.get('file');
     if(!(file instanceof File)||!file.size||file.size>20*1024*1024)return jsonError('Choose a file up to 20 MB.');
     if(!env.BUCKET)return jsonError('Document storage is unavailable.',503);
@@ -13,7 +14,7 @@ export async function POST(request:Request) {
     return Response.json({id,name:file.name,url:`/api/delivery/documents?id=${id}`},{status:201});
   }catch(e){console.error(e);return authError(e);}
 }
-export async function GET(request:Request) {
+async function handleGET(request:Request) {
   try {
     const db = requireEstimateDb(); const actor = await requireActor(request, db, 'read');
     const id=new URL(request.url).searchParams.get('id');
@@ -24,3 +25,7 @@ export async function GET(request:Request) {
     return new Response(object.body,{headers:{'Content-Type':meta.contentType||'application/octet-stream','Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(row.name)}`,'X-Content-Type-Options':'nosniff','Cache-Control':'private, no-store'}});
   }catch(e){console.error(e);return authError(e);}
 }
+
+export const POST=withActor(handlePOST,'field');
+
+export const GET=withActor(handleGET,'read');

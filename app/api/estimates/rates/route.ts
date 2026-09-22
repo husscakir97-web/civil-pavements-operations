@@ -1,3 +1,4 @@
+import {withActor} from '@/lib/platform/route';
 import {
   DEFAULT_RATE_LIBRARY,
   type RateItem,
@@ -51,24 +52,24 @@ function normaliseLibrary(value: unknown): RateLibrary {
   };
 }
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   try {
     const db = requireEstimateDb(); await requireActor(request, db, 'admin');
     const input = await request.json() as Record<string,unknown>;
-    const previous = input.id ? await db.prepare('SELECT metadata FROM rate_libraries WHERE organisation_id=? AND id=?').bind(DEFAULT_ORGANISATION_ID, cleanText(input.id,100)).first<{metadata:string}>() : null;
+    const previous = input.id ? await db.prepare('SELECT metadata FROM rate_libraries WHERE organisation_id=? AND id=?').bind(DEFAULT_ORGANISATION_ID(), cleanText(input.id,100)).first<{metadata:string}>() : null;
     const library = normaliseLibrary({...safeJson<Record<string,unknown>>(previous?.metadata,{}),...input});
     const id = library.id || crypto.randomUUID();
     const now = nowIso();
     const result = await db.prepare("SELECT id FROM rate_libraries WHERE organisation_id = ? AND id = ? LIMIT 1")
-      .bind(DEFAULT_ORGANISATION_ID, id).first<{ id: string }>();
+      .bind(DEFAULT_ORGANISATION_ID(), id).first<{ id: string }>();
     if (result) {
       await db.prepare("UPDATE rate_libraries SET name = ?, status = ?, metadata = ? WHERE organisation_id = ? AND id = ?")
-        .bind(library.name, "active", JSON.stringify({ ...library, id }), DEFAULT_ORGANISATION_ID, id).run();
+        .bind(library.name, "active", JSON.stringify({ ...library, id }), DEFAULT_ORGANISATION_ID(), id).run();
     } else {
       await db.prepare(
         `INSERT INTO rate_libraries (id, organisation_id, name, status, metadata, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
-      ).bind(id, DEFAULT_ORGANISATION_ID, library.name, "active", JSON.stringify({ ...library, id }), now).run();
+      ).bind(id, DEFAULT_ORGANISATION_ID(), library.name, "active", JSON.stringify({ ...library, id }), now).run();
     }
     return Response.json({ rateLibrary: { ...library, id } });
   } catch (error) {
@@ -77,18 +78,24 @@ export async function POST(request: Request) {
   }
 }
 
-export async function PUT(request: Request) {
+async function handlePUT(request: Request) {
   return POST(request);
 }
 
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
   try {
     const db = requireEstimateDb(); await requireActor(request, db, 'read');
     const result = await db.prepare("SELECT id, organisation_id, name, status, metadata, created_at FROM rate_libraries WHERE organisation_id = ? ORDER BY created_at ASC")
-      .bind(DEFAULT_ORGANISATION_ID).all<GenericRow>();
+      .bind(DEFAULT_ORGANISATION_ID()).all<GenericRow>();
     return Response.json({ rateLibraries: result.results.map((row) => ({ ...DEFAULT_RATE_LIBRARY, ...safeJson<RateLibrary>(row.metadata, DEFAULT_RATE_LIBRARY), id: row.id, name: row.name })) });
   } catch (error) {
     console.error("load rate libraries", error);
     return jsonError("Rate libraries could not be loaded.", 503);
   }
 }
+
+export const POST=withActor(handlePOST,'admin');
+
+export const PUT=withActor(handlePUT,'admin');
+
+export const GET=withActor(handleGET,'read');

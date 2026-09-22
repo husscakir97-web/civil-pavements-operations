@@ -1,6 +1,7 @@
+import type { Database } from '@/lib/platform/database';
 import {preparationReadiness} from './preparation-db';
 /** Readiness is derived from current approved evidence, never from a UI checkbox. */
-export async function imsBlockers(db:D1Database,organisationId:string,jobId:string){
+export async function imsBlockers(db:Database,organisationId:string,jobId:string){
  const preparation=await preparationReadiness(db,organisationId,jobId);
  const items=await db.prepare(`SELECT i.title,i.status,i.mandatory,d.status AS document_status,d.expiry_date,d.effective_date,d.storage_attachment_id,a.id AS attachment_id FROM job_ims_items i LEFT JOIN ims_documents d ON d.id=i.linked_document_id AND d.organisation_id=i.organisation_id LEFT JOIN attachments a ON a.id=d.storage_attachment_id AND a.organisation_id=i.organisation_id WHERE i.organisation_id=? AND i.job_id=?`).bind(organisationId,jobId).all<Record<string,unknown>>();
  if(!items.results.length)return preparation ?? ['Project IMS pack has not been created and reviewed.'];

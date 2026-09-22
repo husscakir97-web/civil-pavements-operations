@@ -1,14 +1,15 @@
-import { env } from 'cloudflare:workers';
+import {withActor} from '@/lib/platform/route';
+import { env } from '@/lib/platform/runtime';
 import JSZip from 'jszip';
 import { requireEstimateDb } from '@/lib/estimates-db';
 import { enabled, entitlement, exact, fail, issuesFor, preparationActor, preparationError, preparationRecords } from '@/lib/preparation-db';
 import { csvExport, docxExport, pdfExport, xlsxExport } from '@/lib/preparation-export';
 import type { EvidenceRef } from '@/lib/preparation';
 export const dynamic='force-dynamic';
-export async function GET(request:Request){try{
+async function handleGET(request:Request){try{
  const db=requireEstimateDb(),actor=await preparationActor(request,db),p=new URL(request.url).searchParams,records=await preparationRecords(db,actor.organisationId);
  const record=exact(records,{id:p.get('id')||'',revision:Number(p.get('revision'))});if(!record)fail('Document revision not found.',404);if(!enabled(records,entitlement(record.kind)))fail('This add-on is not enabled.',403);
- if(['field worker','supervisor'].includes(actor.role)){
+ if(['field'].includes(actor.role)){
  if(!record.job_id||!['plan','itp','risk','project-pack'].includes(record.kind)||!['Approved','Accepted'].includes(record.status))fail('Only approved assigned-job documents are available in Field.',403);
  const shift=await db.prepare('SELECT metadata FROM shifts WHERE id=? AND organisation_id=?').bind(p.get('shiftId')||'',actor.organisationId).first<{metadata:string}>();const meta=shift?JSON.parse(shift.metadata):{};
  if(meta.jobId!==record.job_id||!(meta.supervisorUserId===actor.userId||Array.isArray(meta.assignments)&&meta.assignments.some((a:{userId?:string})=>a.userId===actor.userId)))fail('Assigned shift access is required.',403);
@@ -31,3 +32,5 @@ export async function GET(request:Request){try{
  await db.prepare('INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(),actor.organisationId,'preparation.export','recorded',JSON.stringify({id:record.id,revision:record.revision,format,actorId:actor.userId}),new Date().toISOString()).run();
  return new Response(bytes!.buffer as ArrayBuffer,{headers:{'Content-Type':type,'Content-Disposition':`attachment; filename="${record.title.replace(/[^a-zA-Z0-9_-]/g,'_')}-r${record.revision}.${format}"`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
 }catch(e){return preparationError(e);}}
+
+export const GET=withActor(handleGET,'read');

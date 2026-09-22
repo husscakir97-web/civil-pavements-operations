@@ -1,3 +1,4 @@
+import {withActor} from '@/lib/platform/route';
 import { requireEstimateDb, safeJson } from "@/lib/estimates-db";
 import { requireActor, authError } from "@/lib/authz";
 
@@ -17,7 +18,7 @@ const specs:SearchSpec[]=[
  {table:"dockets",type:"Docket",name:"docket_no",status:"status",detail:"client || ' ' || project || ' ' || po_number || ' ' || notes",metadata:"'{}'",filter:"AND lower(status) != 'archived'"},
 ];
 
-export async function GET(request:Request){
+async function handleGET(request:Request){
  try{
   const db=requireEstimateDb(),actor=await requireActor(request,db,"read");
   const q=(new URL(request.url).searchParams.get("q")||"").trim().slice(0,200);
@@ -32,3 +33,5 @@ export async function GET(request:Request){
   return Response.json({results:out.slice(0,60)});
  }catch(e){return authError(e);}
 }
+
+export const GET=withActor(handleGET,'read');

@@ -1,3 +1,5 @@
+import {withActor} from '@/lib/platform/route';
+import type { Database } from '@/lib/platform/database';
 import {
   DEFAULT_RATE_LIBRARY,
   ESTIMATE_STATUSES,
@@ -97,10 +99,11 @@ function metadataFor(
   };
 }
 
-async function getRateLibraries(db: D1Database): Promise<RateLibrary[]> {
+async function getRateLibraries(db: Database): Promise<RateLibrary[]> {
+ const library = {...DEFAULT_RATE_LIBRARY,id:`default-rates:${DEFAULT_ORGANISATION_ID()}`};
   const result = await db
     .prepare("SELECT id, organisation_id, name, status, metadata, created_at FROM rate_libraries WHERE organisation_id = ? ORDER BY created_at ASC")
-    .bind(DEFAULT_ORGANISATION_ID)
+    .bind(DEFAULT_ORGANISATION_ID())
     .all<GenericRow>();
   if (result.results.length > 0) {
     return result.results.map((row) => ({
@@ -113,27 +116,27 @@ async function getRateLibraries(db: D1Database): Promise<RateLibrary[]> {
   const now = nowIso();
   await db
     .prepare(
-      `INSERT OR IGNORE INTO rate_libraries (id, organisation_id, name, status, metadata, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO rate_libraries (id, organisation_id, name, status, metadata, created_at)
+       VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE id=id`,
     )
     .bind(
-      DEFAULT_RATE_LIBRARY.id,
-      DEFAULT_ORGANISATION_ID,
+      library.id,
+      DEFAULT_ORGANISATION_ID(),
       DEFAULT_RATE_LIBRARY.name,
       "active",
-      JSON.stringify(DEFAULT_RATE_LIBRARY),
+      JSON.stringify(library),
       now,
     )
     .run();
-  return [DEFAULT_RATE_LIBRARY];
+  return [library];
 }
 
-async function getLookups(db: D1Database) {
+async function getLookups(db: Database) {
   const [clientsResult, opportunitiesResult, jobsResult, docketClientsResult] = await Promise.all([
-    db.prepare("SELECT id, name, contact_name AS contactName, email, phone FROM clients WHERE organisation_id = ? ORDER BY name").bind(DEFAULT_ORGANISATION_ID).all(),
-    db.prepare("SELECT id, name, status, metadata, created_at AS createdAt FROM opportunities WHERE organisation_id = ? ORDER BY created_at DESC").bind(DEFAULT_ORGANISATION_ID).all(),
-    db.prepare("SELECT id, name, status, metadata, created_at AS createdAt FROM jobs WHERE organisation_id = ? ORDER BY created_at DESC LIMIT 50").bind(DEFAULT_ORGANISATION_ID).all(),
-    db.prepare("SELECT client AS name FROM dockets WHERE organisation_id = ? AND TRIM(client) != '' GROUP BY client ORDER BY client LIMIT 50").bind(DEFAULT_ORGANISATION_ID).all<{ name: string }>(),
+    db.prepare("SELECT id, name, contact_name AS contactName, email, phone FROM clients WHERE organisation_id = ? ORDER BY name").bind(DEFAULT_ORGANISATION_ID()).all(),
+    db.prepare("SELECT id, name, status, metadata, created_at AS createdAt FROM opportunities WHERE organisation_id = ? ORDER BY created_at DESC").bind(DEFAULT_ORGANISATION_ID()).all(),
+    db.prepare("SELECT id, name, status, metadata, created_at AS createdAt FROM jobs WHERE organisation_id = ? ORDER BY created_at DESC LIMIT 50").bind(DEFAULT_ORGANISATION_ID()).all(),
+    db.prepare("SELECT client AS name FROM dockets WHERE organisation_id = ? AND TRIM(client) != '' GROUP BY client ORDER BY client LIMIT 50").bind(DEFAULT_ORGANISATION_ID()).all<{ name: string }>(),
   ]);
   const clients: Array<{ id: string; name: string; source: string }> = (clientsResult.results as Array<Record<string, unknown>>).map((row) => ({
     id: String(row.id ?? ""),
@@ -151,17 +154,17 @@ async function getLookups(db: D1Database) {
   };
 }
 
-async function getEstimateRow(db: D1Database, id: string) {
+async function getEstimateRow(db: Database, id: string) {
   return db
     .prepare("SELECT id, organisation_id, name, status, metadata, created_at FROM estimates WHERE organisation_id = ? AND id = ? LIMIT 1")
-    .bind(DEFAULT_ORGANISATION_ID, id)
+    .bind(DEFAULT_ORGANISATION_ID(), id)
     .first<GenericRow>();
 }
 
-async function getRevisions(db: D1Database, estimateId: string) {
+async function getRevisions(db: Database, estimateId: string) {
   const result = await db
     .prepare("SELECT id, name, status, metadata, created_at AS createdAt FROM quote_revisions WHERE organisation_id = ? ORDER BY created_at DESC")
-    .bind(DEFAULT_ORGANISATION_ID)
+    .bind(DEFAULT_ORGANISATION_ID())
     .all<Record<string, unknown>>();
   return result.results
     .map((row) => {
@@ -172,7 +175,7 @@ async function getRevisions(db: D1Database, estimateId: string) {
     .sort((a, b) => Number((b.metadata.revisionNumber ?? 0)) - Number((a.metadata.revisionNumber ?? 0)));
 }
 
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
   try {
     const db = requireEstimateDb(); await requireActor(request, db, 'read');
     const id = cleanText(new URL(request.url).searchParams.get("id"), 100);
@@ -184,7 +187,7 @@ export async function GET(request: Request) {
     }
     const result = await db
       .prepare("SELECT id, organisation_id, name, status, metadata, created_at FROM estimates WHERE organisation_id = ? ORDER BY created_at DESC")
-      .bind(DEFAULT_ORGANISATION_ID)
+      .bind(DEFAULT_ORGANISATION_ID())
       .all<GenericRow>();
     return Response.json({
       estimates: result.results.map(rowToEstimate),
@@ -197,15 +200,15 @@ export async function GET(request: Request) {
   }
 }
 
-function auditStatement(db: D1Database, event: string, estimateId: string, metadata: Record<string, unknown>, now: string) {
+function auditStatement(db: Database, event: string, estimateId: string, metadata: Record<string, unknown>, now: string) {
   return db.prepare(
     `INSERT INTO audit_events (id, organisation_id, name, status, metadata, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`,
-  ).bind(crypto.randomUUID(), DEFAULT_ORGANISATION_ID, `${event}:${estimateId}`, "recorded", JSON.stringify(metadata), now);
+  ).bind(crypto.randomUUID(), DEFAULT_ORGANISATION_ID(), `${event}:${estimateId}`, "recorded", JSON.stringify(metadata), now);
 }
 
 function revisionStatement(
-  db: D1Database,
+  db: Database,
   revisionId: string,
   estimateId: string,
   name: string,
@@ -222,7 +225,7 @@ function revisionStatement(
      VALUES (?, ?, ?, ?, ?, ?)`,
   ).bind(
     revisionId,
-    DEFAULT_ORGANISATION_ID,
+    DEFAULT_ORGANISATION_ID(),
     `${name} · Rev ${revisionNumber}`,
     status,
     JSON.stringify({ estimateId, revisionNumber, data, totals, validation, reason, createdAt: now }),
@@ -230,7 +233,7 @@ function revisionStatement(
   );
 }
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   try {
     const db = requireEstimateDb(); await requireActor(request, db, 'write');
     const body = await request.json() as Record<string, unknown>;
@@ -252,7 +255,7 @@ export async function POST(request: Request) {
       db.prepare(
         `INSERT INTO estimates (id, organisation_id, name, status, metadata, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
-      ).bind(id, DEFAULT_ORGANISATION_ID, name, requestedStatus, JSON.stringify(metadata), now),
+      ).bind(id, DEFAULT_ORGANISATION_ID(), name, requestedStatus, JSON.stringify(metadata), now),
       revisionStatement(db, revisionId, id, name, requestedStatus, 1, data, totals, validation, "Created", now),
       auditStatement(db, "estimate.created", id, { status: requestedStatus, revisionNumber: 1 }, now),
     ];
@@ -265,7 +268,7 @@ export async function POST(request: Request) {
   }
 }
 
-export async function PUT(request: Request) {
+async function handlePUT(request: Request) {
   try {
     const db = requireEstimateDb(); await requireActor(request, db, 'write');
     const body = await request.json() as Record<string, unknown>;
@@ -307,7 +310,7 @@ export async function PUT(request: Request) {
     );
     const statements = [
       db.prepare("UPDATE estimates SET name = ?, status = ?, metadata = ? WHERE organisation_id = ? AND id = ?")
-        .bind(name, status, JSON.stringify(nextMetadata), DEFAULT_ORGANISATION_ID, id),
+        .bind(name, status, JSON.stringify(nextMetadata), DEFAULT_ORGANISATION_ID(), id),
       revisionStatement(db, revisionId, id, name, status, revisionNumber, data, totals, validation, cleanText(body.reason, 500) || (action === "reopen" ? "Reopened for revision" : "Saved revision"), now),
       auditStatement(db, action === "reopen" ? "estimate.reopened" : "estimate.revised", id, { status, revisionNumber, reason: cleanText(body.reason, 500) }, now),
     ];
@@ -319,3 +322,9 @@ export async function PUT(request: Request) {
     return jsonError("The estimate could not be saved.", 503);
   }
 }
+
+export const GET=withActor(handleGET,'read');
+
+export const POST=withActor(handlePOST,'write');
+
+export const PUT=withActor(handlePUT,'write');

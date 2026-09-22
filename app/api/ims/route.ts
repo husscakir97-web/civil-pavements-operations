@@ -1,3 +1,4 @@
+import {withActor} from '@/lib/platform/route';
 import { requireActor, authError } from '@/lib/authz';
 import { cleanText, jsonError, nowIso, requireEstimateDb, safeJson } from '@/lib/estimates-db';
 
@@ -11,7 +12,7 @@ function row<T extends Record<string, unknown>>(value: T) {
   return { ...value, metadata: safeJson(value.metadata, {}) };
 }
 
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
   try {
     const db = requireEstimateDb();
     const actor = await requireActor(request, db, 'read');
@@ -29,7 +30,7 @@ export async function GET(request: Request) {
   } catch (error) { return authError(error); }
 }
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   try {
     const db = requireEstimateDb();
     const actor = await requireActor(request, db, 'write');
@@ -69,14 +70,14 @@ export async function POST(request: Request) {
       const exists = await db.prepare('SELECT id FROM jobs WHERE id=? AND organisation_id=?').bind(jobId, actor.organisationId).first();
       if (!exists) return jsonError('Job not found.', 404);
       const rows = CORE_PACK.map(([title, type]) => ({ id: crypto.randomUUID(), organisation_id: actor.organisationId, job_id: jobId, title, document_type: type, mandatory: 1, status: 'Missing', source_requirement_id: null, linked_document_id: null, due_date: null, metadata: '{}', created_at: now, updated_at: now }));
-      await db.batch(rows.map(item => db.prepare('INSERT OR IGNORE INTO job_ims_items (id,organisation_id,job_id,title,document_type,mandatory,status,source_requirement_id,linked_document_id,due_date,metadata,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(...Object.values(item))).concat([db.prepare('INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(), actor.organisationId, 'ims.job_pack.created', 'recorded', JSON.stringify({ jobId, itemCount: rows.length }), now)]));
+      await db.batch(rows.map(item => db.prepare('INSERT INTO job_ims_items (id,organisation_id,job_id,title,document_type,mandatory,status,source_requirement_id,linked_document_id,due_date,metadata,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id').bind(...Object.values(item))).concat([db.prepare('INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(), actor.organisationId, 'ims.job_pack.created', 'recorded', JSON.stringify({ jobId, itemCount: rows.length }), now)]));
       return Response.json({ jobPack: rows }, { status: 201 });
     }
     return jsonError('Unknown IMS action.');
   } catch (error) { console.error('ims create', error); return authError(error); }
 }
 
-export async function PATCH(request: Request) {
+async function handlePATCH(request: Request) {
   try {
     const db = requireEstimateDb(); const actor = await requireActor(request, db, 'approve');
     const body = await request.json() as Record<string, unknown>; const kind = cleanText(body.kind, 20); const id = cleanText(body.id, 100); const status = cleanText(body.status, 40); if (!id || !status) return jsonError('Record and status are required.');
@@ -118,7 +119,7 @@ export async function PATCH(request: Request) {
   } catch (error) { return authError(error); }
 }
 
-export async function PUT(request:Request){
+async function handlePUT(request:Request){
  try{
   const db=requireEstimateDb(),actor=await requireActor(request,db,'write'),body=await request.json() as Record<string,unknown>;
   const id=cleanText(body.id,100),reason=cleanText(body.reason,500),now=nowIso();
@@ -138,3 +139,11 @@ export async function PUT(request:Request){
   return Response.json({document:row(snapshot)});
  }catch(e){return authError(e);}
 }
+
+export const GET=withActor(handleGET,'read');
+
+export const POST=withActor(handlePOST,'write');
+
+export const PATCH=withActor(handlePATCH,'write');
+
+export const PUT=withActor(handlePUT,'write');

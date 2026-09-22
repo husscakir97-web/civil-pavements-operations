@@ -1,16 +1,17 @@
+import {withActor} from '@/lib/platform/route';
 import {calculateEstimate,normaliseEstimateData,validateEstimate,DEFAULT_RATE_LIBRARY} from '@/lib/estimate-calculations';
 import { requireEstimateDb, cleanText, safeJson } from '@/lib/estimates-db';
 import { dataSchema, preparationKinds, blankData, blankRow, extractQuestions, type PreparationRecord } from '@/lib/preparation';
 import { appendStatements, checkLinks, enabled, entitlement, exact, fail, issuesFor, latestRecords, preparationActor, preparationError, preparationRecords } from '@/lib/preparation-db';
 export const dynamic='force-dynamic';
-export async function GET(request:Request){try{
+async function handleGET(request:Request){try{
  const db=requireEstimateDb(),actor=await preparationActor(request,db),records=await preparationRecords(db,actor.organisationId);
- if(['field worker','supervisor'].includes(actor.role))fail('Open approved activity documents from your assigned shift.',403);
+ if(['field'].includes(actor.role))fail('Open approved activity documents from your assigned shift.',403);
  const [jobs,opportunities,users]=await Promise.all(['jobs','opportunities','users'].map(table=>db.prepare(`SELECT id,name FROM ${table} WHERE organisation_id=?`).bind(actor.organisationId).all<{id:string;name:string}>()));
  const visible=records.filter(r=>enabled(records,entitlement(r.kind)));
  return Response.json({records:visible,jobs:jobs.results,opportunities:opportunities.results,users:users.results.some(u=>u.id===actor.userId)?users.results:[...users.results,{id:actor.userId,name:actor.email}],actor,issues:Object.fromEntries(latestRecords(visible).map(r=>[r.id,issuesFor(r,records)])),ai:{available:false,method:'Local text extraction/OCR and manual drafting'},entitlements:{tender:enabled(records,'tender'),ims:enabled(records,'ims'),field:enabled(records,'field')}},{headers:{'Cache-Control':'private, no-store'}});
 }catch(e){return preparationError(e);}}
-export async function POST(request:Request){try{
+async function handlePOST(request:Request){try{
  const db=requireEstimateDb();const body=await request.json() as Record<string,unknown>;const action=cleanText(body.action,30)||'save';
  const actor=await preparationActor(request,db,action);const records=await preparationRecords(db,actor.organisationId);
  if(action==='create-project'){
@@ -63,7 +64,7 @@ export async function POST(request:Request){try{
   const existing=latestRecords(records).find(r=>r.kind==='project-pack'&&r.job_id===jobId&&r.data.origin?.id===current!.id);if(existing)return Response.json({record:existing,alreadyTransferred:true});
   record={...record,id:`handover:${current!.id}:${jobId}`,revision:1,kind:'project-pack',title:`${record.title} — commencement pack`,status:'Draft',job_id:jobId};record.data.origin={id:current!.id,revision:current!.revision};record.data.rows=record.data.rows.filter(r=>r.stage==='Pre-commencement').map(r=>({...r,id:crypto.randomUUID(),status:'Draft',acceptance:undefined,notApplicable:undefined}));record.data.submission=undefined;record.data.sections.push({title:'Tender commitments',text:current!.data.rows.map(r=>`${r.question}\n${r.answer}`).join('\n\n'),source:`Tender revision ${current!.revision}`});
  }else if(action==='apply-allowance'){
- if(!['owner/admin','admin','estimator/commercial manager','commercial manager','estimator'].includes(actor.role))fail('Estimator authorisation is required.',403);
+ if(!['admin','office','estimator/commercial manager','commercial manager','estimator'].includes(actor.role))fail('Estimator authorisation is required.',403);
  if(kind!=='allowance')fail('Select a draft allowance.');const line=record.data.rows[0];const estimateId=cleanText(line?.fields['Estimate ID'],100);const quantity=Number(line?.fields.Quantity),rate=Number(line?.fields.Rate);if(body.confirm!==true||!estimateId||!Number.isFinite(quantity)||quantity<=0||!Number.isFinite(rate)||rate<=0)fail('Confirm a positive quantity and rate, and select a draft estimate.');
  const estimate=await db.prepare('SELECT * FROM estimates WHERE id=? AND organisation_id=?').bind(estimateId,actor.organisationId).first<{id:string;metadata:string;status:string;name:string}>();if(!estimate)fail('Estimate not found.',404);const meta=safeJson<Record<string,unknown>>(estimate.metadata,{});if(meta.approvedBudget||meta.approvedRevisionId||meta.jobId||!['Draft','Internal Review'].includes(String(meta.status||estimate.status)))fail('Approved, submitted or awarded estimates cannot be changed by an allowance.',409);
  const data=normaliseEstimateData(meta.data||{},DEFAULT_RATE_LIBRARY);if(data.subcontractors.some(l=>l.id===record.id))return Response.json({alreadyApplied:true,record:current});data.subcontractors.push({id:record.id,name:record.title,quantity,unit:line.fields.Unit||'item',unitRate:rate});const totals=calculateEstimate(data),validation=validateEstimate(data,totals),revisionId=crypto.randomUUID(),revisionNumber=Number(meta.revisionNumber||1)+1;record.status='Approved';record.data.notes+='\nConfirmed estimate allowance: '+estimateId;
@@ -85,3 +86,7 @@ export async function POST(request:Request){try{
  await checkLinks(db,actor,record,records);
  await db.batch(appendStatements(db,record));return Response.json({record,issues:issuesFor(record,[...records,record])},{status:201});
 }catch(e){return preparationError(e);}}
+
+export const GET=withActor(handleGET,'read');
+
+export const POST=withActor(handlePOST,'write');

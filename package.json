@@ -9,6 +9,7 @@
     "install:ci": "npm ci",
     "dev": "next dev",
     "build": "next build",
+    "prebuild": "node --env-file-if-exists=.env scripts/migrate-on-build.mjs",
     "start": "node --env-file-if-exists=.env scripts/start.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",

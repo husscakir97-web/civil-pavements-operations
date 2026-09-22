@@ -1,5 +1,7 @@
 # Hostinger: fresh setup entirely in your browser
 
+Automatic migrations run before `npm run build` when database variables are configured, and also before `npm start`. Both use the same database lock and checksum journal, so each migration is applied once. The build hook covers Hostinger's Next.js preset starting Next directly. A migration failure stops deployment. Local/CI builds without database variables remain offline builds.
+
 Hostinger installs production dependencies when `NODE_ENV=production`. The Next.js TypeScript and CSS build packages are therefore included in `dependencies`; CI also builds with development packages removed. In hPanel, **Environment variables → Apply changes triggers a deployment**. For initial setup, use **Settings and redeploy**, select `hostinger-migration`, enter all variables, then use **Save and redeploy** together.
 
 Deploy the `hostinger-migration` branch. Leave `main` unchanged. The old 64 dockets are test data: do not export, import, attach an old organisation, or connect the old Sites bucket. This setup creates a new database workspace and uses your own R2 bucket.

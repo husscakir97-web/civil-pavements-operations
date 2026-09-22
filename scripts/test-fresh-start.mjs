@@ -22,10 +22,13 @@ process.env.EMAIL_ENABLED='true';
 const originalDatabase=process.env.MYSQL_DATABASE;
 const freshDatabase=originalDatabase+'_fresh_test',emptyDatabase=originalDatabase+'_empty_test',noEmailDatabase=originalDatabase+'_noemail_test',created=[];
 const stop=async()=>{if(app&&app.exitCode===null){await new Promise(resolve=>{app.once('exit',resolve);app.kill();});}app=undefined;};
-const start=async(database,demo)=>{process.env.MYSQL_DATABASE=database;process.env.SEED_DEMO_DATA=demo;appLog='';app=spawn(process.execPath,['scripts/start.mjs'],{env:{...process.env,PORT:'33179'},stdio:['ignore','pipe','pipe']});app.stdout.on('data',b=>appLog+=b);app.stderr.on('data',b=>appLog+=b);for(let i=0;i<120;i++){try{if((await fetch(process.env.BETTER_AUTH_URL+'/login')).ok)return;}catch{}if(app.exitCode!==null||i===119)throw new Error(appLog);await new Promise(r=>setTimeout(r,500));}};
+const start=async(database,demo,directNext=false)=>{process.env.MYSQL_DATABASE=database;process.env.SEED_DEMO_DATA=demo;appLog='';app=spawn(process.execPath,directNext?['node_modules/next/dist/bin/next','start','--hostname','127.0.0.1']:['scripts/start.mjs'],{env:{...process.env,PORT:'33179'},stdio:['ignore','pipe','pipe']});app.stdout.on('data',b=>appLog+=b);app.stderr.on('data',b=>appLog+=b);for(let i=0;i<120;i++){try{if((await fetch(process.env.BETTER_AUTH_URL+'/login')).ok)return;}catch{}if(app.exitCode!==null||i===119)throw new Error(appLog);await new Promise(r=>setTimeout(r,500));}};
 try{
  for(const name of [freshDatabase,emptyDatabase,noEmailDatabase]){await db.query('CREATE DATABASE '+identifier(name)+' CHARACTER SET utf8mb4 COLLATE utf8mb4_bin');created.push(name);}
- await start(freshDatabase,'true');
+ const buildMigrationLog=await run('scripts/migrate-on-build.mjs',[],{MYSQL_DATABASE:freshDatabase});
+ assert(buildMigrationLog.includes('Database migrations ready'));
+ await run('scripts/migrate-on-build.mjs',[],{MYSQL_DATABASE:freshDatabase});
+ await start(freshDatabase,'true',true);
  const fresh=await connect();
  try{
  const base=process.env.BETTER_AUTH_URL;

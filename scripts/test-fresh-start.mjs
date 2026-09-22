@@ -41,6 +41,14 @@ try{
  const [counts]=await fresh.query('SELECT organisation_id,COUNT(*) AS count FROM dockets GROUP BY organisation_id');assert.deepEqual(counts,[{organisation_id:me.organisationId,count:6}]);
  const [jobs]=await fresh.query('SELECT organisation_id,metadata FROM jobs');assert.equal(jobs.length,1);assert.equal(jobs[0].organisation_id,me.organisationId);assert(JSON.parse(jobs[0].metadata).approvedBudget);
  for(const path of ['/','/forgot-password','/reset-password','/api/dockets','/api/reports','/api/estimates','/api/commercial','/api/delivery','/api/field','/api/ims','/api/workspace','/api/preparation','/api/job-hub']){r=await call(path,'GET',undefined,a.cookie);assert.equal(r.status,200,path+': '+await r.clone().text());}
+ const fullReport=await (await call('/api/reports','GET',undefined,a.cookie)).json();
+ const compactReport=await (await call('/api/reports?summary=1','GET',undefined,a.cookie)).json();
+ assert.deepEqual(compactReport.summary,fullReport.summary);assert(!('records' in compactReport));
+ console.log('Report bytes: full',JSON.stringify(fullReport).length,'summary',JSON.stringify(compactReport).length);
+ const search=await (await call('/api/search?q=Council','GET',undefined,a.cookie)).json();
+ assert.equal(search.results.filter(x=>x.type==='Docket').length,6,'Search must find dockets by client in MySQL');
+ const foreignSearch=await (await call('/api/search?q=Council','GET',undefined,b.cookie)).json();assert.equal(foreignSearch.results.length,0);
+ const commercial=await (await call('/api/commercial','GET',undefined,a.cookie)).json();assert.equal(commercial.jobs[0].current.unbilled,4500);
  r=await call('/api/dockets','GET',undefined,b.cookie);assert(!JSON.stringify(await r.json()).includes('DEMO-'));
  const [shift]=await fresh.query('SELECT id FROM shifts');r=await call('/api/field?shiftId='+shift[0].id,'GET',undefined,a.cookie);assert.equal(r.status,200);
  r=await call('/api/auth/request-password-reset','POST',{email:a.user.email,redirectTo:'/reset-password'});assert.equal(r.status,200,await r.clone().text());

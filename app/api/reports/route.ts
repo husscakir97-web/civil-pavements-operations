@@ -13,7 +13,8 @@ async function handleGET(request: Request) {
    return [table,rows] as const;
   }));
   const records:ReportData=Object.fromEntries(entries);
-  return Response.json({records,summary:summarise(records),updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'no-store'}});
+  const summaryOnly=new URL(request.url).searchParams.get('summary')==='1';
+  return Response.json({...(!summaryOnly?{records}:{}),summary:summarise(records),updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'no-store'}});
  } catch(error){console.error('Reports:',error);return jsonError('Saved records could not be loaded. Retry to refresh the report.',503);}
 }
 

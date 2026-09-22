@@ -1,5 +1,5 @@
 import {parseCsv,type TenderPage} from './tender';
-import {loadPdfReader,loadTesseract} from '@/components/docket-dashboard';
+import {loadPdfReader,loadTesseract} from '@/lib/document-readers';
 export async function readTender(file:File,onPage:(page:TenderPage,total:number)=>Promise<void>,progress:(message:string)=>void){
  const ext=file.name.split('.').pop()?.toLowerCase();
  let worker:Awaited<ReturnType<NonNullable<Window['Tesseract']>['createWorker']>>|undefined;

@@ -22,10 +22,11 @@ export function JobHub({onNavigate}:{onNavigate:(label:NavLabel)=>void}){
  const [tab,setTab]=useState<Tab>('Overview');
  const [data,setData]=useState<Data|null>(null);
  const [error,setError]=useState('');
+ const [restored,setRestored]=useState(false);
 
- useEffect(()=>{try{const saved=window.localStorage.getItem('infrastruct.project');if(saved)queueMicrotask(()=>setJobId(saved));}catch{}},[]);
- useEffect(()=>{try{if(jobId)window.localStorage.setItem('infrastruct.project',jobId);else window.localStorage.removeItem('infrastruct.project');}catch{}},[jobId]);
- useEffect(()=>{let live=true;fetch('/api/job-hub?jobId='+encodeURIComponent(jobId),{cache:'no-store'}).then(async r=>{const d=await r.json() as Data&{error?:string};if(!r.ok)throw new Error(d.error||'Project could not be loaded');if(live){setData(d);setError('');}}).catch(e=>{if(live)setError(e instanceof Error?e.message:String(e));});return()=>{live=false;};},[jobId]);
+ useEffect(()=>{let live=true;queueMicrotask(()=>{if(!live)return;try{setJobId(window.localStorage.getItem('infrastruct.project')||'');}catch{}setRestored(true);});return()=>{live=false;};},[]);
+ useEffect(()=>{if(!restored)return;try{if(jobId)window.localStorage.setItem('infrastruct.project',jobId);else window.localStorage.removeItem('infrastruct.project');}catch{}},[jobId,restored]);
+ useEffect(()=>{if(!restored)return;const abort=new AbortController();fetch('/api/job-hub?jobId='+encodeURIComponent(jobId),{cache:'no-store',signal:abort.signal}).then(async r=>{const d=await r.json() as Data&{error?:string};if(!r.ok)throw new Error(d.error||'Project could not be loaded');if(!abort.signal.aborted){setData(d);setError('');}}).catch(e=>{if(!abort.signal.aborted)setError(e instanceof Error?e.message:String(e));});return()=>abort.abort();},[jobId,restored]);
 
  const nextAction=useMemo(()=>{
   if(!jobId)return 'Choose an awarded project';
@@ -39,10 +40,10 @@ export function JobHub({onNavigate}:{onNavigate:(label:NavLabel)=>void}){
  return <section className="space-y-5">
   <div className="flex flex-wrap items-end justify-between gap-4">
    <div><p className="text-sm font-medium text-slate-500">Projects</p><h1 className="text-2xl font-bold">Project Workspace</h1><p className="mt-1 text-sm text-slate-600">One authoritative home for setup, delivery, HSEQ, commercial control, documents and closeout.</p></div>
-   <NativeSelect aria-label="Project workspace project" value={jobId} onChange={e=>{setJobId(e.target.value);setTab('Overview');}}><NativeSelectOption value="">Choose an awarded project</NativeSelectOption>{data?.jobs.map(j=><NativeSelectOption key={j.id} value={j.id}>{j.name}</NativeSelectOption>)}</NativeSelect>
+   <NativeSelect aria-label="Project workspace project" value={jobId} onChange={e=>{setJobId(e.target.value);setError('');setTab('Overview');}}><NativeSelectOption value="">Choose an awarded project</NativeSelectOption>{data?.jobs.map(j=><NativeSelectOption key={j.id} value={j.id}>{j.name}</NativeSelectOption>)}</NativeSelect>
   </div>
   {error&&<p role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
-  {!jobId?<div className="rounded-xl border border-dashed bg-white p-6"><h2 className="font-semibold">Choose a project to begin</h2><p className="mt-1 text-sm text-slate-600">Select an awarded project to view its tender baseline, readiness, delivery records, commercial position and closeout evidence in one place.</p></div>:data?.job&&<>
+  {!error&&(!restored||!data||(jobId&&data.job?.id!==jobId))?<p role="status" className="p-6 text-sm text-slate-500">Loading project…</p>:!jobId?<div className="rounded-xl border border-dashed bg-white p-6"><h2 className="font-semibold">Choose a project to begin</h2><p className="mt-1 text-sm text-slate-600">Select an awarded project to view its tender baseline, readiness, delivery records, commercial position and closeout evidence in one place.</p></div>:data?.job&&data.job.id===jobId&&<>
    <section className="rounded-xl border bg-[#101a24] p-5 text-white">
     <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-wider text-orange-300">Project</p><h2 className="mt-1 text-2xl font-bold">{data.job.name}</h2><p className="mt-1 text-sm text-slate-300">{String(data.job.metadata?.client||'Client not recorded')} · {String(data.job.metadata?.site||'Site not recorded')} · {data.job.status}</p></div><div className="max-w-md rounded-lg bg-white/10 p-3"><p className="text-xs font-semibold uppercase tracking-wider text-slate-300">Next action</p><p className="mt-1 font-semibold">{nextAction}</p></div></div>
    </section>

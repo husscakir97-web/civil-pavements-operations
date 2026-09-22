@@ -1,10 +1,30 @@
 'use client';
-import { useEffect,useEffectEvent, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import type { ReportSummary } from '@/lib/reporting';
-export function useLiveReport(refreshKey?:string) {
+export function useLiveReport() {
  const [summary,setSummary]=useState<ReportSummary|null>(null),[error,setError]=useState('');
- const reload=useCallback(async()=>{try{const r=await fetch('/api/reports',{cache:'no-store'});if(!r.ok)throw new Error('Reports could not be loaded. Please retry.');const p=await r.json() as {summary:ReportSummary};setSummary(p.summary);setError('');}catch(e){setError(e instanceof Error?e.message:'Reports unavailable');}},[]);
- useEffect(()=>{const abort=new AbortController();fetch('/api/reports',{cache:'no-store',signal:abort.signal}).then(async r=>{if(!r.ok)throw new Error('Reports unavailable');const p=await r.json() as {summary:ReportSummary};setSummary(p.summary);setError('');}).catch(e=>{if(!abort.signal.aborted)setError(String(e));});const id=setInterval(()=>void reload(),15000);const focus=()=>void reload();window.addEventListener('focus',focus);window.addEventListener('records-changed',focus);return()=>{abort.abort();clearInterval(id);window.removeEventListener('focus',focus);window.removeEventListener('records-changed',focus);};},[reload,refreshKey]);
+ const pending=useRef<AbortController|null>(null);
+ const reload=useCallback(async()=>{
+  if(document.hidden||pending.current)return;
+  const abort=new AbortController();pending.current=abort;
+  try{
+   const r=await fetch('/api/reports?summary=1',{cache:'no-store',signal:abort.signal});
+   if(!r.ok){if(r.status===401||r.status===403)setSummary(null);throw new Error('Reports could not be loaded. Please retry.');}
+   const p=await r.json() as {summary:ReportSummary};
+   if(!abort.signal.aborted){setSummary(previous=>JSON.stringify(previous)===JSON.stringify(p.summary)?previous:p.summary);setError('');}
+  }catch(e){if(!abort.signal.aborted)setError(e instanceof Error?e.message:'Reports unavailable');}
+  finally{if(pending.current===abort)pending.current=null;}
+ },[]);
+
+ useEffect(()=>{
+  let active=true;queueMicrotask(()=>{if(active)void reload();});
+  const refresh=()=>void reload();
+  const changed=()=>{pending.current?.abort();pending.current=null;void reload();};
+  const visibility=()=>{if(document.hidden){pending.current?.abort();pending.current=null;}else refresh();};
+  const id=setInterval(refresh,15000);
+  window.addEventListener('focus',refresh);window.addEventListener('records-changed',changed);document.addEventListener('visibilitychange',visibility);
+  return()=>{active=false;pending.current?.abort();pending.current=null;clearInterval(id);window.removeEventListener('focus',refresh);window.removeEventListener('records-changed',changed);document.removeEventListener('visibilitychange',visibility);};
+ },[reload]);
  return {summary,error,reload};
 }
 const money=(v:number)=>new Intl.NumberFormat('en-AU',{style:'currency',currency:'AUD',maximumFractionDigits:0}).format(v);

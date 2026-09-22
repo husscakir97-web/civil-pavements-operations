@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import dynamic from 'next/dynamic';
 import {
   BarChart3,
   BriefcaseBusiness,
@@ -16,20 +17,39 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { DocketDashboard } from "@/components/docket-dashboard";
-import { EstimatesQuotes } from "@/components/estimates-quotes";
-import { OperationsPage, type NavLabel } from "@/components/operations-workspace";
-import { FieldWorkspace } from "@/components/field-workspace";
-import { CommercialWorkspace } from "@/components/commercial-workspace";
+import type { NavLabel } from "@/components/operations-workspace";
 import { LiveReport, useLiveReport } from "@/components/live-report";
 import { Toaster } from "@/components/ui/sonner";
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { WorkspaceBrandProvider, useWorkspaceBrand } from "@/components/workspace-brand";
-import { JobHub } from "@/components/job-hub";
-import { UniversalSearch } from "@/components/universal-search";
-import { PipelineWorkspace } from "@/components/pipeline-workspace";
-import { PreparationWorkspace } from "@/components/preparation-workspace";
-import { IMSWorkspace } from "@/components/ims-workspace";
+const loading = () => <p role="status" className="p-6 text-sm text-slate-500">Loading workspace…</p>;
+const loadDockets = () => import('@/components/docket-dashboard');
+const loadEstimates = () => import('@/components/estimates-quotes');
+const loadOperations = () => import('@/components/operations-workspace');
+const loadField = () => import('@/components/field-workspace');
+const loadCommercial = () => import('@/components/commercial-workspace');
+const loadProjects = () => import('@/components/job-hub');
+const loadPipeline = () => import('@/components/pipeline-workspace');
+const loadPreparation = () => import('@/components/preparation-workspace');
+const loadIMS = () => import('@/components/ims-workspace');
+const DocketDashboard = dynamic(() => loadDockets().then(m => m.DocketDashboard), {loading});
+const EstimatesQuotes = dynamic(() => loadEstimates().then(m => m.EstimatesQuotes), {loading});
+const OperationsPage = dynamic(() => loadOperations().then(m => m.OperationsPage), {loading});
+const FieldWorkspace = dynamic(() => loadField().then(m => m.FieldWorkspace), {loading});
+const CommercialWorkspace = dynamic(() => loadCommercial().then(m => m.CommercialWorkspace), {loading});
+const JobHub = dynamic(() => loadProjects().then(m => m.JobHub), {loading});
+const UniversalSearch = dynamic(() => import('@/components/universal-search').then(m => m.UniversalSearch), {loading});
+const PipelineWorkspace = dynamic(() => loadPipeline().then(m => m.PipelineWorkspace), {loading});
+const PreparationWorkspace = dynamic(() => loadPreparation().then(m => m.PreparationWorkspace), {loading});
+const IMSWorkspace = dynamic(() => loadIMS().then(m => m.IMSWorkspace), {loading});
+
+function preloadArea(area: string, subview?: string) {
+  const loader = area === 'Pipeline' ? (subview === 'Estimates' ? loadEstimates : loadPipeline)
+    : area === 'Projects' ? loadProjects : area === 'Commercial' ? loadCommercial
+    : area === 'IMS & HSEQ' ? loadIMS : area === 'Admin' ? (subview === 'Settings' ? loadOperations : loadPreparation)
+    : area === 'Operations' ? (subview === 'Dockets' ? loadDockets : subview === 'Field' ? loadField : loadOperations) : null;
+  if (loader) void loader().catch(() => {});
+}
 
 type AppArea =
   | "Home"
@@ -66,7 +86,7 @@ const primaryNav: Array<[Exclude<AppArea, "Search">, LucideIcon]> = [
 
 const subviews: Partial<Record<AppArea, Subview[]>> = {
   Pipeline: ["Opportunities", "Tenders", "Estimates"],
-  Operations: ["Schedule", "Resources", "Dockets"],
+  Operations: ["Schedule", "Resources", "Dockets", "Field"],
   Admin: ["Company Library", "Settings"],
 };
 
@@ -119,14 +139,14 @@ function WorkspaceShell() {
     return () => window.removeEventListener("hashchange", restore);
   }, []);
 
-  const report = useLiveReport(area === "Reports" ? "Reports" : "Overview");
+  const report = useLiveReport();
   const homeActions = useMemo(() => {
     const s = report.summary;
     if (!s) return [] as Array<{title:string;detail:string;area:AppArea;subview?:Subview}>;
     const r = role.toLowerCase();
     const admin = r.includes("owner") || r === "admin" || r.includes("admin");
-    const commercial = r.includes("commercial") || r.includes("estimator") || r.includes("accounts");
-    const delivery = r.includes("project manager") || r.includes("supervisor") || r.includes("operations") || r.includes("scheduler");
+    const commercial = r === "office" || r.includes("commercial") || r.includes("estimator") || r.includes("accounts");
+    const delivery = r === "office" || r === "field" || r.includes("project manager") || r.includes("supervisor") || r.includes("operations") || r.includes("scheduler");
     const hseq = r.includes("hseq") || r.includes("safety") || r.includes("quality");
     const actions:Array<{title:string;detail:string;area:AppArea;subview?:Subview;show:boolean}> = [
       {title:"Review active pipeline",detail:s.openOpportunities+" open opportunit"+(s.openOpportunities===1?"y":"ies"),area:"Pipeline",subview:"Opportunities",show:s.openOpportunities>0&&(admin||commercial)},
@@ -187,7 +207,7 @@ function WorkspaceShell() {
   const visiblePrimaryNav = useMemo(() => {
     const r=role.toLowerCase();
     const isAdmin=r.includes('owner')||r.includes('admin');
-    const field=r.includes('field worker')||r.includes('supervisor');
+    const field=r==='field'||r.includes('field worker')||r.includes('supervisor');
     const accounts=r.includes('accounts');
     const hseq=r.includes('hseq')||r.includes('safety')||r.includes('quality');
     const operations=r.includes('operations')||r.includes('scheduler');
@@ -222,6 +242,8 @@ function WorkspaceShell() {
             key={label}
             aria-current={area === label ? "page" : undefined}
             onClick={() => navigate(label)}
+            onPointerEnter={() => preloadArea(label)}
+            onFocus={() => preloadArea(label)}
             className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition ${area === label ? "bg-primary text-white" : "text-slate-300 hover:bg-white/10 hover:text-white"}`}
           >
             <Icon className="size-4" />
@@ -299,7 +321,7 @@ function WorkspaceShell() {
             {areaSubviews.length > 0 && (
               <nav aria-label={`${area} workspace sections`} className="mb-5 flex min-w-0 gap-2 overflow-x-auto border-b pb-3">
                 {areaSubviews.map(item => (
-                  <button key={item} onClick={() => navigate(area, item)} className={`shrink-0 rounded-full border px-3 py-2 text-sm ${activeSubview === item ? "border-orange-600 bg-orange-50 text-orange-800" : "bg-white text-slate-700"}`}>
+                  <button key={item} onPointerEnter={() => preloadArea(area,item)} onFocus={() => preloadArea(area,item)} onClick={() => navigate(area, item)} className={`shrink-0 rounded-full border px-3 py-2 text-sm ${activeSubview === item ? "border-orange-600 bg-orange-50 text-orange-800" : "bg-white text-slate-700"}`}>
                     {item}
                   </button>
                 ))}

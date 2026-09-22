@@ -110,6 +110,26 @@ textarea {
   display: none;
 }
 
+/* Lightweight workspace surfaces: system fonts, CSS borders, no animation runtime. */
+.surface { border: 1px solid var(--border); border-radius: 14px; background: white; box-shadow: 0 2px 3px #14233303; }
+.app-shell h1, .app-shell h2 { letter-spacing: -0.025em; }
+.app-shell button:not(:disabled), .app-shell summary { cursor: pointer; }
+.app-shell :where(button,a,summary):focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.app-shell .sidebar-item[aria-current="page"] { box-shadow: inset 3px 0 0 var(--primary); }
+.quick-action { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 9px 14px; border: 1px solid var(--border); border-radius: 9px; background: white; font-size: 13px; font-weight: 500; transition: background-color 120ms, border-color 120ms; }
+.quick-action:hover { background: #f8fafc; border-color: #b9c3cd; }
+.quick-action-primary { color: white; background: #172633; border-color: #172633; }
+.quick-action-primary:hover { background: #263c4c; border-color: #263c4c; }
+.metric-card { border-top: 2px solid #dce3e9; }
+.metric-card-accent { border-top-color: var(--primary); }
+.workspace-placeholder { min-height: 420px; }
+.skip-link:focus { position: fixed; top: 8px; left: 8px; z-index: 100; padding: 12px 20px; background: white; border-radius: 8px; }
+.app-shell [data-slot="table-head"] { background: #f8fafc; color: #627184; font-size: 11px; font-weight: 600; letter-spacing: .03em; }
+.app-shell [data-slot="table-cell"] { padding-top: 14px; padding-bottom: 14px; }
+@media (prefers-reduced-motion: reduce) {
+  .app-shell *, .app-shell *::before, .app-shell *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
 /* Shared phone behaviour, including dialogs rendered outside the app shell. */
 .mobile-quick-nav { padding-bottom: env(safe-area-inset-bottom); }
 main section, main article, main form, main .grid > * { min-width: 0; }

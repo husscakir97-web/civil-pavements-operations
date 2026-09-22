@@ -1,3 +1,4 @@
+import {withActor} from '@/lib/platform/route';
 import {
   cleanNumber,
   cleanStatus,
@@ -16,7 +17,7 @@ function jsonError(message: string, status = 400) {
   return Response.json({ error: message }, { status });
 }
 
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
   try {
     const { db } = requireBindings();
     const { searchParams } = new URL(request.url);
@@ -34,7 +35,7 @@ export async function GET(request: Request) {
         WHERE organisation_id = ? AND work_date >= ? AND work_date < ? AND lower(status) != 'archived'
         ORDER BY work_date DESC, created_at DESC`,
       )
-      .bind(DEFAULT_ORGANISATION_ID, start, end)
+      .bind(DEFAULT_ORGANISATION_ID(), start, end)
       .all();
     return Response.json({ dockets: result.results.map((r: Record<string,unknown>) => ({...r,
       fieldConfidence: safeJson(r.fieldConfidence, {}),
@@ -79,7 +80,7 @@ function parseRecord(value: FormDataEntryValue | Record<string, unknown> | null)
   };
 }
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   try {
     const { db, bucket } = requireBindings();
     const form = await request.formData();
@@ -94,7 +95,7 @@ export async function POST(request: Request) {
     if (invalid.length) {
       const now = new Date().toISOString();
       await db.prepare("INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)")
-        .bind(crypto.randomUUID(), DEFAULT_ORGANISATION_ID, "docket.ready.rejected", "rejected", JSON.stringify({ missing: invalid }), now).run();
+        .bind(crypto.randomUUID(), DEFAULT_ORGANISATION_ID(), "docket.ready.rejected", "rejected", JSON.stringify({ missing: invalid }), now).run();
       return Response.json({ error: "Docket remains Needs Review until mandatory fields are complete.", missing: invalid }, { status: 422 });
     }
     for (const record of records) {
@@ -124,7 +125,7 @@ export async function POST(request: Request) {
       const duplicate = record.docketNo !== "UNREAD"
         ? await db
           .prepare("SELECT id FROM dockets WHERE organisation_id = ? AND UPPER(docket_no) = ? AND work_date = ? AND lower(status) != 'archived' LIMIT 1")
-          .bind(DEFAULT_ORGANISATION_ID, record.docketNo.toUpperCase(), record.workDate)
+          .bind(DEFAULT_ORGANISATION_ID(), record.docketNo.toUpperCase(), record.workDate)
           .first()
         : null;
       if (duplicate || seen.has(duplicateKey)) record.status = "duplicate";
@@ -139,7 +140,7 @@ export async function POST(request: Request) {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
         id,
-        DEFAULT_ORGANISATION_ID,
+        DEFAULT_ORGANISATION_ID(),
         record.docketNo,
         record.workDate,
         record.client,
@@ -175,7 +176,7 @@ export async function POST(request: Request) {
   }
 }
 
-export async function PUT(request: Request) {
+async function handlePUT(request: Request) {
   try {
     const { db } = requireBindings();
     const raw = (await request.json()) as Record<string, unknown>;
@@ -186,7 +187,7 @@ export async function PUT(request: Request) {
     if (missing.length) {
       const now = new Date().toISOString();
       await db.prepare("INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)")
-        .bind(crypto.randomUUID(), DEFAULT_ORGANISATION_ID, `docket.ready.rejected:${id}`, "rejected", JSON.stringify({ docketId: id, missing }), now).run();
+        .bind(crypto.randomUUID(), DEFAULT_ORGANISATION_ID(), `docket.ready.rejected:${id}`, "rejected", JSON.stringify({ docketId: id, missing }), now).run();
       return Response.json({ error: "Docket remains Needs Review until mandatory fields are complete.", missing }, { status: 422 });
     }
     const now = new Date().toISOString();
@@ -218,7 +219,7 @@ export async function PUT(request: Request) {
         record.status,
         record.confidence, JSON.stringify(record.fieldConfidence ?? {}), JSON.stringify(record.lineItems ?? []), JSON.stringify(record.links ?? {}), record.extractionMethod ?? "local-ocr", record.profileId ?? "",
         now,
-        DEFAULT_ORGANISATION_ID,
+        DEFAULT_ORGANISATION_ID(),
         id,
       )
       .run();
@@ -229,7 +230,7 @@ export async function PUT(request: Request) {
   }
 }
 
-export async function DELETE(request: Request) {
+async function handleDELETE(request: Request) {
   try {
     const { db, bucket } = requireBindings();
     const id = cleanText(new URL(request.url).searchParams.get("id"), 80);
@@ -237,16 +238,16 @@ export async function DELETE(request: Request) {
 
     const row = await db
       .prepare("SELECT source_key AS sourceKey FROM dockets WHERE organisation_id = ? AND id = ?")
-      .bind(DEFAULT_ORGANISATION_ID, id)
+      .bind(DEFAULT_ORGANISATION_ID(), id)
       .first<{ sourceKey: string }>();
     if (!row) return jsonError("The docket was not found.", 404);
 
-    await db.prepare("DELETE FROM dockets WHERE organisation_id = ? AND id = ?").bind(DEFAULT_ORGANISATION_ID, id).run();
+    await db.prepare("DELETE FROM dockets WHERE organisation_id = ? AND id = ?").bind(DEFAULT_ORGANISATION_ID(), id).run();
 
     if (row.sourceKey) {
       const sharedFile = await db
         .prepare("SELECT id FROM dockets WHERE organisation_id = ? AND source_key = ? LIMIT 1")
-        .bind(DEFAULT_ORGANISATION_ID, row.sourceKey)
+        .bind(DEFAULT_ORGANISATION_ID(), row.sourceKey)
         .first();
       if (!sharedFile) {
         try {
@@ -263,3 +264,11 @@ export async function DELETE(request: Request) {
     return jsonError("The docket could not be deleted.", 503);
   }
 }
+
+export const GET=withActor(handleGET,'read');
+
+export const POST=withActor(handlePOST,'write');
+
+export const PUT=withActor(handlePUT,'write');
+
+export const DELETE=withActor(handleDELETE,'write');

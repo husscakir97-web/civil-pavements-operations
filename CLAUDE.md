@@ -24,12 +24,12 @@ Two consequences that govern every decision in this repo:
 
 ## 2. Stack
 
-- Next.js 16 App Router via `vinext` (Vite-based, **beta** — treat framework-level
-  workarounds as suspect and comment them)
+- Next.js 16 App Router on Node.js 22 (`next build` / `next start`)
 - React 19, TypeScript, Tailwind 4, shadcn/ui (vendored in `vendor/`)
-- Cloudflare Workers + D1 (SQLite) + R2
-- Drizzle ORM, migrations in `drizzle/`
-- pnpm
+- Hostinger Node.js hosting, MySQL, R2 through the S3 API
+- Drizzle ORM; active migrations in `migrations/mysql/`
+- npm with committed package-lock.json
+- Better Auth email/password and MySQL sessions
 
 ---
 
@@ -89,18 +89,12 @@ asked; large refactors are unreviewable and break the other agent's work in flig
 These are recorded deliberately. If your task touches one, raise it rather than
 working around it silently.
 
-### 5.1 Auth is forgeable off-platform — CRITICAL
+### 5.1 Authentication
 
-`lib/authz.ts` and `middleware.ts` trust the request headers
-`oai-authenticated-user-id` and `oai-authenticated-user-email`. This is only safe
-behind the ChatGPT Sites proxy, which strips client-supplied copies.
-
-**On any other host, anyone can forge these headers and become any user,
-including the owner.** This must be replaced with real session auth before the app
-is deployed anywhere except Sites. Never add a feature that increases reliance on
-these headers.
-
-The owner email is also hardcoded in `lib/authz.ts`. Move it to config.
+`lib/platform/auth.ts` owns Better Auth. Business routes use explicit `withActor`
+guards and `requireActor`. Never trust `oai-*` headers, email matching, client role
+claims, or client organisation IDs. Imported ownership is attached by the one-time
+verified-account-ID CLI; no hardcoded owner exists.
 
 ### 5.2 `orgEntity()` is a JSON blob, not a schema
 
@@ -186,7 +180,7 @@ document drafting) obeys these without exception:
 
 ## 8. Data rules
 
-- **Migrations are append-only.** Never edit an existing file in `drizzle/`. Add a
+- **Migrations are append-only.** Never edit an applied file in `migrations/mysql/` or the archived `drizzle/`. Add a
   new one. Never write a destructive migration against customer data.
 - **Every new table gets `organisation_id` and an index on it.** No exceptions.
 - **Every mutable business entity should carry** `revision`, `status`,
@@ -194,7 +188,7 @@ document drafting) obeys these without exception:
 - **Prefer immutable revisions** over in-place updates for anything with
   compliance or contractual weight. `preparation_revisions` is the reference
   implementation.
-- Run `pnpm db:generate` after schema changes; commit the generated migration.
+- Run `npm run db:generate` after schema changes; commit the generated migration.
 
 ---
 
@@ -213,7 +207,7 @@ document drafting) obeys these without exception:
 
 ### Definition of done
 
-- TypeScript compiles, `pnpm lint` passes
+- TypeScript compiles, `npm run lint` passes
 - New logic has a test that actually runs (see §10)
 - Any new table has a migration and an `organisation_id`
 - No new reliance on the `oai-*` auth headers
@@ -224,13 +218,12 @@ document drafting) obeys these without exception:
 
 ## 10. Testing
 
-There is currently **no test runner wired up**. `scripts/test-*.cjs` are ad-hoc
-scripts with no `test` script in `package.json` and no CI.
+`npm test` runs the existing business regression suites. `npm run test:mysql` runs
+production HTTP integration tests with Better Auth, a disposable MySQL database,
+and local SMTP/S3 fixtures. CI runs both, lint, typecheck and a production build
+on Node 22. See README.md.
 
-Fixing this is a priority task. Until it exists: when you add logic, add a test in
-the existing script style and note in the PR that it must be run manually.
-
-Once a runner exists, these must be automated and run on every commit:
+These requirements must be automated and run on every commit:
 - **Tenancy isolation** — two orgs cannot see each other's data
 - **Module boundaries** — a lint rule failing the build on cross-module imports
 - **AI governance** — no AI-authored record can reach an approved status without a

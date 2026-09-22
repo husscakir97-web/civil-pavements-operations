@@ -1,55 +1,45 @@
-name: CI
-
+name: Hostinger migration checks
 on:
   push:
-    branches: [main]
+    branches: [main, hostinger-migration]
   pull_request:
-
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   verify:
-    name: Lint, typecheck and test
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: integration-only
+          MYSQL_DATABASE: migration_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -pintegration-only"
+          --health-interval=10s --health-timeout=5s --health-retries=10
     steps:
       - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      # CLAUDE.md §10: cross-module imports fail the build here.
-      - name: Lint (includes the module boundary rule)
-        run: pnpm lint
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      # Tenancy isolation, module boundaries, AI governance.
-      - name: Test
-        run: pnpm test
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      # Separate job so a vinext beta build failure never masks a test result.
-      - run: pnpm build
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: Match Hostinger production-only dependency installation
+        run: npm prune --omit=dev
+      - run: npm run build
+      - name: MySQL migrations and production integration
+        env:
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: 3306
+          MYSQL_DATABASE: migration_test
+          MYSQL_USER: root
+          MYSQL_PASSWORD: integration-only
+        run: |
+          npm run test:fresh
+          npm run db:migrate
+          npm run test:mysql

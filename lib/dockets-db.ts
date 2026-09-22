@@ -1,6 +1,6 @@
-import { env } from "cloudflare:workers";
+import { env } from '@/lib/platform/runtime';
 
-export const DEFAULT_ORGANISATION_ID = "roadworx-sydney";
+export { currentOrganisationId as DEFAULT_ORGANISATION_ID } from '@/lib/platform/context';
 
 export type DocketInput = {
   docketNo: string;

@@ -8,7 +8,7 @@ export const useWorkspaceBrand=()=>useContext(Context);
 export function WorkspaceBrandProvider({children}:{children:ReactNode}){
  const [data,setData]=useState({brand:defaultBrand,canEdit:false,userEmail:'',role:'read-only'});
  async function refresh(){const r=await fetch('/api/workspace',{cache:'no-store'});if(r.ok)setData(await r.json());}
- useEffect(()=>{let active=true;fetch('/api/workspace',{cache:'no-store'}).then(async r=>{if(r.ok&&active)setData(await r.json());}).catch(()=>{});return()=>{active=false;};},[]);
+ useEffect(()=>{let active=true;fetch('/api/workspace',{cache:'no-store'}).then(async r=>{if(r.ok&&active)setData(await r.json());else if(active&&[401,403].includes(r.status))location.assign('/account');}).catch(()=>{});return()=>{active=false;};},[]);
  useEffect(()=>{document.title=data.brand.productName;},[data.brand.productName]);
  return <Context.Provider value={{...data,refresh}}><div style={{'--primary':data.brand.accentColor} as CSSProperties}>{children}</div></Context.Provider>;
 }

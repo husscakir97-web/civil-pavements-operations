@@ -675,7 +675,7 @@ export function DocketDashboard() {
   const upload = () => fileInput.current?.click();
 
   return (
-    <main className="min-h-screen">
+    <div className="min-h-screen">
       <Toaster position="top-right" richColors />
       {loadError && <p role="alert" className="border-b border-red-200 bg-red-50 px-6 py-4 text-red-800">{loadError}</p>}
       <input
@@ -1181,6 +1181,6 @@ export function DocketDashboard() {
         </DialogContent>
       </Dialog>
 
-    </main>
+    </div>
   );
 }

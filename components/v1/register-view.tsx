@@ -6,7 +6,7 @@ import {Download,Plus,Upload} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
 import {REGISTERS,type RegisterDef,type FieldDef,type RegisterKey} from '@/lib/v1/registers';
 import {allowedTransitions,MACHINES} from '@/lib/platform/workflow';
-import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,money,dateText,Section} from './kit';
+import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,money,dateText,Section} from './kit';
 
 type Rec=Record<string,unknown>&{id:string;revision?:number};
 let peopleCache:Promise<Array<{id:string;name:string;role:string}>>|null=null;
@@ -110,7 +110,7 @@ function RecordForm({def,record,parentId,defaults,people,relationOptions,docCtx,
  return <div className="grid gap-4 p-5">
   {record&&def.machine&&<div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-slate-500">Status</span><StatusBadge machine={def.machine} state={state!}/>{typeof record.reference==='string'&&<span className="text-slate-500">· {record.reference}</span>}{typeof record.origin==='string'&&record.origin!=='manual'&&<span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-900">Source: {String(record.origin)}{record.confidence!=null?` · confidence ${Number(record.confidence).toFixed(0)}%`:''}</span>}</div>}
   {locked&&<p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">This record is {state} and can no longer be edited.</p>}
-  {visible.filter(f=>!f.derived||record).map(f=><Field key={f.key} label={f.label} required={f.required} hint={f.help}>{f.derived?<div className="text-sm text-slate-700">{display(f,values[f.key],people)}</div>:<Input f={f} value={values[f.key]} disabled={!editable(f)||busy} onChange={v=>setValues(s=>({...s,[f.key]:v}))} people={people} relationOptions={relationOptions} documentContext={docCtx}/>}</Field>)}
+  {visible.filter(f=>!f.derived||record).map(f=>{const Wrap=['boolean','document'].includes(f.type)||f.derived?FieldGroup:Field;return <Wrap key={f.key} label={f.label} hint={f.help}>{f.derived?<div className="text-sm text-slate-700">{display(f,values[f.key],people)}</div>:<Input f={f} value={values[f.key]} disabled={!editable(f)||busy} onChange={v=>setValues(s=>({...s,[f.key]:v}))} people={people} relationOptions={relationOptions} documentContext={docCtx}/>}</Wrap>;})}
   <ErrorState error={error}/>
   <div className="flex flex-wrap gap-2 border-t pt-4">
    {(fullEdit||fieldEdit)&&<Btn busy={busy} onClick={()=>void save()}>{record?'Save changes':'Create'}</Btn>}

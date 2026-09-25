@@ -43,3 +43,4 @@ jobs:
           npm run test:fresh
           npm run db:migrate
           npm run test:mysql
+          npm run test:v1

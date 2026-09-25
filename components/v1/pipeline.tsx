@@ -3,7 +3,7 @@ import {useState,type ReactNode} from 'react';
 import dynamic from 'next/dynamic';
 import {ArrowRight,Plus,Trophy} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
-import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,PageHeader,NextAction,Progress,Tabs,Stat,money,dateText,Pill} from './kit';
+import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,Section,PageHeader,NextAction,Progress,Tabs,Stat,money,dateText,Pill} from './kit';
 import {RegisterView,usePeople,DocumentInput} from './register-view';
 import {EstimateApprovalPanel} from './estimating';
 import {useNav} from './nav';
@@ -71,8 +71,8 @@ function TenderForm({tender,onDone}:{tender?:Tender;onDone:(id?:string)=>void}){
 type TabKey='intake'|'requirements'|'bid'|'estimate'|'returnables'|'approval'|'submission'|'clarifications'|'award';
 function TenderWorkspace({id,tab,onBack}:{id:string;tab?:string;onBack:()=>void}){
  const {navigate}=useNav();const session=useSession();
- const {data,error,loading,refresh}=useApi<{tender:Tender;bidReview:Record<string,string|null>|null}>(`/api/tenders/workspace?id=${id}`);
  const active=(tab||'intake') as TabKey;
+ const {data,error,loading,refresh}=useApi<{tender:Tender;bidReview:Record<string,string|null>|null}>(`/api/tenders/workspace?id=${id}&view=${active}`);
  if(loading&&!data)return <Loading label="Loading tender…"/>;
  if(error&&!data)return <div className="grid gap-3"><ErrorState error={error} onRetry={refresh}/><Btn variant="secondary" onClick={onBack}>Back to tenders</Btn></div>;
  const t=data!.tender,closed=['awarded','lost'].includes(t.stage);
@@ -176,7 +176,7 @@ function SubmissionTab({t,onChanged}:{t:Tender;onChanged:()=>void}){
   {t.stage!=='approval'?<p className="mt-4 text-sm text-slate-600">Obtain internal approval before recording the submission.</p>:can('tender.submit')&&<form className="mt-4 grid gap-4" onSubmit={e=>{e.preventDefault();void run(()=>api('/api/tenders/workspace',{method:'POST',body:{action:'submit',id:t.id,method:v.method,version:v.version||null,notes:v.notes||null,documentId:v.documentId||null,overrideReason:failing.length?v.overrideReason:null}}),onChanged);}}>
    <div className="grid gap-4 sm:grid-cols-2"><Field label="Submission method" required><select className={field} required value={v.method} onChange={e=>setV({...v,method:e.target.value})}><option value="">Choose…</option><option>Client portal</option><option>Email</option><option>Hand delivered</option><option>Tender box</option><option>Other</option></select></Field><Field label="Version"><input className={field} value={v.version} onChange={e=>setV({...v,version:e.target.value})}/></Field></div>
    <Field label="Notes"><textarea className={`${field} min-h-16`} value={v.notes} onChange={e=>setV({...v,notes:e.target.value})}/></Field>
-   <Field label="Submission evidence"><DocumentInput value={v.documentId} onChange={id=>setV(s=>({...s,documentId:id}))} contextType="tender" contextId={t.id}/></Field>
+   <FieldGroup label="Submission evidence"><DocumentInput value={v.documentId} onChange={id=>setV(s=>({...s,documentId:id}))} contextType="tender" contextId={t.id}/></FieldGroup>
    {failing.length>0&&(can('tender.approve')?<Field label="Override reason (authorised approvers only)" hint="Required because checks are incomplete. Recorded in the audit trail."><textarea className={`${field} min-h-16`} value={v.overrideReason} onChange={e=>setV({...v,overrideReason:e.target.value})}/></Field>:<p className="text-sm text-amber-800">Complete the checks above before submitting.</p>)}
    <ErrorState error={error}/>
    <Btn className="justify-self-start" busy={busy} type="submit">Record submission</Btn>

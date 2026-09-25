@@ -14,7 +14,7 @@ type Invoice={id:string;claimId:string|null;invoiceNumber:string;invoiceDate:str
 
 export function ForecastSummary({f,budget,actual}:{f:Forecast;budget?:Record<string,number>|null;actual?:Record<string,number>}){
  return <div className="grid gap-4">
-  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Stat label="Original contract" value={money(f.originalContract)}/><Stat label="Approved variations" value={money(f.approvedVariations)} hint={f.pendingVariations?`${money(f.pendingVariations)} pending`:undefined}/><Stat label="Current contract value" value={money(f.currentContract)}/><Stat label="Forecast margin" value={pct(f.forecastMarginPct)} tone={f.forecastMarginPct==null?undefined:f.forecastMarginPct<0?'bad':f.forecastMarginPct<5?'warn':'good'} hint={`${money(f.forecastProfit)} profit`}/>
+  <div className="grid grid-cols-2 gap-3 lg:grid-cols-4"><Stat label="Original contract" value={money(f.originalContract)}/><Stat label="Approved variations" value={money(f.approvedVariations)} hint={f.pendingVariations?`${money(f.pendingVariations)} pending`:undefined}/><Stat label="Current contract value" value={money(f.currentContract)}/><Stat label="Forecast margin" value={pct(f.forecastMarginPct)} tone={f.forecastMarginPct==null?undefined:f.forecastMarginPct<0?'bad':f.forecastMarginPct<5?'warn':'good'} hint={`${money(f.forecastProfit)} profit`}/>
    <Stat label="Original budget" value={money(f.originalBudget)}/><Stat label="Current budget" value={money(f.currentBudget)}/><Stat label="Actual / committed / accrued" value={money(f.actual)} hint={`${money(f.committed)} committed · ${money(f.accrued)} accrued`}/><Stat label="Forecast final cost" value={money(f.forecastFinalCost)} hint={`${money(f.costToComplete)} to complete`}/>
    <Stat label="Claimed (ex GST)" value={money(f.claimed)} hint={`${money(f.certified)} certified`}/><Stat label="Invoiced" value={money(f.invoiced)} hint={`${money(f.paid)} paid · ${money(f.outstanding)} outstanding`}/><Stat label="Earned revenue" value={money(f.earnedRevenue)} hint={`${f.percentComplete}% complete by cost`}/><Stat label="Unbilled work" value={money(f.unbilled)} hint="Earned revenue less claimed"/></div>
   {budget&&actual&&<div className="overflow-x-auto"><table className="w-full text-sm"><thead className="text-left text-xs text-slate-500"><tr><th className="py-2">Category</th><th>Budget</th><th>Actual</th><th>Variance</th></tr></thead><tbody className="divide-y">{Object.keys(budget).map(k=><tr key={k}><td className="py-2 capitalize">{k}</td><td>{money(budget[k])}</td><td>{money(actual[k]??0)}</td><td className={(actual[k]??0)>budget[k]?'text-red-700':''}>{money((actual[k]??0)-budget[k])}</td></tr>)}</tbody></table></div>}
@@ -22,14 +22,17 @@ export function ForecastSummary({f,budget,actual}:{f:Forecast;budget?:Record<str
  </div>;
 }
 
-export function ProjectCommercial({projectId,closed}:{projectId:string;closed:boolean}){
- const {data,error,loading,refresh}=useApi<{financials:{forecast:Forecast;hasBaseline:boolean;budgetByCategory:Record<string,number>|null;actualByCategory:Record<string,number>};estimateVsActual:EvA}>(`/api/projects/control?id=${projectId}`);
+export function ProjectCommercial({projectId,closed,onChanged}:{projectId:string;closed:boolean;onChanged?:()=>void}){
+ const [tick,setTick]=useState(0);
+ const {data,error,loading,refresh:reload}=useApi<{financials:{forecast:Forecast;hasBaseline:boolean;budgetByCategory:Record<string,number>|null;actualByCategory:Record<string,number>};estimateVsActual:EvA}>(`/api/projects/control?id=${projectId}`);
+ // Variations and claims affect each other and the money spine: refresh all three together.
+ const refresh=()=>{reload();setTick(t=>t+1);onChanged?.();};
  return <div className="grid gap-4">
   <Section title="Money spine" description={data&&!data.financials.hasBaseline?'This project has no baseline yet. Record one from Setup to enable budget comparisons.':undefined} actions={<Btn variant="secondary" onClick={refresh}>Refresh</Btn>}>
    <ErrorState error={error} onRetry={refresh}/>{loading&&!data?<Loading/>:data&&<ForecastSummary f={data.financials.forecast} budget={data.financials.budgetByCategory} actual={data.financials.actualByCategory}/>}
   </Section>
   <RegisterView register="variations" parentId={projectId} hideCreate={closed} onChanged={refresh} description="Approved variations increase the current contract value and budget. The original baseline is never rewritten."/>
-  <ClaimsPanel projectId={projectId} closed={closed} onChanged={refresh}/>
+  <ClaimsPanel key={tick} projectId={projectId} closed={closed} onChanged={()=>{reload();onChanged?.();}}/>
   {data&&<EstimateVsActualView eva={data.estimateVsActual}/>}
  </div>;
 }

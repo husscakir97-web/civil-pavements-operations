@@ -8,7 +8,8 @@ export function parseRoute(hash:string):Route{
  const [area,sub,id,tab]=decodeURIComponent(hash.replace(/^#/,'')).split('/');
  return {area:area||'Home',sub:sub||undefined,id:id||undefined,tab:tab||undefined};
 }
-export function routeHash(r:Route){return '#'+[r.area,r.sub,r.id,r.tab].filter(Boolean).map(s=>encodeURIComponent(s!)).join('/');}
+// Empty segments are kept (e.g. #Projects//<id>/setup) so positions survive reload.
+export function routeHash(r:Route){const parts=[r.area,r.sub||'',r.id||'',r.tab||''];while(parts.length>1&&!parts[parts.length-1])parts.pop();return '#'+parts.map(s=>encodeURIComponent(s)).join('/');}
 /** Maps a Home/search "area" string (e.g. "Pipeline/Tenders") to navigate args. */
 export function areaTarget(area:string,target?:{type:string;id:string}):[string,string?,string?]{
  const [a,s]=area.split('/');

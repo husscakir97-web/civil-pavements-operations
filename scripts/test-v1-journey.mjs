@@ -64,6 +64,8 @@ try{
  const reqs=reg('requirements',A.cookie),rets=reg('returnables',A.cookie);
  const req1=(await json(await reqs.create(tenderId,{title:'Provide ISO 45001 aligned WHS management plan',category:'HSEQ',mandatory:true,source_document:'tender-scope.txt',source_page:'s4.2'}),201)).record;
  assert.equal(req1.status,'open','manual requirements start open (not suggested)');
+ const minimal=(await json(await reqs.create(tenderId,{title:'Minimal requirement from the browser form',source_document:null,source_page:null,response:null,due_date:null}),201,'blank optional fields are accepted')).record;
+ await json(await reqs.move(minimal.id,'not_applicable','Covered by standard terms'),200);
  const ret1=(await json(await rets.create(tenderId,{title:'Insurance certificates',category:'insurance',mandatory:true,library_item_id:libItem.id}),201)).record;
  let t=(await json(await call('/api/tenders/workspace?id='+tenderId,'GET',undefined,A.cookie),200)).tender;
  assert.equal(t.stage,'draft');assert.equal(t.stats.documents,1);assert.equal(t.nextAction,'Start the bid / no-bid review');

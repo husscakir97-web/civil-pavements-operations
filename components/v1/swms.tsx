@@ -10,7 +10,7 @@ type SwmsRow={id:string;projectId:string;projectName:string;reference:string;tit
 type Revision={id:string;revision_number:number;status:string;origin:string;change_reason:string|null;approved_at:string|null;issued_at:string|null;updated_at:string;content:SwmsContent};
 type Detail={swms:SwmsRow&{currentRevisionId:string};revisions:Revision[];acknowledgements:Array<{worker_name:string;acknowledged_at:string}>};
 
-export function SwmsPanel({projectId,shiftId}:{projectId?:string;shiftId?:string}){
+export function SwmsPanel({projectId,shiftId,onChanged}:{projectId?:string;shiftId?:string;onChanged?:()=>void}){
  const {can,role}=useSession();
  const {data,error,loading,refresh}=useApi<{swms:SwmsRow[]}>(`/api/hseq/swms${projectId?`?projectId=${projectId}`:''}`);
  const [open,setOpen]=useState<string|'new'|null>(null);
@@ -19,8 +19,8 @@ export function SwmsPanel({projectId,shiftId}:{projectId?:string;shiftId?:string
   {loading&&!data?<Loading/>:!data?.swms.length?<EmptyState title={role==='field'?'No SWMS have been issued for this project yet.':'No SWMS have been created for this project.'} action={projectId&&can('hseq.edit')?<Btn variant="secondary" onClick={()=>setOpen('new')}>Create SWMS</Btn>:undefined}/>:
    <ul className="divide-y">{data.swms.map(s=><li key={s.id}><button className="flex w-full flex-wrap items-center gap-3 py-3 text-left hover:bg-slate-50" onClick={()=>setOpen(s.id)}><span className="min-w-0 flex-1"><span className="block font-medium">{s.reference} · {s.title}</span><span className="block text-xs text-slate-500">{!projectId&&`${s.projectName} · `}{s.activity} · Rev {s.currentRevisionNumber}</span></span><StatusBadge machine="swms" state={s.status}/>{s.issuedRevisionId&&<Pill tone={s.acknowledgedByMe?'success':'warning'}>{role==='field'?(s.acknowledgedByMe?'Acknowledged':'Acknowledge'):`${s.acknowledgements} acknowledged`}</Pill>}</button></li>)}</ul>}
   <Sheet open={Boolean(open)} onOpenChange={o=>{if(!o)setOpen(null);}}><SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-3xl"><SheetTitle className="border-b px-5 py-4 text-lg font-semibold">{open==='new'?'Create SWMS':'SWMS'}</SheetTitle><SheetDescription className="sr-only">Safe work method statement</SheetDescription>
-   {open==='new'&&projectId&&<SwmsQuestionnaireForm projectId={projectId} onCreated={id=>{refresh();setOpen(id);}}/>}
-   {open&&open!=='new'&&<SwmsDetail id={open} shiftId={shiftId} onChanged={refresh}/>}
+   {open==='new'&&projectId&&<SwmsQuestionnaireForm projectId={projectId} onCreated={id=>{refresh();onChanged?.();setOpen(id);}}/>}
+   {open&&open!=='new'&&<SwmsDetail id={open} shiftId={shiftId} onChanged={()=>{refresh();onChanged?.();}}/>}
   </SheetContent></Sheet>
  </Section>;
 }

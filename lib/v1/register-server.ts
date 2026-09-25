@@ -14,6 +14,9 @@ import {getPool} from '@/lib/platform/database';
 const getPoolConn=()=>getPool();
 
 const actor=()=>actorContext.getStore()!;
+// Legacy columns that are NOT NULL with an empty-string default.
+const NOT_NULL_TEXT:Record<string,string[]>={tender_requirements:['source_document','source_page','clarification']};
+function legacyNulls(def:RegisterDef,values:Row){for(const c of NOT_NULL_TEXT[def.table]||[])if(c in values&&values[c]==null)values[c]='';return values;}
 const scopeColumn=(def:RegisterDef)=>def.scope==='tender'?'tender_id':def.scope==='itp'?'itp_id':def.scope==='org'?null:'project_id';
 const stateCol=(def:RegisterDef)=>def.stateColumn||'status';
 
@@ -137,7 +140,8 @@ export async function createRecord(key:string,parentId:string|null,input:Record<
  const allowed=writableFields(def,a.role);
  const schema=z.object(Object.fromEntries(allowed.map(f=>[f.key,fieldSchema(f)])));
  const parsed=schema.safeParse(input);if(!parsed.success)fail(400,parsed.error.issues[0]?.message||'Check the highlighted fields.',{issues:parsed.error.issues.map(i=>({path:i.path.join('.'),message:i.message}))});
- const values:Row=parsed.data as Row;
+ // Omit blank values on create so column defaults apply.
+ const values:Row=legacyNulls(def,Object.fromEntries(Object.entries(parsed.data as Row).filter(([,v])=>v!==null&&v!==undefined)));
  return tx(async conn=>{
   const parent=await resolveParent(def,parentId,conn,true) as Row;
   await validateRefs(def,values,conn);
@@ -183,7 +187,7 @@ export async function updateRecord(key:string,id:string,revision:number,input:Re
  const allowed=writableFields(def,a.role);
  const schema=z.object(Object.fromEntries(allowed.map(f=>[f.key,fieldSchema(f).optional()]))).strip();
  const parsed=schema.safeParse(input);if(!parsed.success)fail(400,parsed.error.issues[0]?.message||'Check the highlighted fields.');
- const values=Object.fromEntries(Object.entries(parsed.data as Row).filter(([k])=>k in input));
+ const values=legacyNulls(def,Object.fromEntries(Object.entries(parsed.data as Row).filter(([k])=>k in input)));
  return tx(async conn=>{
   const row=await loadForUpdate(def,id,conn);
   await parentOf(def,row,conn);

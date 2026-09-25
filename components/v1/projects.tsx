@@ -49,8 +49,9 @@ function NewProjectForm({onDone}:{onDone:(id?:string)=>void}){
 type TabKey='overview'|'setup'|'delivery'|'quality'|'commercial'|'documents'|'closeout';
 function ProjectWorkspace({id,tab,onBack}:{id:string;tab?:string;onBack:()=>void}){
  const {navigate}=useNav();const session=useSession();const {busy,error:actionError,run}=useAction();
- const {data,error,loading,refresh}=useApi<Detail>(`/api/projects/workspace?id=${id}`);
  const active=(tab||'overview') as TabKey;
+ // Re-fetch on tab change so the header (readiness, next action) reflects work done in other tabs.
+ const {data,error,loading,refresh}=useApi<Detail>(`/api/projects/workspace?id=${id}&view=${active}`);
  if(loading&&!data)return <Loading label="Loading project…"/>;
  if(error&&!data)return <div className="grid gap-3"><ErrorState error={error} onRetry={refresh}/><Btn variant="secondary" onClick={onBack}>Back to projects</Btn></div>;
  const d=data!,p=d.project,closed=p.stage==='closed';
@@ -60,7 +61,7 @@ function ProjectWorkspace({id,tab,onBack}:{id:string;tab?:string;onBack:()=>void
  return <div>
   <div className="sticky top-[72px] z-10 -mx-4 mb-4 border-b bg-[#f6f7f9]/95 px-4 pb-3 pt-1 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
    <PageHeader crumbs={[{label:'Projects',onClick:onBack},{label:p.name}]} title={p.name} badges={<StatusBadge machine="project" state={p.stage}/>} subtitle={[p.projectNumber,p.clientName,p.projectManagerName?`PM ${p.projectManagerName}`:null].filter(Boolean).join(' · ')}
-    actions={<div className="flex flex-wrap items-center gap-2"><Progress value={d.readiness.percent} label="Readiness"/>{moves.filter(m=>session.can(m.capability)).map(m=><Btn key={m.to} variant={m.to==='closed'?'danger':'secondary'} busy={busy} onClick={()=>move(m.to)}>{m.label}</Btn>)}</div>}/>
+    actions={<div className="flex flex-wrap items-center gap-2"><Progress value={d.readiness.percent} label="Readiness"/>{moves.filter(m=>session.can(m.capability)).map(m=>{const blocked=m.to==='ready'&&d.readiness.blockers.length>0||m.to==='closed'&&Boolean(d.closeout?.blockers.length);return <Btn key={m.to} variant={m.to==='closed'?'danger':'secondary'} busy={busy} disabled={blocked} title={blocked?'Resolve the outstanding requirements first':undefined} onClick={()=>move(m.to)}>{m.label}</Btn>;})}</div>}/>
    <NextAction text={p.nextAction}/>
   </div>
   <ErrorState error={actionError||error} onRetry={refresh}/>
@@ -69,8 +70,8 @@ function ProjectWorkspace({id,tab,onBack}:{id:string;tab?:string;onBack:()=>void
   {active==='overview'&&<Overview d={d} onTab={k=>navigate('Projects',undefined,id,k)}/>}
   {active==='setup'&&<Setup d={d} onChanged={refresh}/>}
   {active==='delivery'&&<Delivery projectId={id}/>}
-  {active==='quality'&&<Quality projectId={id} closed={closed}/>}
-  {active==='commercial'&&<ProjectCommercial projectId={id} closed={closed}/>}
+  {active==='quality'&&<Quality projectId={id} closed={closed} onChanged={refresh}/>}
+  {active==='commercial'&&<ProjectCommercial projectId={id} closed={closed} onChanged={refresh}/>}
   {active==='documents'&&<Documents projectId={id} closed={closed}/>}
   {active==='closeout'&&<Closeout d={d} onChanged={refresh}/>}
  </div>;
@@ -141,11 +142,11 @@ function Delivery({projectId}:{projectId:string}){
  </div>;
 }
 
-function Quality({projectId,closed}:{projectId:string;closed:boolean}){
+function Quality({projectId,closed,onChanged}:{projectId:string;closed:boolean;onChanged:()=>void}){
  const [itp,setItp]=useState<{id:string;title:string}|null>(null);
  return <div className="grid gap-4">
-  <RegisterView register="risks" parentId={projectId} hideCreate={closed}/>
-  <SwmsPanel projectId={projectId}/>
+  <RegisterView register="risks" parentId={projectId} hideCreate={closed} onChanged={onChanged}/>
+  <SwmsPanel projectId={projectId} onChanged={onChanged}/>
   <RegisterView register="itps" parentId={projectId} hideCreate={closed} rowActions={r=><Btn variant="ghost" onClick={()=>setItp({id:r.id,title:String(r.title)})}>Inspection points<ArrowRight aria-hidden className="size-4"/></Btn>}/>
   <RegisterView register="incidents" parentId={projectId} hideCreate={closed}/>
   <RegisterView register="ncrs" parentId={projectId} hideCreate={closed}/>

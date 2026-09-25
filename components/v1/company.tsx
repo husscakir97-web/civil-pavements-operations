@@ -2,7 +2,7 @@
 // Organisation onboarding (progressive, skippable) and the company profile it creates.
 import {useState} from 'react';
 import {Check} from 'lucide-react';
-import {api,useApi,useAction,useSession,ErrorState,Loading,Btn,Field,field,Section,PageHeader} from './kit';
+import {api,useApi,useAction,useSession,ErrorState,Loading,Btn,Field,FieldGroup,field,Section,PageHeader} from './kit';
 import {BUSINESS_ACTIVITIES,REGIONS,WORKFORCE,PROJECT_SIZES,TENDERING,HSEQ_MATURITY,ESTIMATING,ONBOARDING_STEPS} from '@/lib/v1/onboarding';
 
 type Profile=Record<string,unknown>&{completed?:boolean;onboarding_step?:number};
@@ -25,8 +25,8 @@ function Step({step,draft,set,abn}:{step:number;draft:Profile;set:(k:string,v:un
   <Field label="Operating address"><textarea className={`${field} min-h-20`} value={t('operating_address')} onChange={e=>set('operating_address',e.target.value)}/></Field>
  </div>;
  if(step===1)return <div className="grid gap-5">
-  <Field label="Business activities"><Chips options={BUSINESS_ACTIVITIES} value={(draft.business_activities as string[])||[]} onChange={v=>set('business_activities',v)}/></Field>
-  <Field label="Operating regions"><Chips options={REGIONS} value={(draft.operating_regions as string[])||[]} onChange={v=>set('operating_regions',v)}/></Field>
+  <FieldGroup label="Business activities"><Chips options={BUSINESS_ACTIVITIES} value={(draft.business_activities as string[])||[]} onChange={v=>set('business_activities',v)}/></FieldGroup>
+  <FieldGroup label="Operating regions"><Chips options={REGIONS} value={(draft.operating_regions as string[])||[]} onChange={v=>set('operating_regions',v)}/></FieldGroup>
   <Field label="Other disciplines" hint="One per line"><textarea className={`${field} min-h-20`} value={listToText(draft.disciplines)} onChange={e=>set('disciplines',textToList(e.target.value))}/></Field>
   <Field label="Key clients" hint="One per line"><textarea className={`${field} min-h-20`} value={listToText(draft.key_clients)} onChange={e=>set('key_clients',textToList(e.target.value))}/></Field>
  </div>;

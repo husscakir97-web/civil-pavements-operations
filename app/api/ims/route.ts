@@ -5,7 +5,7 @@ import { cleanText, jsonError, nowIso, requireEstimateDb, safeJson } from '@/lib
 export const dynamic = 'force-dynamic';
 
 const DOCUMENT_STATUSES = ['Draft', 'Internal Review', 'Approved', 'Submitted', 'Accepted', 'Superseded', 'Expired', 'Rejected'];
-const REQUIREMENT_STATUSES = ['Draft', 'Internal Review', 'Approved', 'Submitted', 'Accepted', 'Missing', 'Expired', 'Clarification Required'];
+const REQUIREMENT_STATUSES = ['Draft', 'Internal Review', 'Approved', 'Submitted', 'Accepted', 'Missing', 'Expired', 'Clarification Required', 'Not Applicable'];
 import {CORE_PACK} from '@/lib/ims-pack';
 
 function row<T extends Record<string, unknown>>(value: T) {
@@ -103,6 +103,8 @@ async function handlePATCH(request: Request) {
       const current = await db.prepare(`SELECT * FROM ${table} WHERE id=? AND organisation_id=?`).bind(id, actor.organisationId).first<Record<string, unknown>>();
       if (!current) return jsonError('Requirement not found.', 404);
       const documentId = cleanText(body.documentId ?? current.linked_document_id, 100) || null;
+      // An authorised approver may mark a pack item not applicable, with a recorded reason.
+      if (status === 'Not Applicable' && !cleanText(body.reason, 500)) return jsonError('Give a reason before marking this item not applicable.', 422);
       if (['Approved', 'Accepted', 'Submitted'].includes(status)) {
         if (!documentId) return jsonError('Link approved evidence before completing this requirement.', 422);
         const evidence = await db.prepare('SELECT * FROM ims_documents WHERE id=? AND organisation_id=?').bind(documentId, actor.organisationId).first<Record<string, unknown>>();
@@ -111,7 +113,7 @@ async function handlePATCH(request: Request) {
       }
       await db.batch([
         db.prepare(`UPDATE ${table} SET status=?,linked_document_id=?,updated_at=? WHERE id=? AND organisation_id=?`).bind(status, documentId, now, id, actor.organisationId),
-        db.prepare('INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(), actor.organisationId, 'ims.requirement.updated', 'recorded', JSON.stringify({recordId:id,kind,previous:current,status,documentId,actorId:actor.userId}), now),
+        db.prepare('INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(), actor.organisationId, 'ims.requirement.updated', 'recorded', JSON.stringify({recordId:id,kind,previous:current,reason:cleanText(body.reason,500)||undefined,status,documentId,actorId:actor.userId}), now),
       ]);
       return Response.json({updated:true,id,status});
     }

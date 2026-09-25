@@ -10,6 +10,9 @@ import {
   mandatoryMissing,
 } from "@/lib/dockets-db";
 import { safeJson } from '@/lib/estimates-db';
+import { actorContext } from '@/lib/platform/context';
+import { can } from '@/lib/platform/permissions';
+import { docketCostStatements } from '@/lib/seams/docket-to-cost';
 
 export const dynamic = "force-dynamic";
 
@@ -191,7 +194,15 @@ async function handlePUT(request: Request) {
       return Response.json({ error: "Docket remains Needs Review until mandatory fields are complete.", missing }, { status: 422 });
     }
     const now = new Date().toISOString();
-    await db
+    const previous = await db.prepare("SELECT status FROM dockets WHERE organisation_id = ? AND id = ?").bind(currentOrganisationId(), id).first<{ status: string }>();
+    if (!previous) return jsonError("The docket was not found.", 404);
+    if (["included_claim", "invoiced"].includes(previous.status)) return jsonError("This docket has been claimed and is locked. Reverse the claim line before changing it.", 409);
+    const actor = actorContext.getStore()!;
+    if ((record.status === "approved" || previous.status === "approved") && record.status !== previous.status && !can(actor.role, "docket.approve")) return jsonError("Only an authorised office user can approve or unapprove dockets.", 403);
+    if (["included_claim", "invoiced"].includes(record.status)) return jsonError("Dockets are marked claimed by the claims workflow, not by editing.", 409);
+    // SEAM: approved docket → actual cost (idempotent); leaving approved reverses unclaimed cost.
+    const seam = record.status === "approved" || previous.status === "approved" ? await docketCostStatements(id, record.status) : { statements: [], posted: 0, message: null };
+    const update = db
       .prepare(
         `UPDATE dockets SET
           docket_no = ?, work_date = ?, client = ?, project = ?, crew = ?, vehicle = ?,
@@ -221,10 +232,11 @@ async function handlePUT(request: Request) {
         now,
         currentOrganisationId(),
         id,
-      )
-      .run();
-    return Response.json({ docket: { ...raw, ...record, id, updatedAt: now } });
+      );
+    await db.batch([update, ...seam.statements]);
+    return Response.json({ docket: { ...raw, ...record, id, updatedAt: now }, costLinesPosted: seam.posted, message: seam.message });
   } catch (error) {
+    if ((error as { status?: number }).status === 409) return jsonError((error as Error).message, 409);
     console.error("update docket", error);
     return jsonError("Changes could not be saved.", 503);
   }
@@ -237,10 +249,11 @@ async function handleDELETE(request: Request) {
     if (!id) return jsonError("A docket ID is required.");
 
     const row = await db
-      .prepare("SELECT source_key AS sourceKey FROM dockets WHERE organisation_id = ? AND id = ?")
+      .prepare("SELECT source_key AS sourceKey, status FROM dockets WHERE organisation_id = ? AND id = ?")
       .bind(currentOrganisationId(), id)
-      .first<{ sourceKey: string }>();
+      .first<{ sourceKey: string; status: string }>();
     if (!row) return jsonError("The docket was not found.", 404);
+    if (["approved", "included_claim", "invoiced"].includes(row.status)) return jsonError("Approved or claimed dockets carry posted costs and cannot be deleted. Return the docket to review first.", 409);
 
     await db.prepare("DELETE FROM dockets WHERE organisation_id = ? AND id = ?").bind(currentOrganisationId(), id).run();
 

@@ -134,7 +134,7 @@ async function nextReference(def:RegisterDef,parent:Row,conn:PoolConnection){
  return {reference:`${def.reference.prefix}-${String(Number(r?.n||0)+1).padStart(3,'0')}`};
 }
 
-export async function createRecord(key:string,parentId:string|null,input:Record<string,unknown>,opts:{origin?:string;initialState?:string}={}){
+export async function createRecord(key:string,parentId:string|null,input:Record<string,unknown>,opts:{origin?:string;initialState?:string;conn?:PoolConnection}={}){
  const def=getDef(key),a=actor();await requireModule(def.module,true);
  if(!can(a.role,def.create||def.edit))fail(403,'You are not authorised to create this record.');
  const allowed=writableFields(def,a.role);
@@ -142,7 +142,7 @@ export async function createRecord(key:string,parentId:string|null,input:Record<
  const parsed=schema.safeParse(input);if(!parsed.success)fail(400,parsed.error.issues[0]?.message||'Check the highlighted fields.',{issues:parsed.error.issues.map(i=>({path:i.path.join('.'),message:i.message}))});
  // Omit blank values on create so column defaults apply.
  const values:Row=legacyNulls(def,Object.fromEntries(Object.entries(parsed.data as Row).filter(([,v])=>v!==null&&v!==undefined)));
- return tx(async conn=>{
+ const work=async(conn:PoolConnection)=>{
   const parent=await resolveParent(def,parentId,conn,true) as Row;
   await validateRefs(def,values,conn);
   await derive(def,values,null,conn);
@@ -164,7 +164,8 @@ export async function createRecord(key:string,parentId:string|null,input:Record<
   await exec(`INSERT INTO ${def.table} (${cols.join(',')}) VALUES (${cols.map(()=>'?').join(',')})`,cols.map(c=>row[c]),conn);
   await audit({event:`${def.key}.created`,entityType:def.key,entityId:id,projectId:(row.project_id as string)||null,summary:`${def.singular} created: ${String(row[def.titleField]??'').slice(0,120)}`,after:values},conn);
   return {record:project(def,{...row,...(await one(`SELECT * FROM ${def.table} WHERE id=?`,[id],conn))},a.role)};
- });
+ };
+ return opts.conn?work(opts.conn):tx(work);
 }
 
 async function loadForUpdate(def:RegisterDef,id:string,conn:PoolConnection){

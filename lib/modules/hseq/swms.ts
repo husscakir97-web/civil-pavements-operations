@@ -140,11 +140,17 @@ export async function reviseSwms(id:string,reason:string){
  return getSwms(id);
 }
 
-export async function acknowledgeSwms(id:string,shiftId?:string|null){
+/**
+ * A worker acknowledges the issued revision they read. When the acknowledgement was
+ * captured offline (revisionId given) and a newer revision has since been issued, it is
+ * refused (409 SWMS_SUPERSEDED): the worker must read and acknowledge the current one.
+ */
+export async function acknowledgeSwms(id:string,shiftId?:string|null,revisionId?:string|null){
  const a=actor();if(!can(a.role,'swms.acknowledge'))fail(403,'You are not authorised to acknowledge SWMS.');
  return tx(async conn=>{
   const s=await loadSwms(id,conn);
   if(!s.issued_revision_id)fail(409,'This SWMS has not been issued to site.');
+  if(revisionId&&revisionId!==s.issued_revision_id)fail(409,'This SWMS was revised while you were offline. Read the current revision and acknowledge it again.',{code:'SWMS_SUPERSEDED',currentRevisionId:s.issued_revision_id});
   if(shiftId&&!await one('SELECT id FROM shifts WHERE organisation_id=? AND id=?',[a.organisationId,shiftId],conn))fail(404,'Shift not found.');
   const now=nowIso();
   const existing=await one('SELECT id FROM swms_acknowledgements WHERE organisation_id=? AND swms_revision_id=? AND user_id=?',[a.organisationId,s.issued_revision_id,a.userId],conn);

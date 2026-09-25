@@ -10,7 +10,7 @@ const action=z.discriminatedUnion('action',[
  z.object({action:z.literal('save'),id:z.string(),revisionId:z.string(),updatedAt:z.string(),content}),
  z.object({action:z.literal('transition'),id:z.string(),to:z.enum(['review','approved','issued','draft']),note:z.string().max(2000).optional()}),
  z.object({action:z.literal('revise'),id:z.string(),reason:z.string().max(500)}),
- z.object({action:z.literal('acknowledge'),id:z.string(),shiftId:z.string().nullable().optional()}),
+ z.object({action:z.literal('acknowledge'),id:z.string(),shiftId:z.string().nullable().optional(),revisionId:z.string().max(191).nullable().optional(),clientRequestId:z.string().max(80).nullable().optional()}),
 ]);
 export const GET=api({permission:'field-read',module:'ims'},async({params})=>{
  const id=params.get('id');
@@ -25,7 +25,7 @@ export const POST=api({permission:'field',module:'ims'},async({request})=>{
   case 'save':return saveDraft(b.id,b.revisionId,b.content,b.updatedAt);
   case 'transition':return transitionSwms(b.id,b.to,b.note);
   case 'revise':return reviseSwms(b.id,b.reason);
-  case 'acknowledge':return acknowledgeSwms(b.id,b.shiftId);
+  case 'acknowledge':return acknowledgeSwms(b.id,b.shiftId,b.revisionId);
  }
  return fail(400,'Unknown action.');
 });

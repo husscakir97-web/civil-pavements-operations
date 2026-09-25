@@ -123,4 +123,33 @@ assert.deepEqual(rm.splitCompetencies('White card; white card, First aid\nEWP'),
 const mw=rm.mapWorker({id:'w',name:'Sam Lee',status:'Active',metadata:{rate:'x',competencyExpiry:'2026-02-30'}});
 assert.equal(mw.columns.hourly_rate,null);assert.deepEqual(mw.issues.map(i=>i.field).sort(),['competencyExpiry','rate'],'invalid calendar date and rate are flagged');
 assert.deepEqual(rm.mapWorker({id:'w',name:'Sam',status:'Active',metadata:{competencies:'White card'}}),rm.mapWorker({id:'w',name:'Sam',status:'Active',metadata:JSON.stringify({competencies:'White card'})}),'string and object metadata map identically');
+// Offline queue semantics (pure): nothing dropped silently; retries idempotent; conflicts kept for the user.
+(async()=>{
+ const oq=load('lib/v1/offline-sync.ts');
+ const mem=()=>{const m=new Map();return {m,list:async()=>[...m.values()].map(x=>structuredClone(x)),put:async i=>{m.set(i.id,structuredClone(i));},remove:async id=>{m.delete(id);}};};
+ const st=mem(),t0=new Date('2026-03-01T00:00:00Z');
+ const a=oq.newItem({id:'aaaaaaaaaaaaaaaa-1',userId:'u1',kind:'docket',label:'A',url:'/x',body:{n:1}},t0);
+ assert.equal(a.body.clientRequestId,'aaaaaaaaaaaaaaaa-1','request id travels in the body');
+ await st.put(a);await st.put(oq.newItem({id:'bbbbbbbbbbbbbbbb-2',userId:'u1',kind:'docket',label:'B',url:'/x',body:{}},new Date('2026-03-01T00:00:01Z')));
+ await st.put(oq.newItem({id:'cccccccccccccccc-3',userId:'u2',kind:'docket',label:'other user',url:'/x',body:{}},t0));
+ const sent=[];
+ let out=await oq.syncQueue(st,async i=>{sent.push(i.id);return {ok:false,status:0,error:'offline'};},'u1',{now:t0});
+ assert.deepEqual(sent,['aaaaaaaaaaaaaaaa-1'],'stops after a connectivity failure; other users\' items are never sent');
+ assert.equal(st.m.size,3,'nothing dropped');assert.equal(st.m.get('aaaaaaaaaaaaaaaa-1').status,'failed');
+ out=await oq.syncQueue(st,async()=>({ok:true,status:201,body:{}}),'u1',{now:t0});
+ assert.deepEqual(out.map(o=>o.id),['bbbbbbbbbbbbbbbb-2'],'backoff defers the failed item; the next due item is sent');
+ out=await oq.syncQueue(st,async i=>i.id.startsWith('a')?{ok:false,status:409,body:{error:'Shift cancelled',code:'SHIFT_CANCELLED'}}:{ok:true,status:201,body:{}},'u1',{now:new Date(t0.getTime()+60_000)});
+ const kept=st.m.get('aaaaaaaaaaaaaaaa-1');assert.equal(kept.status,'conflict');assert.equal(kept.code,'SHIFT_CANCELLED');assert.equal(kept.lastError,'Shift cancelled');
+ out=await oq.syncQueue(st,async()=>{throw new Error('should not auto-retry a conflict');},'u1',{now:new Date(t0.getTime()+3600_000)});
+ assert.equal(out.length,0,'conflicts wait for the user');
+ out=await oq.syncQueue(st,async()=>({ok:false,status:503,body:{}}),'u1',{force:true,only:'aaaaaaaaaaaaaaaa-1'});
+ assert.equal(st.m.get('aaaaaaaaaaaaaaaa-1').status,'failed','manual retry re-attempts; 5xx is retryable');
+ out=await oq.syncQueue(st,async()=>({ok:true,status:200,body:{replay:true}}),'u1',{force:true});
+ assert.equal(st.m.has('aaaaaaaaaaaaaaaa-1'),false,'removed only after the server accepted (a replay counts)');assert.equal(st.m.size,1);
+ await st.put({...oq.newItem({id:'dddddddddddddddd-4',userId:'u1',kind:'incident',label:'D',url:'/x',body:{}}),status:'syncing'});
+ await oq.recoverInterrupted(st);assert.equal(st.m.get('dddddddddddddddd-4').status,'failed','interrupted sends are retried');
+ assert.equal(oq.backoff(1),2000);assert.equal(oq.backoff(20),oq.MAX_BACKOFF_MS);
+ for(const [status,expected] of [[0,'retry'],[408,'retry'],[429,'retry'],[500,'retry'],[400,'conflict'],[403,'conflict'],[409,'conflict'],[422,'conflict']])assert.equal(oq.classify({ok:false,status,body:{}}),expected);
+ console.log('PASS offline queue: per-user, ordered, backoff, conflicts retained, manual retry/discard, idempotent replay, interrupted recovery');
+})().catch(e=>{console.error(e);process.exitCode=1;});
 console.log('PASS V1 logic: lifecycle guards, capability matrix and nine-role route gate, ABN checksum, forecast/claim/GST/retention arithmetic, risk ratings, register identifiers, estimate items, docket cost lines, legacy stage mapping, scheduling conflict engine, legacy resource mapping');

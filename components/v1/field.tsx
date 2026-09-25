@@ -1,17 +1,22 @@
 'use client';
 // Mobile-first field flow. Payloads come from field-safe projections: no
 // rates, margins, client pricing or office-only documents.
-import {useState} from 'react';
+import {useEffect,useState} from 'react';
 import {ArrowLeft,CheckCircle2,ClipboardList,HardHat,MapPin,Plus,ShieldCheck,Trash2} from 'lucide-react';
-import {api,useApi,useAction,ErrorState,Loading,Btn,Field,field,EmptyState,Pill} from './kit';
+import {api,useAction,ErrorState,Loading,Btn,Field,field,EmptyState,Pill} from './kit';
+import {useCachedApi,useDraft,useOffline,OfflineBanner,requestId,isNetworkFailure} from './offline';
 import {SwmsPanel} from './swms';
 import {RegisterView} from './register-view';
 
-type Shift={id:string;name:string;status:string;date:string;start:string;finish:string;location:string;supervisor:string;activity:string;instructions:string;siteContact:string;crew:Array<{name:string;role:string;category:string}>;project:{id:string;name:string;number:string|null;closed:boolean}|null;assignedToMe:boolean;swms:Array<{id:string;reference:string;title:string;acknowledged:boolean}>;swmsOutstanding:number;fieldRecord:{status:string}|null;dockets:Array<{id:string;docketNo:string;status:string}>};
+type Shift={id:string;name:string;status:string;version:string|null;date:string;start:string;finish:string;location:string;supervisor:string;activity:string;instructions:string;siteContact:string;crew:Array<{name:string;role:string;category:string}>;project:{id:string;name:string;number:string|null;closed:boolean}|null;assignedToMe:boolean;swms:Array<{id:string;reference:string;title:string;acknowledged:boolean}>;swmsOutstanding:number;fieldRecord:{status:string}|null;dockets:Array<{id:string;docketNo:string;status:string}>};
 type Today={date:string;today:Shift[];otherToday:Shift[];upcoming:Shift[]};
 
 export function FieldToday({onOpenRecords}:{onOpenRecords:()=>void}){
- const {data,error,loading,refresh}=useApi<Today>('/api/field/today');
+ const {data,error,loading,refresh,cachedAt}=useCachedApi<Today>('/api/field/today');
+ const offline=useOffline();
+ // Refresh the day once queued work has been accepted.
+ const sent=offline?.lastSync;
+ useEffect(()=>{if(sent)refresh();},[sent,refresh]);
  const [selected,setSelected]=useState<string|null>(null);
  const all=[...(data?.today||[]),...(data?.otherToday||[]),...(data?.upcoming||[])];
  const shift=all.find(s=>s.id===selected);
@@ -24,6 +29,8 @@ export function FieldToday({onOpenRecords}:{onOpenRecords:()=>void}){
  </button></li>;
  return <div className="mx-auto grid max-w-xl gap-4">
   <div><p className="text-sm text-slate-500">{data?new Date(data.date+'T00:00:00').toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long'}):''}</p><h1 className="text-2xl font-semibold">Today</h1></div>
+  <OfflineBanner/>
+  {cachedAt&&<p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-900">Showing the copy saved on this device at {new Date(cachedAt).toLocaleString('en-AU')}. Changes made by the office since then are not shown.</p>}
   <ErrorState error={error} onRetry={refresh}/>
   {loading&&!data?<Loading label="Loading today's work…"/>:<>
    {data?.today.length?<ul className="grid gap-3">{data.today.map(card)}</ul>:<EmptyState title="You have no shifts assigned today." detail="If you expected work today, contact your supervisor or the office."/>}
@@ -47,6 +54,7 @@ function ShiftDetail({shift,onBack,onChanged,onOpenRecords}:{shift:Shift;onBack:
   {step==='start'&&shift.project&&<div className="grid gap-3"><p className="text-sm text-slate-600">Read each issued SWMS for this project and acknowledge it before starting work.</p><SwmsPanel projectId={shift.project.id} shiftId={shift.id}/><Btn className="min-h-12" onClick={()=>{onChanged();setStep('during');}}>Continue to work<CheckCircle2 aria-hidden className="size-4"/></Btn></div>}
   {step==='during'&&<div className="grid gap-3">
    <Btn className="min-h-12" onClick={onOpenRecords}><ClipboardList aria-hidden className="size-5"/>Open shift record (pre-start, production, photos)</Btn>
+   {shift.project&&<OfflineIncident projectId={shift.project.id}/>}
    {shift.project&&<RegisterView register="incidents" parentId={shift.project.id} title="Report an incident or near miss"/>}
    {shift.project&&<RegisterView register="itps" parentId={shift.project.id} title="Quality records (ITPs)" hideCreate rowActions={r=><ItpItems itpId={r.id} projectId={shift.project!.id}/>}/>}
   </div>}
@@ -56,19 +64,54 @@ function ShiftDetail({shift,onBack,onChanged,onOpenRecords}:{shift:Shift;onBack:
 
 function ItpItems({itpId,projectId}:{itpId:string;projectId:string}){const [open,setOpen]=useState(false);return open?<div className="mt-2 text-left"><RegisterView register="itp_items" parentId={itpId} projectId={projectId} hideCreate/></div>:<Btn variant="ghost" onClick={()=>setOpen(true)}>Inspection points</Btn>;}
 
+type DocketDraft={docketNo:string;labourHours:string;quantity:string;quantityUnit:string;notes:string;lines:Array<{description:string;quantity:string;unit:string}>;capturedAt:string|null};
+const blankDocket:DocketDraft={docketNo:'',labourHours:'',quantity:'',quantityUnit:'m',notes:'',lines:[{description:'',quantity:'',unit:'h'}],capturedAt:null};
+
 function DocketForm({shift,onSubmitted}:{shift:Shift;onSubmitted:()=>void}){
- const {busy,error,run}=useAction();const [done,setDone]=useState<string|null>(null);
- const [v,setV]=useState({docketNo:'',labourHours:'',quantity:'',quantityUnit:'m',notes:''});
- const [lines,setLines]=useState([{description:'',quantity:'',unit:'h'}]);
- if(done)return <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-900"><p className="font-semibold">Docket {done} submitted for review.</p><p className="mt-1 text-sm">The office will price and approve it. You can submit another if needed.</p><Btn className="mt-3" variant="secondary" onClick={()=>setDone(null)}>Submit another docket</Btn></section>;
- return <form className="grid gap-4 rounded-2xl border bg-white p-4" onSubmit={e=>{e.preventDefault();void run(()=>api<{docketNo:string}>('/api/field/today',{method:'POST',body:{shiftId:shift.id,docketNo:v.docketNo,workDate:shift.date,labourHours:Number(v.labourHours)||0,quantity:Number(v.quantity)||0,quantityUnit:v.quantityUnit,notes:v.notes,lines:lines.filter(l=>l.description.trim()).map(l=>({description:l.description,quantity:Number(l.quantity)||0,unit:l.unit}))}}),r=>{setDone(r.docketNo);onSubmitted();});}}>
+ const {busy,error,run}=useAction();const [done,setDone]=useState<{docketNo:string;queued:boolean;warnings:string[]}|null>(null);
+ const offline=useOffline();
+ // The draft lives on this device until it is submitted or queued, so a refresh or dead zone never loses it.
+ const [d,setD,clearDraft]=useDraft<DocketDraft>(`docket:${shift.id}`,blankDocket);
+ const set=(patch:Partial<DocketDraft>)=>setD(x=>({...x,...patch,capturedAt:x.capturedAt||new Date().toISOString()}));
+ const setLines=(fn:(ls:DocketDraft['lines'])=>DocketDraft['lines'])=>setD(x=>({...x,lines:fn(x.lines),capturedAt:x.capturedAt||new Date().toISOString()}));
+ if(done)return <section className={`rounded-2xl border p-4 ${done.queued?'border-amber-300 bg-amber-50 text-amber-900':'border-emerald-200 bg-emerald-50 text-emerald-900'}`}><p className="font-semibold">{done.queued?`Docket ${done.docketNo||''} saved on this device.`:`Docket ${done.docketNo} submitted for review.`}</p><p className="mt-1 text-sm">{done.queued?'It will be sent automatically when you are back online. Check the status bar on Today.':'The office will price and approve it. You can submit another if needed.'}</p>{done.warnings.map(w=><p key={w} className="mt-1 text-sm font-medium">{w}</p>)}<Btn className="mt-3" variant="secondary" onClick={()=>setDone(null)}>Submit another docket</Btn></section>;
+ const submit=()=>{
+  const id=requestId();
+  const body={shiftId:shift.id,docketNo:d.docketNo,workDate:shift.date,labourHours:Number(d.labourHours)||0,quantity:Number(d.quantity)||0,quantityUnit:d.quantityUnit,notes:d.notes,lines:d.lines.filter(l=>l.description.trim()).map(l=>({description:l.description,quantity:Number(l.quantity)||0,unit:l.unit})),clientRequestId:id,shiftVersion:shift.version,capturedAt:d.capturedAt||new Date().toISOString()};
+  const queue=async()=>{await offline!.enqueue({id,kind:'docket',label:`Docket ${d.docketNo||'(number generated on send)'} · ${shift.project?.name||shift.name} · ${shift.date}`,url:'/api/field/today',body});await clearDraft();setDone({docketNo:d.docketNo,queued:true,warnings:[]});};
+  if(offline&&!offline.online){void run(queue);return;}
+  void run(async()=>{
+   try{const r=await api<{docketNo:string;warnings?:string[]}>('/api/field/today',{method:'POST',body});await clearDraft();setDone({docketNo:r.docketNo,queued:false,warnings:r.warnings||[]});onSubmitted();}
+   catch(e){if(offline&&isNetworkFailure(e)){await queue();return;}throw e;}
+  });
+ };
+ return <form className="grid gap-4 rounded-2xl border bg-white p-4" onSubmit={e=>{e.preventDefault();submit();}}>
   <h2 className="text-lg font-semibold">Finish work: submit docket</h2>
-  {shift.dockets.length>0&&<p className="text-sm text-slate-600">Already submitted: {shift.dockets.map(d=>`${d.docketNo} (${d.status==='included_claim'?'claimed':d.status})`).join(', ')}</p>}
-  <div className="grid grid-cols-2 gap-3"><Field label="Docket number" hint="Leave blank to generate"><input className={field} value={v.docketNo} onChange={e=>setV({...v,docketNo:e.target.value})}/></Field><Field label="Labour hours"><input className={field} inputMode="decimal" type="number" value={v.labourHours} onChange={e=>setV({...v,labourHours:e.target.value})}/></Field><Field label="Quantity completed"><input className={field} inputMode="decimal" type="number" value={v.quantity} onChange={e=>setV({...v,quantity:e.target.value})}/></Field><Field label="Unit"><select className={field} value={v.quantityUnit} onChange={e=>setV({...v,quantityUnit:e.target.value})}>{['m','m²','m³','t','each','load','h','item'].map(u=><option key={u}>{u}</option>)}</select></Field></div>
-  <fieldset className="grid gap-2"><legend className="text-sm font-medium">Labour, plant and materials used</legend>{lines.map((l,i)=><div key={i} className="grid grid-cols-[1fr_5rem_4.5rem_auto] gap-2"><input aria-label="Item" placeholder="e.g. 20t excavator" className={field} value={l.description} onChange={e=>setLines(ls=>ls.map((x,j)=>j===i?{...x,description:e.target.value}:x))}/><input aria-label="Quantity" inputMode="decimal" type="number" className={field} value={l.quantity} onChange={e=>setLines(ls=>ls.map((x,j)=>j===i?{...x,quantity:e.target.value}:x))}/><select aria-label="Unit" className={field} value={l.unit} onChange={e=>setLines(ls=>ls.map((x,j)=>j===i?{...x,unit:e.target.value}:x))}>{['h','t','m','m³','each','load'].map(u=><option key={u}>{u}</option>)}</select><button type="button" aria-label="Remove line" className="p-2 text-slate-400" onClick={()=>setLines(ls=>ls.filter((_,j)=>j!==i))}><Trash2 className="size-4"/></button></div>)}<Btn type="button" variant="secondary" className="justify-self-start" onClick={()=>setLines(ls=>[...ls,{description:'',quantity:'',unit:'h'}])}><Plus aria-hidden className="size-4"/>Add line</Btn></fieldset>
-  <Field label="Notes"><textarea className={`${field} min-h-20`} value={v.notes} onChange={e=>setV({...v,notes:e.target.value})}/></Field>
-  <p className="text-xs text-slate-500">Prices are added by the office. Client or supervisor sign-off is captured in the shift record.</p>
+  {shift.dockets.length>0&&<p className="text-sm text-slate-600">Already submitted: {shift.dockets.map(x=>`${x.docketNo} (${x.status==='included_claim'?'claimed':x.status})`).join(', ')}</p>}
+  {d.capturedAt&&<p className="text-xs text-slate-500">Draft kept on this device since {new Date(d.capturedAt).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})}.</p>}
+  <div className="grid grid-cols-2 gap-3"><Field label="Docket number" hint="Leave blank to generate"><input className={field} value={d.docketNo} onChange={e=>set({docketNo:e.target.value})}/></Field><Field label="Labour hours"><input className={field} inputMode="decimal" type="number" value={d.labourHours} onChange={e=>set({labourHours:e.target.value})}/></Field><Field label="Quantity completed"><input className={field} inputMode="decimal" type="number" value={d.quantity} onChange={e=>set({quantity:e.target.value})}/></Field><Field label="Unit"><select className={field} value={d.quantityUnit} onChange={e=>set({quantityUnit:e.target.value})}>{['m','m²','m³','t','each','load','h','item'].map(u=><option key={u}>{u}</option>)}</select></Field></div>
+  <fieldset className="grid gap-2"><legend className="text-sm font-medium">Labour, plant and materials used</legend>{d.lines.map((l,i)=><div key={i} className="grid grid-cols-[1fr_5rem_4.5rem_auto] gap-2"><input aria-label={`Item ${i+1}`} placeholder="e.g. 20t excavator" className={field} value={l.description} onChange={e=>setLines(ls=>ls.map((x,j)=>j===i?{...x,description:e.target.value}:x))}/><input aria-label={`Quantity for item ${i+1}`} inputMode="decimal" type="number" className={field} value={l.quantity} onChange={e=>setLines(ls=>ls.map((x,j)=>j===i?{...x,quantity:e.target.value}:x))}/><select aria-label={`Unit for item ${i+1}`} className={field} value={l.unit} onChange={e=>setLines(ls=>ls.map((x,j)=>j===i?{...x,unit:e.target.value}:x))}>{['h','t','m','m³','each','load'].map(u=><option key={u}>{u}</option>)}</select><button type="button" aria-label={`Remove item ${i+1}`} className="min-h-11 min-w-11 p-2 text-slate-500" onClick={()=>setLines(ls=>ls.filter((_,j)=>j!==i))}><Trash2 aria-hidden className="size-4"/></button></div>)}<Btn type="button" variant="secondary" className="justify-self-start" onClick={()=>setLines(ls=>[...ls,{description:'',quantity:'',unit:'h'}])}><Plus aria-hidden className="size-4"/>Add line</Btn></fieldset>
+  <Field label="Notes"><textarea className={`${field} min-h-20`} value={d.notes} onChange={e=>set({notes:e.target.value})}/></Field>
+  <p className="text-xs text-slate-500">Prices are added by the office. Client or supervisor sign-off is captured in the shift record.{offline&&!offline.online?' You are offline: the docket will be saved on this device and sent automatically.':''}</p>
   <ErrorState error={error}/>
-  <Btn className="min-h-12" busy={busy} disabled={shift.project?.closed} type="submit">Submit docket for review</Btn>
+  <Btn className="min-h-12" busy={busy} disabled={shift.project?.closed} type="submit">{offline&&!offline.online?'Save docket on this device':'Submit docket for review'}</Btn>
+ </form>;
+}
+
+/** Incident capture that works without signal: queued with a request id and sent when back online. */
+function OfflineIncident({projectId}:{projectId:string}){
+ const offline=useOffline();const {busy,error,run}=useAction();
+ const blank={incident_type:'near miss',severity:'minor',occurred_at:'',description:'',immediate_action:''};
+ const [v,setV,clear]=useDraft(`incident:${projectId}`,blank);const [saved,setSaved]=useState('');
+ if(!offline||offline.online)return null;
+ return <form className="grid gap-3 rounded-2xl border border-amber-300 bg-white p-4" onSubmit={e=>{e.preventDefault();void run(async()=>{const id=requestId();await offline.enqueue({id,kind:'incident',label:`Incident: ${v.incident_type} · ${v.occurred_at.replace('T',' ')}`,url:'/api/registers/incidents',body:{parentId:projectId,values:v,clientRequestId:id}});await clear();setSaved('Incident saved on this device. It will be sent when you are back online.');});}}>
+  <h2 className="font-semibold">Report an incident (offline)</h2>
+  {saved&&<p role="status" className="rounded-lg bg-amber-50 p-2 text-sm text-amber-900">{saved}</p>}
+  <div className="grid grid-cols-2 gap-3"><Field label="Type" required><select className={field} value={v.incident_type} onChange={e=>setV({...v,incident_type:e.target.value})}>{['injury','near miss','environmental','property damage','vehicle','security','other'].map(o=><option key={o}>{o}</option>)}</select></Field><Field label="Severity"><select className={field} value={v.severity} onChange={e=>setV({...v,severity:e.target.value})}>{['minor','moderate','serious','critical'].map(o=><option key={o}>{o}</option>)}</select></Field></div>
+  <Field label="Date & time" required><input className={field} type="datetime-local" required value={v.occurred_at} onChange={e=>setV({...v,occurred_at:e.target.value})}/></Field>
+  <Field label="What happened" required><textarea className={`${field} min-h-20`} required value={v.description} onChange={e=>setV({...v,description:e.target.value})}/></Field>
+  <Field label="Immediate action"><textarea className={`${field} min-h-16`} value={v.immediate_action} onChange={e=>setV({...v,immediate_action:e.target.value})}/></Field>
+  <ErrorState error={error}/>
+  <Btn className="min-h-12" busy={busy} type="submit">Save incident on this device</Btn>
  </form>;
 }

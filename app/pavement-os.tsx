@@ -10,6 +10,7 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/
 import { WorkspaceBrandProvider } from "@/components/workspace-brand";
 import { useSession, Tabs } from "@/components/v1/kit";
 import { NavContext, parseRoute, routeHash, useNav, type Route } from "@/components/v1/nav";
+import { OfflineProvider } from "@/components/v1/offline";
 import type { Capability } from "@/lib/platform/permissions";
 
 const loading = () => <div role="status" className="workspace-placeholder"><span className="sr-only">Loading workspace…</span><div className="h-7 w-52 rounded bg-slate-200/70"/><div className="mt-3 h-4 w-72 max-w-full rounded bg-slate-200/50"/><div className="mt-8 grid gap-4 sm:grid-cols-3">{[0,1,2].map(i=><div key={i} className="h-28 rounded-xl border bg-white"/>)}</div><div className="mt-5 h-64 rounded-xl border bg-white"/></div>;
@@ -93,7 +94,7 @@ function Router() {
   const [skipOnboarding, setSkipOnboarding] = useState(() => { try { return typeof window !== "undefined" && sessionStorage.getItem("onboarding-skipped") === "1"; } catch { return false; } });
   if (session.role === "read-only") return loading();
   const nav = { route, navigate };
-  if (session.role === "field") return <NavContext.Provider value={nav}><FieldShell /></NavContext.Provider>;
+  if (session.role === "field") return <NavContext.Provider value={nav}><OfflineProvider><FieldShell /></OfflineProvider></NavContext.Provider>;
   if (session.role === "admin" && !session.onboarding.completed && !skipOnboarding) {
     return <main className="min-h-screen bg-[#f6f7f9] p-4 sm:p-8"><Onboarding onDone={() => navigate("Home")} /><div className="mx-auto mt-4 max-w-3xl text-center"><button className="text-sm text-slate-500 underline" onClick={() => { try { sessionStorage.setItem("onboarding-skipped", "1"); } catch { /* ignore */ } setSkipOnboarding(true); }}>Skip setup and go to the workspace</button></div></main>;
   }
@@ -102,6 +103,8 @@ function Router() {
 
 function FieldShell() {
   const { brand, userEmail } = useSession();
+  // The service worker keeps the app shell available offline; queued work lives in IndexedDB.
+  useEffect(() => { if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {}); }, []);
   const [tab, setTab] = useState<"today" | "records" | "search">("today");
   return <div className="min-h-screen bg-[#f6f7f9] pb-20 text-slate-900">
     <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b bg-white px-4 py-3"><div className="min-w-0"><p className="truncate font-semibold">{brand.companyName}</p><p className="text-xs text-slate-500">Field</p></div><Link href="/account" className="flex min-h-11 items-center rounded-lg border px-3 text-sm" title={userEmail}>Account</Link></header>

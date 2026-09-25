@@ -78,8 +78,9 @@ try{
  r=await call('/api/field','GET',undefined,c.cookie);assert.equal(r.status,200);r=await call('/api/invitations','GET',undefined,c.cookie);assert.equal((await r.json()).role,'field');
  const evidence=new FormData();evidence.set('file',new File(['field evidence'],'field.txt',{type:'text/plain'}));r=await call('/api/delivery/documents','POST',evidence,c.cookie);assert.equal(r.status,201,await r.clone().text());
  // Real sessions and MySQL: role restrictions must cover APIs, not just menus.
- const deniedReads=['/api/team','/api/commercial','/api/estimates','/api/estimates/rates','/api/reports?summary=1','/api/search?q=legacy','/api/job-hub','/api/dockets','/api/dockets/file?id=legacy-0','/api/dockets/matches','/api/dockets/profiles','/api/invoices','/api/tenders','/api/ai-scans','/api/ims','/api/preparation','/api/os/records?module=Commercial'];
+ const deniedReads=['/api/team','/api/commercial','/api/estimates','/api/estimates/rates','/api/reports?summary=1','/api/job-hub','/api/dockets','/api/dockets/file?id=legacy-0','/api/dockets/matches','/api/dockets/profiles','/api/invoices','/api/tenders','/api/ai-scans','/api/ims','/api/preparation','/api/os/records?module=Commercial'];
  for(const path of deniedReads){r=await call(path,'GET',undefined,c.cookie);assert.equal(r.status,403,path);}
+ r=await call('/api/search?q=legacy','GET',undefined,c.cookie);assert.equal(r.status,200);assert(!(await r.json()).results.some(x=>['Docket','Estimate','Variation','Claim','Invoice','Tender'].includes(x.type)),'Field search must not expose commercial or docket records');
  const teamChange=(id,expected,next,cookie=a.cookie)=>call('/api/team','PATCH',{userId:id,expected,next},cookie);
  const adminState={role:'admin',active:true},fieldState={role:'field',active:true},officeState={role:'office',active:true};
  r=await call('/api/team','GET',undefined,a.cookie);const roster=await r.json();assert(roster.members.some(m=>m.id===c.user.id));assert(!roster.members.some(m=>m.id===b.user.id));

@@ -12,7 +12,7 @@ const INSERT="INSERT INTO organisation_entitlements (id,organisation_id,module,s
 /** Signup provisioning (inside the organisation transaction). */
 export async function provisionTrial(organisationId:string,conn?:PoolConnection){
  const t=now();
- for(const module of MODULES){const values=[crypto.randomUUID(),organisationId,module,'active','trial',TRIAL_PLAN,t,t];if(conn)await conn.execute(INSERT,values);else await database.prepare(INSERT).bind(...values).run();}
+ for(const moduleKey of MODULES){const values=[crypto.randomUUID(),organisationId,moduleKey,'active','trial',TRIAL_PLAN,t,t];if(conn)await conn.execute(INSERT,values);else await database.prepare(INSERT).bind(...values).run();}
 }
 
 export async function getEntitlements(organisationId:string):Promise<Entitlements>{

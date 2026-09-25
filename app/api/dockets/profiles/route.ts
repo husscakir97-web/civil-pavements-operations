@@ -1,9 +1,9 @@
 import {withActor} from '@/lib/platform/route';
-import { DEFAULT_ORGANISATION_ID as ORG, cleanText, requireBindings } from '@/lib/dockets-db';
+import { currentOrganisationId as ORG, cleanText, requireBindings } from '@/lib/dockets-db';
 export const dynamic='force-dynamic';
 async function handleGET(){try{const {db}=requireBindings();const r=await db.prepare('SELECT id,name,supplier,client,docket_type AS docketType,rules,sample_count AS sampleCount FROM extraction_profiles WHERE organisation_id=? ORDER BY updated_at DESC').bind(ORG()).all();return Response.json({profiles:r.results});}catch{return Response.json({error:'Profiles unavailable.'},{status:503});}}
 async function handlePOST(req:Request){try{const {db}=requireBindings();const b=await req.json() as Record<string,unknown>;const id=crypto.randomUUID(),now=new Date().toISOString();if(!cleanText(b.name,120))return Response.json({error:'Profile name is required.'},{status:400});await db.prepare('INSERT INTO extraction_profiles (id,organisation_id,name,supplier,client,docket_type,rules,sample_count,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(id,ORG(),cleanText(b.name,120),cleanText(b.supplier,160),cleanText(b.client,160),cleanText(b.docketType,80),JSON.stringify(b.rules||{}),Number(b.sampleCount||0),now,now).run();return Response.json({profile:{id,name:b.name,supplier:b.supplier||'',client:b.client||'',docketType:b.docketType||'',rules:b.rules||{},sampleCount:Number(b.sampleCount||0)}},{status:201});}catch{return Response.json({error:'Profile could not be saved.'},{status:503});}}
 
-export const GET=withActor(handleGET,'read');
+export const GET=withActor(handleGET,'read','dockets');
 
-export const POST=withActor(handlePOST,'admin');
+export const POST=withActor(handlePOST,'admin','dockets');

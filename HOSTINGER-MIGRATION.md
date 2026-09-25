@@ -135,6 +135,12 @@ There is no `DATABASE_URL`, R2 region variable, ChatGPT auth header, old bucket 
 - No verification/reset/invite email: check spam, mailbox password and outgoing SMTP settings, and the domain's email DNS setup in hPanel. Existing users can request a fresh verification email by trying to sign in again after SMTP is fixed. Invite delivery failures are reported in Account / Team and can be retried.
 - Invalid-origin/login-link problems: match `BETTER_AUTH_URL` to the exact HTTPS address, without a trailing slash, and redeploy.
 
+## V1 update (migration 0003)
+
+Redeploying the V1 branch applies `0003_v1_platform.sql` automatically before the app serves requests. It only creates new tables and adds nullable/defaulted columns and indexes; it does not rewrite or delete existing records. No new environment variables are required. Existing organisations receive the beta full-access module trial on first use and can finish the new onboarding from Admin → Company.
+
+Rollback: redeploy the previous commit. The added tables and columns are ignored by older code; do not drop them (they hold V1 records).
+
 ## What is automatic, and what you do
 
 The repository supplies npm installation, Next.js build/start, automatic MySQL migrations, account/organisation creation, optional demo fixtures, MySQL sessions, server role checks, SMTP auth/invitation email, and private R2 S3 access. GitHub Actions runs lint, TypeScript, all eight business suites, a production build, fresh-start tests, and the retained migration/integration tests.

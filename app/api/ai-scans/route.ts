@@ -14,6 +14,6 @@ async function handleGET(request:Request){try{
 }catch(e){return authError(e)}}
 async function handlePOST(request:Request){try{await requireActor(request,requireEstimateDb(),'write');return Response.json({error:'Paid AI scanning requires configured billing and a confirmed price. No scan was started and no charge was made.'},{status:409});}catch(e){return authError(e)}}
 
-export const GET=withActor(handleGET,'read');
+export const GET=withActor(handleGET,'read','ai');
 
-export const POST=withActor(handlePOST,'write');
+export const POST=withActor(handlePOST,'write','ai');

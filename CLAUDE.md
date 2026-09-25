@@ -36,108 +36,110 @@ Two consequences that govern every decision in this repo:
 ## 3. Layout and boundaries
 
 ```
-app/api/<module>/route.ts   HTTP handlers, one folder per module
-components/<module>-*.tsx   one workspace component per module
-lib/                        business logic (currently flat — see §4)
-db/schema.ts                Drizzle schema
-drizzle/                    migrations (append-only)
-scripts/                    build + ad-hoc test scripts
+app/api/<module>/route.ts   HTTP handlers (every handler wrapped by withActor or api())
+app/api/registers/[key]     generic typed-register API (lib/v1/registers.ts definitions)
+components/v1/*             V1 workspaces (pipeline, projects, SWMS, commercial, field…)
+components/<module>-*.tsx   legacy workspace components still in use (dockets, planning…)
+lib/platform/*              platform: auth, route guard, permissions, entitlements, audit,
+                            workflow state machines, documents, finance, sql helpers
+lib/modules/<module>/*      module services (pipeline, estimating, projects, hseq,
+                            commercial, field) — may NOT import each other (lint-enforced)
+lib/seams/*                 cross-module seams and aggregation (award→project,
+                            docket→cost, project control, home feed, reports)
+lib/v1/*                    isomorphic definitions shared by server and UI
+lib/*.ts                    legacy flat modules (dockets, tender files, planning, field…)
+db/schema.ts, schema-v1.ts  Drizzle schema (legacy + V1 typed tables)
+migrations/mysql/           ACTIVE migrations (append-only, applied on start)
+drizzle/                    archived D1 migrations (historical; used by legacy tests only)
+scripts/                    migration runner, tests, admin tools
 ```
 
 ### Module list
 
-`tenders` · `estimates` · `dockets` · `commercial` · `field` · `ims` ·
-`preparation` · `delivery` · `invoices` · `job-hub` · `reports` · `opportunities`
+`pipeline` (opportunities, tenders) · `estimating` · `projects` · `ims` (HSEQ, SWMS,
+ITP) · `operations` (schedule, resources) · `field` · `dockets` · `commercial`
+(variations, claims, invoices) · `reports` · `ai` — plus `core` (always on).
 
 ### The boundary rule
 
-**A module may not import another module's code.**
+**A module may not import another module's code.** `lib/modules/*` is enforced by
+the `import/no-restricted-paths` ESLint rule; the build fails on a violation.
 
-Concretely: `lib/dockets-db.ts` must not import from `lib/tender-db.ts`,
-`lib/commercial-links.ts`, or any other module's files. Same for API routes and
-workspace components.
+Shared logic goes in `lib/platform/`. Cross-module behaviour goes through a seam in
+`lib/seams/`. If you find yourself wanting a direct import, that's the signal
+you've found a seam — build it as a seam, not an import.
 
-Shared logic goes in the platform layer (§4). Cross-module behaviour goes through
-a seam handler (§6). If you find yourself wanting a direct import, that's the
-signal you've found a seam — build it as a seam, not an import.
-
-`lib/utils.ts`, `lib/authz.ts`, and `db/` are platform and may be imported by
-anyone.
+`lib/utils.ts`, `lib/authz.ts`, `lib/platform/*`, `lib/v1/*` and `db/` are platform
+and may be imported by anyone.
 
 ---
 
-## 4. Target architecture (we are not here yet)
+## 4. Architecture
 
 ```
-MODULES        tenders │ estimates │ dockets │ commercial │ field │ ims │ ...
-                              ↓ events only, never direct imports
-SEAM LAYER     award→job │ docket→cost │ field→variation │ variation→claim
+MODULES        pipeline │ estimating │ projects │ ims │ field │ dockets │ commercial
+                              ↓ never direct imports
+SEAM LAYER     award→project │ docket→cost │ variation→claim │ project control │ home │ reports
                               ↓
-PLATFORM       org │ users │ RBAC │ documents+revisions │ requirements │
-               evidence │ workflow engine │ audit │ entitlements │ AI orchestration
+PLATFORM       org │ membership │ capabilities │ entitlements │ documents │ audit │
+               workflow state machines │ finance arithmetic │ AI orchestration (not activated)
 ```
 
-`lib/` is currently flat with no enforced boundary. When you touch a file, move it
-toward `lib/platform/` or `lib/modules/<module>/` — but only as part of a task
-that already touches it. **Do not do a repo-wide reorganisation** unless explicitly
-asked; large refactors are unreviewable and break the other agent's work in flight.
+Legacy files in flat `lib/` move toward `lib/platform/` or `lib/modules/<module>/`
+only as part of a task that already touches them. **Do not do a repo-wide
+reorganisation** unless explicitly asked.
 
 ---
 
 ## 5. Known debt — do not build on top of these
 
-These are recorded deliberately. If your task touches one, raise it rather than
-working around it silently.
+Resolved on the V1 branch (kept for history): the forgeable `oai-*` header auth and
+hardcoded owner (replaced by Better Auth sessions + membership), the non-org-scoped
+`dockets` table (now scoped), the fail-closed single-organisation guard (every query
+is scoped to the session organisation; `DEFAULT_ORGANISATION_ID` no longer exists —
+use `currentOrganisationId()`), and URL-regex permissions (explicit `withActor`
+guards + `lib/platform/permissions.ts` capabilities).
 
 ### 5.1 Authentication
 
 `lib/platform/auth.ts` owns Better Auth. Business routes use explicit `withActor`
-guards and `requireActor`. Never trust `oai-*` headers, email matching, client role
-claims, or client organisation IDs. Imported ownership is attached by the one-time
-verified-account-ID CLI; no hardcoded owner exists.
+guards (or `api()` from `lib/platform/http.ts`) and capability checks. Never trust
+`oai-*` headers, email matching, client role claims, or client organisation IDs.
 
-### 5.2 `orgEntity()` is a JSON blob, not a schema
+### 5.2 `orgEntity()`-style JSON tables
 
-`db/schema.ts` defines ~18 tables through the `orgEntity()` factory. They all share
-`id, organisation_id, name, status, metadata, created_at`, with all real data
-inside the `metadata` JSON string. No foreign keys, no constraints, nothing
-queryable.
+Legacy tables (workers, plant, shifts, commercial_records, quote_revisions…) keep
+real data inside a `metadata` JSON string. `opportunities`, `jobs`, `estimates` and
+`tender_requirements` gained typed columns in migration 0003 (legacy metadata is
+still read as a fallback).
 
-**Rule:** do not add new tables via `orgEntity()`. New entities get real, typed
-columns. When a task requires querying or constraining a field currently inside
-`metadata`, promote that entity to a real table as part of the task — one entity
-at a time, with a migration.
+**Rule:** never add new JSON-blob tables. New entities get typed columns (see
+`db/schema-v1.ts`). Promote a legacy entity when a task needs to query or
+constrain its fields — one entity at a time, with a migration.
 
-`field_records`, `field_history` and `preparation_revisions` are correctly modelled.
-Use those as the pattern.
+### 5.3 Two data layers
 
-### 5.3 `dockets` is not org-scoped
+Legacy routes use the D1-compatible `database` wrapper (`lib/platform/database.ts`)
+so the SQLite regression suites keep running; V1 services use `lib/platform/sql.ts`
+(mysql2, transactions, `IN (?)` arrays). Code that legacy SQLite tests exercise
+(entitlements, estimate approval, award seam, docket seam) uses the wrapper.
 
-The `dockets` table has no `organisation_id`. Every other table has one. This is a
-cross-tenant data leak and must be fixed before a second organisation is onboarded.
+### 5.4 AI is not activated
 
-### 5.4 Multi-tenancy is effectively off
-
-`requireActor` fails closed for any org other than `DEFAULT_ORGANISATION_ID` unless
-called with `organisationScoped=true`. Keep that fail-closed behaviour. Never widen
-it globally — parameterise the specific query helpers your task touches, and pass
-`organisationScoped=true` only where every query in that path is genuinely scoped.
-
-### 5.5 Permissions are string-matched by URL regex
-
-`middleware.ts` picks a permission level from a regex on the path. Brittle. Prefer
-adding an explicit `requireActor(...)` call with the right permission inside the
-handler over extending the regex.
+`OPENAI_API_KEY` alone must not enable AI. Billing, consent, spending controls and
+an idempotent usage ledger come first (PRODUCT.md). All workflows work without AI.
 
 ---
 
 ## 6. Seams and entitlements
 
-### Entitlements (not yet built — this is the next major platform piece)
+### Entitlements (`lib/platform/entitlements.ts`)
 
-Modules are turned on and off per organisation. When the entitlement service
-exists, all checks go through one function. Never scatter `if (hasModule)` through
-components.
+Modules are turned on and off per organisation in `organisation_entitlements`
+(`active` / `read_only` / `disabled`). All checks go through this service:
+`withActor(handler, permission, module)` for routes, `session.module()` for
+navigation, `seamEnabled()` for seams. Never scatter `if (hasModule)` through
+components. New signups get the beta full-access trial; billing is not connected.
 
 Three enforcement points:
 - **Route** — module off means the route 404s. Not a paywall page.
@@ -218,16 +220,22 @@ document drafting) obeys these without exception:
 
 ## 10. Testing
 
-`npm test` runs the existing business regression suites. `npm run test:mysql` runs
-production HTTP integration tests with Better Auth, a disposable MySQL database,
-and local SMTP/S3 fixtures. CI runs both, lint, typecheck and a production build
-on Node 22. See README.md.
+- `npm test` — legacy SQLite business suites + `scripts/test-v1-logic.cjs`
+  (state machines, capabilities, ABN, finance, estimate items, docket cost lines).
+- `npm run test:mysql` — production HTTP integration (Better Auth, MySQL, SMTP/S3 fixtures).
+- `npm run test:v1` — the V1 business journey (scenarios A–G) against the built
+  production server. Run `npm run build` first.
+- CI runs lint, typecheck, test, build, test:fresh, db:migrate, test:mysql, test:v1.
 
-These requirements must be automated and run on every commit:
-- **Tenancy isolation** — two orgs cannot see each other's data
-- **Module boundaries** — a lint rule failing the build on cross-module imports
-- **AI governance** — no AI-authored record can reach an approved status without a
-  human action in the audit log
+These requirements are automated:
+- **Tenancy isolation** — scenario G + test:mysql (read/update/delete/search/report/export by known IDs)
+- **Module boundaries** — ESLint `import/no-restricted-paths` on `lib/modules/*`
+- **AI governance** — extracted/AI requirements start `suggested`; state machines
+  refuse `suggested → complete`; SWMS/estimates/claims approvals need a human
+  capability and are written to `audit_log` (logic + journey)
+
+When a V1 behaviour change breaks a legacy test, update the test only when the
+change is an intended rule (and say so in the PR); never delete or weaken tests.
 
 ---
 
@@ -235,13 +243,18 @@ These requirements must be automated and run on every commit:
 
 Do not jump ahead. Each phase has an exit test that must pass before the next.
 
-1. **Platform hardening** — real auth (replacing §5.1), entitlement service,
-   test runner + CI, docket org-scoping (§5.3)
+1. **Platform hardening** — real auth, entitlement service, test runner + CI,
+   docket org-scoping *(done on the V1 branch)*
 2. **Tender & Prequalification** — extraction, response library, submission assembly
 3. **Job setup, pre-commencement, planning**
 4. **Field & Dockets** — offline, mobile-first
 5. **Commercial** — variations, claims, retention *(last: highest liability,
    needs real field data to be trustworthy)*
+
+The owner-directed V1 completion run delivered phases 2–5 at V1 depth
+(docs/V1-COMPLETION.md), including offline field capture, retention accounting,
+typed resources with the scheduling conflict engine, and gated AI/ABR/billing adapters
+that stay off until their credentials are configured (docs/RUNBOOK.md).
 
 ---
 

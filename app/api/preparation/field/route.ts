@@ -1,6 +1,5 @@
 import {fieldPreparationDocument} from '@/lib/field-access';
 import {withActor} from '@/lib/platform/route';
-import {requireActor} from '@/lib/authz';
 import {requireEstimateDb,safeJson,cleanText} from '@/lib/estimates-db';
 import {preparationActor,preparationRecords,latestRecords,exact,enabled,fail,preparationError,appendStatements,issuesFor} from '@/lib/preparation-db';
 import {blankData,blankRow,type PreparationRecord} from '@/lib/preparation';
@@ -10,6 +9,6 @@ async function handleGET(request:Request){try{const {actor,records,jobId}=await 
 async function handlePOST(request:Request){try{const body=await request.json() as Record<string,unknown>;const {db,actor,records,jobId}=await context(request,cleanText(body.shiftId,100));if(!['admin','office','project manager','ims/qa/safety lead','field'].includes(actor.role))fail('You cannot record inspections.',403);const doc=exact(records,{id:cleanText(body.documentId,100),revision:Number(body.revision)});if(!doc||doc.job_id!==jobId||!['Approved','Accepted'].includes(doc.status))fail('Approved project document revision not found.',404);const row=doc.data.rows.find(r=>r.id===body.rowId);if(!row)fail('Inspection or hold point not found.',404);const result=cleanText(body.result,5000),attachmentId=cleanText(body.attachmentId,100);if(!result||!attachmentId)fail('Record the result and upload its supporting evidence.');if(!await db.prepare('SELECT id FROM attachments WHERE id=? AND organisation_id=?').bind(attachmentId,actor.organisationId).first())fail('Inspection evidence not found.',404);const release=body.action==='release';if(release){await preparationActor(request,db,'approve');if(row.fields['Release authority']!==actor.userId)fail('Only the release authority named in the approved ITP can release this point.',403);if(!row.fields['Acceptance criteria']||!row.fields['Specification reference'])fail('Approved acceptance criteria and specification reference are required.');if(issuesFor(doc,records).length)fail('Resolve expired or incomplete approved-document evidence before release.');}
 const data=blankData();data.category='Field evidence';data.origin={id:doc.id,revision:doc.revision};data.attachments=[attachmentId];data.owner=actor.userId;const check=blankRow(row.question);check.answer=result;check.fields={shiftId:cleanText(body.shiftId,100),sourceRowId:row.id,action:release?'Hold point released':'Inspection recorded',actorId:actor.userId};data.rows=[check];const record:PreparationRecord={id:crypto.randomUUID(),organisation_id:actor.organisationId,revision:1,kind:'action',title:`${doc.title}: ${row.question}`,status:release?'Approved':'Draft',job_id:jobId,opportunity_id:doc.opportunity_id,data,actor_id:actor.userId,reason:release?'hold-point.released':'inspection.recorded',created_at:new Date().toISOString()};await db.batch(appendStatements(db,record));return Response.json({record},{status:201});}catch(e){return preparationError(e);}}
 
-export const GET=withActor(handleGET,'field-read');
+export const GET=withActor(handleGET,'field-read','field');
 
-export const POST=withActor(handlePOST,'field');
+export const POST=withActor(handlePOST,'field','field');

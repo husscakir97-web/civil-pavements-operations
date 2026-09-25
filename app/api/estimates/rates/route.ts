@@ -1,11 +1,12 @@
 import {withActor} from '@/lib/platform/route';
+import {actorContext} from '@/lib/platform/context';
 import {
   DEFAULT_RATE_LIBRARY,
   type RateItem,
   type RateLibrary,
 } from "@/lib/estimate-calculations";
 import {
-  DEFAULT_ORGANISATION_ID,
+  currentOrganisationId,
   cleanText,
   jsonError,
   nowIso,
@@ -56,21 +57,24 @@ async function handlePOST(request: Request) {
   try {
     const db = requireEstimateDb(); await requireActor(request, db, 'admin');
     const input = await request.json() as Record<string,unknown>;
-    const previous = input.id ? await db.prepare('SELECT metadata FROM rate_libraries WHERE organisation_id=? AND id=?').bind(DEFAULT_ORGANISATION_ID(), cleanText(input.id,100)).first<{metadata:string}>() : null;
+    const previous = input.id ? await db.prepare('SELECT metadata FROM rate_libraries WHERE organisation_id=? AND id=?').bind(currentOrganisationId(), cleanText(input.id,100)).first<{metadata:string}>() : null;
     const library = normaliseLibrary({...safeJson<Record<string,unknown>>(previous?.metadata,{}),...input});
     const id = library.id || crypto.randomUUID();
     const now = nowIso();
     const result = await db.prepare("SELECT id FROM rate_libraries WHERE organisation_id = ? AND id = ? LIMIT 1")
-      .bind(DEFAULT_ORGANISATION_ID(), id).first<{ id: string }>();
+      .bind(currentOrganisationId(), id).first<{ id: string }>();
     if (result) {
       await db.prepare("UPDATE rate_libraries SET name = ?, status = ?, metadata = ? WHERE organisation_id = ? AND id = ?")
-        .bind(library.name, "active", JSON.stringify({ ...library, id }), DEFAULT_ORGANISATION_ID(), id).run();
+        .bind(library.name, "active", JSON.stringify({ ...library, id }), currentOrganisationId(), id).run();
     } else {
       await db.prepare(
         `INSERT INTO rate_libraries (id, organisation_id, name, status, metadata, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
-      ).bind(id, DEFAULT_ORGANISATION_ID(), library.name, "active", JSON.stringify({ ...library, id }), now).run();
+      ).bind(id, currentOrganisationId(), library.name, "active", JSON.stringify({ ...library, id }), now).run();
     }
+    const actor = actorContext.getStore()!;
+    await db.prepare('INSERT INTO audit_log (id,organisation_id,actor_user_id,actor_email,event_type,entity_type,entity_id,summary,before_state,after_state,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+      .bind(crypto.randomUUID(), currentOrganisationId(), actor.userId, actor.email, result ? 'rates.updated' : 'rates.created', 'rate_library', id, `Rate library ${library.name} ${result ? 'updated' : 'created'}. Approved estimate revisions keep their frozen rates.`, previous?.metadata ?? null, JSON.stringify({ ...library, id }), now).run();
     return Response.json({ rateLibrary: { ...library, id } });
   } catch (error) {
     console.error("save rate library", error);
@@ -86,7 +90,7 @@ async function handleGET(request: Request) {
   try {
     const db = requireEstimateDb(); await requireActor(request, db, 'read');
     const result = await db.prepare("SELECT id, organisation_id, name, status, metadata, created_at FROM rate_libraries WHERE organisation_id = ? ORDER BY created_at ASC")
-      .bind(DEFAULT_ORGANISATION_ID()).all<GenericRow>();
+      .bind(currentOrganisationId()).all<GenericRow>();
     return Response.json({ rateLibraries: result.results.map((row) => ({ ...DEFAULT_RATE_LIBRARY, ...safeJson<RateLibrary>(row.metadata, DEFAULT_RATE_LIBRARY), id: row.id, name: row.name })) });
   } catch (error) {
     console.error("load rate libraries", error);
@@ -94,8 +98,8 @@ async function handleGET(request: Request) {
   }
 }
 
-export const POST=withActor(handlePOST,'admin');
+export const POST=withActor(handlePOST,'admin','estimating');
 
-export const PUT=withActor(handlePUT,'admin');
+export const PUT=withActor(handlePUT,'admin','estimating');
 
-export const GET=withActor(handleGET,'read');
+export const GET=withActor(handleGET,'read','estimating');

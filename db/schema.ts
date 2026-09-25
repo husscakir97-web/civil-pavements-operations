@@ -1,6 +1,6 @@
 // Complete legacy schema, including tables previously present only in SQL migrations.
 import {sql} from 'drizzle-orm';
-import {mysqlTable,varchar,longtext,int,double,index,uniqueIndex} from 'drizzle-orm/mysql-core';
+import {mysqlTable,varchar,longtext,text,int,double,decimal,index,uniqueIndex} from 'drizzle-orm/mysql-core';
 
 export const attachments=mysqlTable('attachments',{
  id:varchar('id',{length:191}).primaryKey(),
@@ -117,7 +117,13 @@ export const estimates=mysqlTable('estimates',{
  status:longtext('status').notNull().default(sql`('active')`),
  metadata:longtext('metadata').notNull().default(sql`('{}')`),
  createdAt:longtext('created_at').notNull(),
-},t=>[index('idx_estimates_org').on(t.organisationId)]);
+
+ // V1 typed columns (0003). Legacy metadata is retained and read as a fallback.
+ workflowState:varchar('workflow_state',{length:20}),
+ approvedRevisionId:varchar('approved_revision_id',{length:191}),
+ tenderId:varchar('tender_id',{length:191}),
+ updatedAt:varchar('updated_at',{length:40}),
+},t=>[index('idx_estimates_org').on(t.organisationId),index('idx_estimates_org_tender').on(t.organisationId,t.tenderId)]);
 
 export const extractionProfiles=mysqlTable('extraction_profiles',{
  id:varchar('id',{length:191}).primaryKey(),
@@ -211,7 +217,40 @@ export const jobs=mysqlTable('jobs',{
  status:longtext('status').notNull().default(sql`('active')`),
  metadata:longtext('metadata').notNull().default(sql`('{}')`),
  createdAt:longtext('created_at').notNull(),
-},t=>[index('idx_jobs_org').on(t.organisationId)]);
+
+ // V1 typed columns (0003). Legacy metadata is retained and read as a fallback.
+ projectNumber:varchar('project_number',{length:40}),
+ clientName:varchar('client_name',{length:255}),
+ stage:varchar('stage',{length:30}),
+ projectManagerUserId:varchar('project_manager_user_id',{length:191}),
+ projectManagerName:varchar('project_manager_name',{length:160}),
+ contractValue:decimal('contract_value',{precision:15,scale:2}),
+ originalBudget:decimal('original_budget',{precision:15,scale:2}),
+ startDate:varchar('start_date',{length:10}),
+ practicalCompletionDate:varchar('practical_completion_date',{length:10}),
+ finishDate:varchar('finish_date',{length:10}),
+ siteAddress:text('site_address'),
+ contractNumber:varchar('contract_number',{length:80}),
+ contractType:varchar('contract_type',{length:80}),
+ retentionPct:double('retention_pct'),
+ // 0004: retention accounting (lib/platform/finance.ts retention()).
+ retentionEnabled:int('retention_enabled').notNull().default(0),
+ retentionCapAmount:decimal('retention_cap_amount',{precision:15,scale:2}),
+ paymentTermsDays:int('payment_terms_days'),
+ defectsMonths:int('defects_months'),
+ scope:text('scope'),
+ assumptions:text('assumptions'),
+ exclusions:text('exclusions'),
+ clientRequirements:text('client_requirements'),
+ mobilisationNotes:text('mobilisation_notes'),
+ sourceTenderId:varchar('source_tender_id',{length:191}),
+ sourceEstimateId:varchar('source_estimate_id',{length:191}),
+ sourceEstimateRevisionId:varchar('source_estimate_revision_id',{length:191}),
+ closedAt:varchar('closed_at',{length:40}),
+ closedBy:varchar('closed_by',{length:191}),
+ revision:int('revision').notNull().default(1),
+ updatedAt:varchar('updated_at',{length:40}),
+},t=>[index('idx_jobs_org').on(t.organisationId),index('idx_jobs_org_stage').on(t.organisationId,t.stage),uniqueIndex('idx_jobs_source_tender').on(t.organisationId,t.sourceTenderId),uniqueIndex('idx_jobs_source_estimate').on(t.organisationId,t.sourceEstimateId)]);
 
 export const opportunities=mysqlTable('opportunities',{
  id:varchar('id',{length:191}).primaryKey(),
@@ -220,13 +259,28 @@ export const opportunities=mysqlTable('opportunities',{
  status:longtext('status').notNull().default(sql`('active')`),
  metadata:longtext('metadata').notNull().default(sql`('{}')`),
  createdAt:longtext('created_at').notNull(),
-},t=>[index('idx_opportunities_org').on(t.organisationId)]);
+
+ // V1 typed columns (0003). Legacy metadata is retained and read as a fallback.
+ clientName:varchar('client_name',{length:255}),
+ ownerUserId:varchar('owner_user_id',{length:191}),
+ estimatedValue:decimal('estimated_value',{precision:15,scale:2}),
+ probability:int('probability'),
+ closingDate:varchar('closing_date',{length:10}),
+ stage:varchar('stage',{length:30}),
+ location:varchar('location',{length:255}),
+ notes:text('notes'),
+ lostReason:text('lost_reason'),
+ tenderId:varchar('tender_id',{length:191}),
+ revision:int('revision').notNull().default(1),
+ createdBy:varchar('created_by',{length:191}),
+ updatedAt:varchar('updated_at',{length:40}),
+},t=>[index('idx_opportunities_org').on(t.organisationId),index('idx_opportunities_org_stage').on(t.organisationId,t.stage)]);
 
 export const organisations=mysqlTable('organisations',{
  id:varchar('id',{length:191}).primaryKey(),
  name:longtext('name').notNull(),
  createdAt:longtext('created_at').notNull(),
-},t=>[]);
+});
 
 export const plant=mysqlTable('plant',{
  id:varchar('id',{length:191}).primaryKey(),
@@ -235,7 +289,26 @@ export const plant=mysqlTable('plant',{
  status:longtext('status').notNull().default(sql`('active')`),
  metadata:longtext('metadata').notNull().default(sql`('{}')`),
  createdAt:longtext('created_at').notNull(),
-},t=>[index('idx_plant_org').on(t.organisationId)]);
+
+ // V1 typed columns (0004). Legacy metadata is retained; see lib/v1/resource-mapping.ts.
+ plantNumber:varchar('plant_number',{length:60}),
+ registration:varchar('registration',{length:40}),
+ category:varchar('category',{length:80}),
+ description:varchar('description',{length:255}),
+ make:varchar('make',{length:80}),
+ model:varchar('model',{length:80}),
+ ownership:varchar('ownership',{length:20}),
+ hourlyRate:decimal('hourly_rate',{precision:15,scale:2}),
+ dayRate:decimal('day_rate',{precision:15,scale:2}),
+ complianceExpiry:varchar('compliance_expiry',{length:10}),
+ location:varchar('location',{length:255}),
+ active:int('active').notNull().default(1),
+ revision:int('revision').notNull().default(1),
+ createdBy:varchar('created_by',{length:191}),
+ updatedAt:varchar('updated_at',{length:40}),
+ // Set when the typed columns were last derived from legacy metadata (backfill/dual-write).
+ legacySyncedAt:varchar('legacy_synced_at',{length:40}),
+},t=>[index('idx_plant_org').on(t.organisationId),index('idx_plant_org_active').on(t.organisationId,t.active)]);
 
 export const preparationRevisions=mysqlTable('preparation_revisions',{
  id:varchar('id',{length:191}).notNull(),
@@ -286,7 +359,24 @@ export const shifts=mysqlTable('shifts',{
  status:longtext('status').notNull().default(sql`('active')`),
  metadata:longtext('metadata').notNull().default(sql`('{}')`),
  createdAt:longtext('created_at').notNull(),
-},t=>[index('idx_shifts_org').on(t.organisationId)]);
+
+ // V1 typed columns (0004). Assignments live in shift_assignments.
+ projectId:varchar('project_id',{length:191}),
+ shiftDate:varchar('shift_date',{length:10}),
+ startTime:varchar('start_time',{length:5}),
+ finishTime:varchar('finish_time',{length:5}),
+ activity:varchar('activity',{length:255}),
+ supervisorName:varchar('supervisor_name',{length:160}),
+ supervisorUserId:varchar('supervisor_user_id',{length:191}),
+ location:varchar('location',{length:255}),
+ instructions:text('instructions'),
+ requiredCompetencies:text('required_competencies'),
+ revision:int('revision').notNull().default(1),
+ createdBy:varchar('created_by',{length:191}),
+ updatedAt:varchar('updated_at',{length:40}),
+ // Set when the typed columns were last derived from legacy metadata (backfill/dual-write).
+ legacySyncedAt:varchar('legacy_synced_at',{length:40}),
+},t=>[index('idx_shifts_org').on(t.organisationId),index('idx_shifts_org_date').on(t.organisationId,t.shiftDate),index('idx_shifts_org_project').on(t.organisationId,t.projectId)]);
 
 export const subcontractors=mysqlTable('subcontractors',{
  id:varchar('id',{length:191}).primaryKey(),
@@ -323,7 +413,19 @@ export const tenderRequirements=mysqlTable('tender_requirements',{
  metadata:longtext('metadata').notNull().default(sql`('{}')`),
  createdAt:longtext('created_at').notNull(),
  updatedAt:longtext('updated_at').notNull(),
-},t=>[index('idx_tender_requirements_org_opp').on(t.organisationId,t.opportunityId,t.status)]);
+
+ // V1 typed columns (0003). Legacy metadata is retained and read as a fallback.
+ tenderId:varchar('tender_id',{length:191}),
+ category:varchar('category',{length:40}),
+ response:text('response'),
+ riskFlag:int('risk_flag').notNull().default(0),
+ origin:varchar('origin',{length:20}).notNull().default('manual'),
+ confidence:double('confidence'),
+ confirmedBy:varchar('confirmed_by',{length:191}),
+ confirmedAt:varchar('confirmed_at',{length:40}),
+ evidenceDocumentId:varchar('evidence_document_id',{length:191}),
+ revision:int('revision').notNull().default(1),
+},t=>[index('idx_tender_requirements_org_opp').on(t.organisationId,t.opportunityId,t.status),index('idx_tender_requirements_org_tender').on(t.organisationId,t.tenderId)]);
 
 export const users=mysqlTable('users',{
  id:varchar('id',{length:191}).primaryKey(),
@@ -360,7 +462,25 @@ export const workers=mysqlTable('workers',{
  status:longtext('status').notNull().default(sql`('active')`),
  metadata:longtext('metadata').notNull().default(sql`('{}')`),
  createdAt:longtext('created_at').notNull(),
-},t=>[index('idx_workers_org').on(t.organisationId)]);
+
+ // V1 typed columns (0004). Competencies live in worker_competencies.
+ employeeNumber:varchar('employee_number',{length:60}),
+ firstName:varchar('first_name',{length:120}),
+ lastName:varchar('last_name',{length:120}),
+ email:varchar('email',{length:254}),
+ phone:varchar('phone',{length:60}),
+ roleTitle:varchar('role_title',{length:120}),
+ employmentType:varchar('employment_type',{length:30}),
+ userId:varchar('user_id',{length:191}),
+ hourlyRate:decimal('hourly_rate',{precision:15,scale:2}),
+ location:varchar('location',{length:255}),
+ active:int('active').notNull().default(1),
+ revision:int('revision').notNull().default(1),
+ createdBy:varchar('created_by',{length:191}),
+ updatedAt:varchar('updated_at',{length:40}),
+ // Set when the typed columns were last derived from legacy metadata (backfill/dual-write).
+ legacySyncedAt:varchar('legacy_synced_at',{length:40}),
+},t=>[index('idx_workers_org').on(t.organisationId),index('idx_workers_org_active').on(t.organisationId,t.active),index('idx_workers_org_user').on(t.organisationId,t.userId)]);
 
 export const workflowTasks=mysqlTable('workflow_tasks',{
  id:varchar('id',{length:191}).primaryKey(),

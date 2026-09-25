@@ -14,13 +14,15 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/test-docket-parser.mjs && node scripts/test-mixed.mjs && node scripts/test-planning.cjs && node scripts/test-field.cjs && node scripts/test-commercial.cjs && node scripts/test-preparation.cjs && node scripts/test-repairs.cjs && node scripts/test-reporting.cjs && node scripts/test-tender-files.cjs",
+    "test": "node scripts/test-docket-parser.mjs && node scripts/test-mixed.mjs && node scripts/test-planning.cjs && node scripts/test-field.cjs && node scripts/test-commercial.cjs && node scripts/test-preparation.cjs && node scripts/test-repairs.cjs && node scripts/test-reporting.cjs && node scripts/test-tender-files.cjs && node scripts/test-v1-logic.cjs",
     "db:migrate": "node --env-file-if-exists=.env scripts/migrate.mjs",
     "data:export": "node --env-file-if-exists=.env scripts/export-live.mjs",
     "data:import": "node --env-file-if-exists=.env scripts/import-data.mjs",
     "data:attach-admin": "node --env-file-if-exists=.env scripts/attach-admin.mjs",
     "test:mysql": "node --env-file-if-exists=.env scripts/test-mysql.mjs",
-    "test:fresh": "node --env-file-if-exists=.env scripts/test-fresh-start.mjs"
+    "test:fresh": "node --env-file-if-exists=.env scripts/test-fresh-start.mjs",
+    "test:v1": "node --env-file-if-exists=.env scripts/test-v1-journey.mjs",
+    "test:backfill": "node --env-file-if-exists=.env scripts/test-resource-backfill.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

@@ -6,10 +6,13 @@ import {
   parseMonth,
   requireBindings,
   type DocketInput,
-  DEFAULT_ORGANISATION_ID,
+  currentOrganisationId,
   mandatoryMissing,
 } from "@/lib/dockets-db";
 import { safeJson } from '@/lib/estimates-db';
+import { actorContext } from '@/lib/platform/context';
+import { can } from '@/lib/platform/permissions';
+import { docketCostStatements } from '@/lib/seams/docket-to-cost';
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +38,7 @@ async function handleGET(request: Request) {
         WHERE organisation_id = ? AND work_date >= ? AND work_date < ? AND lower(status) != 'archived'
         ORDER BY work_date DESC, created_at DESC`,
       )
-      .bind(DEFAULT_ORGANISATION_ID(), start, end)
+      .bind(currentOrganisationId(), start, end)
       .all();
     return Response.json({ dockets: result.results.map((r: Record<string,unknown>) => ({...r,
       fieldConfidence: safeJson(r.fieldConfidence, {}),
@@ -95,7 +98,7 @@ async function handlePOST(request: Request) {
     if (invalid.length) {
       const now = new Date().toISOString();
       await db.prepare("INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)")
-        .bind(crypto.randomUUID(), DEFAULT_ORGANISATION_ID(), "docket.ready.rejected", "rejected", JSON.stringify({ missing: invalid }), now).run();
+        .bind(crypto.randomUUID(), currentOrganisationId(), "docket.ready.rejected", "rejected", JSON.stringify({ missing: invalid }), now).run();
       return Response.json({ error: "Docket remains Needs Review until mandatory fields are complete.", missing: invalid }, { status: 422 });
     }
     for (const record of records) {
@@ -125,7 +128,7 @@ async function handlePOST(request: Request) {
       const duplicate = record.docketNo !== "UNREAD"
         ? await db
           .prepare("SELECT id FROM dockets WHERE organisation_id = ? AND UPPER(docket_no) = ? AND work_date = ? AND lower(status) != 'archived' LIMIT 1")
-          .bind(DEFAULT_ORGANISATION_ID(), record.docketNo.toUpperCase(), record.workDate)
+          .bind(currentOrganisationId(), record.docketNo.toUpperCase(), record.workDate)
           .first()
         : null;
       if (duplicate || seen.has(duplicateKey)) record.status = "duplicate";
@@ -140,7 +143,7 @@ async function handlePOST(request: Request) {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
         id,
-        DEFAULT_ORGANISATION_ID(),
+        currentOrganisationId(),
         record.docketNo,
         record.workDate,
         record.client,
@@ -187,11 +190,19 @@ async function handlePUT(request: Request) {
     if (missing.length) {
       const now = new Date().toISOString();
       await db.prepare("INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)")
-        .bind(crypto.randomUUID(), DEFAULT_ORGANISATION_ID(), `docket.ready.rejected:${id}`, "rejected", JSON.stringify({ docketId: id, missing }), now).run();
+        .bind(crypto.randomUUID(), currentOrganisationId(), `docket.ready.rejected:${id}`, "rejected", JSON.stringify({ docketId: id, missing }), now).run();
       return Response.json({ error: "Docket remains Needs Review until mandatory fields are complete.", missing }, { status: 422 });
     }
     const now = new Date().toISOString();
-    await db
+    const previous = await db.prepare("SELECT status FROM dockets WHERE organisation_id = ? AND id = ?").bind(currentOrganisationId(), id).first<{ status: string }>();
+    if (!previous) return jsonError("The docket was not found.", 404);
+    if (["included_claim", "invoiced"].includes(previous.status)) return jsonError("This docket has been claimed and is locked. Reverse the claim line before changing it.", 409);
+    const actor = actorContext.getStore()!;
+    if ((record.status === "approved" || previous.status === "approved") && record.status !== previous.status && !can(actor.role, "docket.approve")) return jsonError("Only an authorised office user can approve or unapprove dockets.", 403);
+    if (["included_claim", "invoiced"].includes(record.status)) return jsonError("Dockets are marked claimed by the claims workflow, not by editing.", 409);
+    // SEAM: approved docket → actual cost (idempotent); leaving approved reverses unclaimed cost.
+    const seam = record.status === "approved" || previous.status === "approved" ? await docketCostStatements(id, record.status, { docket_no: record.docketNo, work_date: record.workDate, amount: record.amount, quantity: record.quantity, quantity_unit: record.quantityUnit, labour_hours: record.labourHours, line_items: JSON.stringify(record.lineItems ?? []), links: JSON.stringify(record.links ?? {}), notes: record.notes }) : { statements: [], posted: 0, message: null };
+    const update = db
       .prepare(
         `UPDATE dockets SET
           docket_no = ?, work_date = ?, client = ?, project = ?, crew = ?, vehicle = ?,
@@ -219,12 +230,13 @@ async function handlePUT(request: Request) {
         record.status,
         record.confidence, JSON.stringify(record.fieldConfidence ?? {}), JSON.stringify(record.lineItems ?? []), JSON.stringify(record.links ?? {}), record.extractionMethod ?? "local-ocr", record.profileId ?? "",
         now,
-        DEFAULT_ORGANISATION_ID(),
+        currentOrganisationId(),
         id,
-      )
-      .run();
-    return Response.json({ docket: { ...raw, ...record, id, updatedAt: now } });
+      );
+    await db.batch([update, ...seam.statements]);
+    return Response.json({ docket: { ...raw, ...record, id, updatedAt: now }, costLinesPosted: seam.posted, message: seam.message });
   } catch (error) {
+    if ((error as { status?: number }).status === 409) return jsonError((error as Error).message, 409);
     console.error("update docket", error);
     return jsonError("Changes could not be saved.", 503);
   }
@@ -237,17 +249,18 @@ async function handleDELETE(request: Request) {
     if (!id) return jsonError("A docket ID is required.");
 
     const row = await db
-      .prepare("SELECT source_key AS sourceKey FROM dockets WHERE organisation_id = ? AND id = ?")
-      .bind(DEFAULT_ORGANISATION_ID(), id)
-      .first<{ sourceKey: string }>();
+      .prepare("SELECT source_key AS sourceKey, status FROM dockets WHERE organisation_id = ? AND id = ?")
+      .bind(currentOrganisationId(), id)
+      .first<{ sourceKey: string; status: string }>();
     if (!row) return jsonError("The docket was not found.", 404);
+    if (["approved", "included_claim", "invoiced"].includes(row.status)) return jsonError("Approved or claimed dockets carry posted costs and cannot be deleted. Return the docket to review first.", 409);
 
-    await db.prepare("DELETE FROM dockets WHERE organisation_id = ? AND id = ?").bind(DEFAULT_ORGANISATION_ID(), id).run();
+    await db.prepare("DELETE FROM dockets WHERE organisation_id = ? AND id = ?").bind(currentOrganisationId(), id).run();
 
     if (row.sourceKey) {
       const sharedFile = await db
         .prepare("SELECT id FROM dockets WHERE organisation_id = ? AND source_key = ? LIMIT 1")
-        .bind(DEFAULT_ORGANISATION_ID(), row.sourceKey)
+        .bind(currentOrganisationId(), row.sourceKey)
         .first();
       if (!sharedFile) {
         try {
@@ -265,10 +278,10 @@ async function handleDELETE(request: Request) {
   }
 }
 
-export const GET=withActor(handleGET,'read');
+export const GET=withActor(handleGET,'read','dockets');
 
-export const POST=withActor(handlePOST,'write');
+export const POST=withActor(handlePOST,'write','dockets');
 
-export const PUT=withActor(handlePUT,'write');
+export const PUT=withActor(handlePUT,'write','dockets');
 
-export const DELETE=withActor(handleDELETE,'write');
+export const DELETE=withActor(handleDELETE,'write','dockets');

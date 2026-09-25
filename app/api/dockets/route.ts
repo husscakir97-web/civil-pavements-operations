@@ -6,7 +6,7 @@ import {
   parseMonth,
   requireBindings,
   type DocketInput,
-  DEFAULT_ORGANISATION_ID,
+  currentOrganisationId,
   mandatoryMissing,
 } from "@/lib/dockets-db";
 import { safeJson } from '@/lib/estimates-db';
@@ -35,7 +35,7 @@ async function handleGET(request: Request) {
         WHERE organisation_id = ? AND work_date >= ? AND work_date < ? AND lower(status) != 'archived'
         ORDER BY work_date DESC, created_at DESC`,
       )
-      .bind(DEFAULT_ORGANISATION_ID(), start, end)
+      .bind(currentOrganisationId(), start, end)
       .all();
     return Response.json({ dockets: result.results.map((r: Record<string,unknown>) => ({...r,
       fieldConfidence: safeJson(r.fieldConfidence, {}),
@@ -95,7 +95,7 @@ async function handlePOST(request: Request) {
     if (invalid.length) {
       const now = new Date().toISOString();
       await db.prepare("INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)")
-        .bind(crypto.randomUUID(), DEFAULT_ORGANISATION_ID(), "docket.ready.rejected", "rejected", JSON.stringify({ missing: invalid }), now).run();
+        .bind(crypto.randomUUID(), currentOrganisationId(), "docket.ready.rejected", "rejected", JSON.stringify({ missing: invalid }), now).run();
       return Response.json({ error: "Docket remains Needs Review until mandatory fields are complete.", missing: invalid }, { status: 422 });
     }
     for (const record of records) {
@@ -125,7 +125,7 @@ async function handlePOST(request: Request) {
       const duplicate = record.docketNo !== "UNREAD"
         ? await db
           .prepare("SELECT id FROM dockets WHERE organisation_id = ? AND UPPER(docket_no) = ? AND work_date = ? AND lower(status) != 'archived' LIMIT 1")
-          .bind(DEFAULT_ORGANISATION_ID(), record.docketNo.toUpperCase(), record.workDate)
+          .bind(currentOrganisationId(), record.docketNo.toUpperCase(), record.workDate)
           .first()
         : null;
       if (duplicate || seen.has(duplicateKey)) record.status = "duplicate";
@@ -140,7 +140,7 @@ async function handlePOST(request: Request) {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
         id,
-        DEFAULT_ORGANISATION_ID(),
+        currentOrganisationId(),
         record.docketNo,
         record.workDate,
         record.client,
@@ -187,7 +187,7 @@ async function handlePUT(request: Request) {
     if (missing.length) {
       const now = new Date().toISOString();
       await db.prepare("INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)")
-        .bind(crypto.randomUUID(), DEFAULT_ORGANISATION_ID(), `docket.ready.rejected:${id}`, "rejected", JSON.stringify({ docketId: id, missing }), now).run();
+        .bind(crypto.randomUUID(), currentOrganisationId(), `docket.ready.rejected:${id}`, "rejected", JSON.stringify({ docketId: id, missing }), now).run();
       return Response.json({ error: "Docket remains Needs Review until mandatory fields are complete.", missing }, { status: 422 });
     }
     const now = new Date().toISOString();
@@ -219,7 +219,7 @@ async function handlePUT(request: Request) {
         record.status,
         record.confidence, JSON.stringify(record.fieldConfidence ?? {}), JSON.stringify(record.lineItems ?? []), JSON.stringify(record.links ?? {}), record.extractionMethod ?? "local-ocr", record.profileId ?? "",
         now,
-        DEFAULT_ORGANISATION_ID(),
+        currentOrganisationId(),
         id,
       )
       .run();
@@ -238,16 +238,16 @@ async function handleDELETE(request: Request) {
 
     const row = await db
       .prepare("SELECT source_key AS sourceKey FROM dockets WHERE organisation_id = ? AND id = ?")
-      .bind(DEFAULT_ORGANISATION_ID(), id)
+      .bind(currentOrganisationId(), id)
       .first<{ sourceKey: string }>();
     if (!row) return jsonError("The docket was not found.", 404);
 
-    await db.prepare("DELETE FROM dockets WHERE organisation_id = ? AND id = ?").bind(DEFAULT_ORGANISATION_ID(), id).run();
+    await db.prepare("DELETE FROM dockets WHERE organisation_id = ? AND id = ?").bind(currentOrganisationId(), id).run();
 
     if (row.sourceKey) {
       const sharedFile = await db
         .prepare("SELECT id FROM dockets WHERE organisation_id = ? AND source_key = ? LIMIT 1")
-        .bind(DEFAULT_ORGANISATION_ID(), row.sourceKey)
+        .bind(currentOrganisationId(), row.sourceKey)
         .first();
       if (!sharedFile) {
         try {
@@ -265,10 +265,10 @@ async function handleDELETE(request: Request) {
   }
 }
 
-export const GET=withActor(handleGET,'read');
+export const GET=withActor(handleGET,'read','dockets');
 
-export const POST=withActor(handlePOST,'write');
+export const POST=withActor(handlePOST,'write','dockets');
 
-export const PUT=withActor(handlePUT,'write');
+export const PUT=withActor(handlePUT,'write','dockets');
 
-export const DELETE=withActor(handleDELETE,'write');
+export const DELETE=withActor(handleDELETE,'write','dockets');

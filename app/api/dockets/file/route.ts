@@ -27,4 +27,4 @@ async function handleGET(request: Request) {
   }
 }
 
-export const GET=withActor(handleGET,'read');
+export const GET=withActor(handleGET,'read','dockets');

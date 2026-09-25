@@ -1,6 +1,6 @@
 import { env } from '@/lib/platform/runtime';
 
-export { currentOrganisationId as DEFAULT_ORGANISATION_ID } from '@/lib/platform/context';
+export { currentOrganisationId } from '@/lib/platform/context';
 
 export function requireEstimateDb() {
   if (!env.DB) throw new Error("Estimate storage is temporarily unavailable.");

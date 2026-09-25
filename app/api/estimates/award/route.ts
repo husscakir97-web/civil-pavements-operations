@@ -10,7 +10,7 @@ import {
   type ValidationResult,
 } from "@/lib/estimate-calculations";
 import {
-  DEFAULT_ORGANISATION_ID,
+  currentOrganisationId,
   cleanText,
   jsonError,
   nowIso,
@@ -45,7 +45,7 @@ async function handlePOST(request: Request) {
     if (!estimateId) return jsonError("An estimate ID is required.");
     const row = await db
       .prepare("SELECT id, organisation_id, name, status, metadata, created_at FROM estimates WHERE organisation_id = ? AND id = ? LIMIT 1")
-      .bind(DEFAULT_ORGANISATION_ID(), estimateId)
+      .bind(currentOrganisationId(), estimateId)
       .first<GenericRow>();
     if (!row) return jsonError("The estimate was not found.", 404);
     const metadata = safeJson<EstimateMetadata>(row.metadata, {});
@@ -102,24 +102,24 @@ async function handlePOST(request: Request) {
       awardedAt: now,
       status: "Awarded",
     };
-    const requirementCopies = metadata.sourceOpportunityId ? await db.prepare('SELECT * FROM tender_requirements WHERE organisation_id=? AND opportunity_id=?').bind(DEFAULT_ORGANISATION_ID(),String(metadata.sourceOpportunityId)).all<Record<string,unknown>>() : {results:[]};
+    const requirementCopies = metadata.sourceOpportunityId ? await db.prepare('SELECT * FROM tender_requirements WHERE organisation_id=? AND opportunity_id=?').bind(currentOrganisationId(),String(metadata.sourceOpportunityId)).all<Record<string,unknown>>() : {results:[]};
     await db.batch([
-      ...packStatements(db,DEFAULT_ORGANISATION_ID(),jobId,now),
-      ...requirementCopies.results.map(r=>db.prepare('INSERT INTO job_ims_items (id,organisation_id,job_id,title,document_type,mandatory,status,source_requirement_id,linked_document_id,metadata,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id').bind(crypto.randomUUID(),DEFAULT_ORGANISATION_ID(),jobId,String(r.title),'Tender requirement',Number(r.mandatory),'Missing',String(r.id),r.linked_document_id || null,JSON.stringify({sourceDocument:r.source_document,sourcePage:r.source_page}),now,now)),
+      ...packStatements(db,currentOrganisationId(),jobId,now),
+      ...requirementCopies.results.map(r=>db.prepare('INSERT INTO job_ims_items (id,organisation_id,job_id,title,document_type,mandatory,status,source_requirement_id,linked_document_id,metadata,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id').bind(crypto.randomUUID(),currentOrganisationId(),jobId,String(r.title),'Tender requirement',Number(r.mandatory),'Missing',String(r.id),r.linked_document_id || null,JSON.stringify({sourceDocument:r.source_document,sourcePage:r.source_page}),now,now)),
       db.prepare(
         `INSERT INTO jobs (id, organisation_id, name, status, metadata, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
-      ).bind(jobId, DEFAULT_ORGANISATION_ID(), jobName, "awarded", JSON.stringify(jobMetadata), now),
+      ).bind(jobId, currentOrganisationId(), jobName, "awarded", JSON.stringify(jobMetadata), now),
       db.prepare("UPDATE estimates SET status = ?, metadata = ? WHERE organisation_id = ? AND id = ?")
-        .bind("Awarded", JSON.stringify(nextMetadata), DEFAULT_ORGANISATION_ID(), estimateId),
+        .bind("Awarded", JSON.stringify(nextMetadata), currentOrganisationId(), estimateId),
       db.prepare(
         `INSERT INTO quote_revisions (id, organisation_id, name, status, metadata, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
-      ).bind(revisionId, DEFAULT_ORGANISATION_ID(), `${row.name} · Rev ${revisionNumber}`, "Awarded", JSON.stringify(revisionMetadata), now),
+      ).bind(revisionId, currentOrganisationId(), `${row.name} · Rev ${revisionNumber}`, "Awarded", JSON.stringify(revisionMetadata), now),
       db.prepare(
         `INSERT INTO audit_events (id, organisation_id, name, status, metadata, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
-      ).bind(crypto.randomUUID(), DEFAULT_ORGANISATION_ID(), `estimate.awarded:${estimateId}`, "recorded", JSON.stringify({ jobId, revisionId, approvedBudget: totals }), now),
+      ).bind(crypto.randomUUID(), currentOrganisationId(), `estimate.awarded:${estimateId}`, "recorded", JSON.stringify({ jobId, revisionId, approvedBudget: totals }), now),
     ]);
     return Response.json({
       awarded: true,
@@ -133,4 +133,4 @@ async function handlePOST(request: Request) {
   }
 }
 
-export const POST=withActor(handlePOST,'approve');
+export const POST=withActor(handlePOST,'approve','estimating');

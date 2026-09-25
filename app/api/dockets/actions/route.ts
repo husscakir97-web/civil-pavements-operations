@@ -1,5 +1,5 @@
 import {withActor} from '@/lib/platform/route';
-import { DEFAULT_ORGANISATION_ID as ORG, cleanText, requireBindings, type DocketInput } from "@/lib/dockets-db";
+import { currentOrganisationId as ORG, cleanText, requireBindings, type DocketInput } from "@/lib/dockets-db";
 export const dynamic = "force-dynamic";
 const jsonError = (message:string,status=400)=>Response.json({error:message},{status});
 async function handlePOST(req:Request){
@@ -27,4 +27,4 @@ async function handlePOST(req:Request){
   } catch(e){console.error(e);return jsonError("Docket action failed.",503)}
 }
 
-export const POST=withActor(handlePOST,'write');
+export const POST=withActor(handlePOST,'write','dockets');

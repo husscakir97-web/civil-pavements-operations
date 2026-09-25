@@ -3,7 +3,7 @@ import {withActor} from '@/lib/platform/route';
 import type { Database } from '@/lib/platform/database';
 import { imsBlockers } from '@/lib/ims-readiness';
 import { requireActor } from '@/lib/authz';
-import { DEFAULT_ORGANISATION_ID as ORG, requireEstimateDb, safeJson, jsonError } from '@/lib/estimates-db';
+import { currentOrganisationId as ORG, requireEstimateDb, safeJson, jsonError } from '@/lib/estimates-db';
 import { CHECKS, SHIFT_STATUSES, mergeJob, shiftWarnings, type DeliveryRecord, type Meta } from '@/lib/planning';
 export const dynamic = 'force-dynamic';
 const tables = ['jobs','shifts','workers','crews','plant','suppliers','subcontractors'] as const;
@@ -48,6 +48,6 @@ async function handlePOST(request:Request) {
   } catch(e) { console.error(e);return jsonError('Unable to save. Your changes are still in the form.',503); }
 }
 
-export const GET=withActor(handleGET,'field-read');
+export const GET=withActor(handleGET,'field-read','operations');
 
-export const POST=withActor(handlePOST,'write');
+export const POST=withActor(handlePOST,'write','operations');

@@ -140,10 +140,10 @@ async function handlePUT(request:Request){
  }catch(e){return authError(e);}
 }
 
-export const GET=withActor(handleGET,'read');
+export const GET=withActor(handleGET,'read','ims');
 
-export const POST=withActor(handlePOST,'write');
+export const POST=withActor(handlePOST,'write','ims');
 
-export const PATCH=withActor(handlePATCH,'write');
+export const PATCH=withActor(handlePATCH,'write','ims');
 
-export const PUT=withActor(handlePUT,'write');
+export const PUT=withActor(handlePUT,'write','ims');

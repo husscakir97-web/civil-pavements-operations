@@ -1,7 +1,7 @@
 import {withActor} from '@/lib/platform/route';
 import type { Database } from '@/lib/platform/database';
 import {requireActor,authError} from '@/lib/authz';
-import { requireEstimateDb, DEFAULT_ORGANISATION_ID as ORG, jsonError, safeJson } from '@/lib/estimates-db';
+import { requireEstimateDb, currentOrganisationId as ORG, jsonError, safeJson } from '@/lib/estimates-db';
 import { belongsToJob, periodBounds } from '@/lib/commercial-links';
 export const dynamic='force-dynamic';
 type Meta=Record<string,unknown>;
@@ -43,6 +43,6 @@ async function handlePOST(req:Request){try{
  return jsonError('Unknown commercial action.');
 }catch(e){console.error(e);if((e as {status?:number})?.status)return authError(e);return jsonError(String(e).includes('UNIQUE')?'A docket was claimed by another request. Refresh before retrying.':'Commercial action failed.',String(e).includes('UNIQUE')?409:503);}}
 
-export const GET=withActor(handleGET,'read');
+export const GET=withActor(handleGET,'read','commercial');
 
-export const POST=withActor(handlePOST,'approve');
+export const POST=withActor(handlePOST,'approve','commercial');

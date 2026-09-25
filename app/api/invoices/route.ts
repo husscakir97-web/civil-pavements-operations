@@ -38,8 +38,8 @@ async function handlePUT(request:Request){try{
  return Response.json({saved:true});
  }catch(e){if(e instanceof z.ZodError)return Response.json({error:'Invalid invoice fields'},{status:400});return authError(e);}}
 
-export const GET=withActor(handleGET,'read');
+export const GET=withActor(handleGET,'read','commercial');
 
-export const POST=withActor(handlePOST,'write');
+export const POST=withActor(handlePOST,'write','commercial');
 
-export const PUT=withActor(handlePUT,'write');
+export const PUT=withActor(handlePUT,'write','commercial');

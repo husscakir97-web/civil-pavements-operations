@@ -1,11 +1,11 @@
 import {fieldRecord,preserveFieldPricing} from '@/lib/field-access';
 import {withActor} from '@/lib/platform/route';
 import {requireActor} from '@/lib/authz';
-import { DEFAULT_ORGANISATION_ID as ORG, requireEstimateDb, jsonError } from '@/lib/estimates-db';
+import { currentOrganisationId as ORG, requireEstimateDb, jsonError } from '@/lib/estimates-db';
 import { initialField, incomplete, invalidField, type FieldData, type FieldRecord } from '@/lib/field';
 import type { DeliveryRecord } from '@/lib/planning';
 export const dynamic='force-dynamic';
-async function actor(request:Request) { const a=await requireActor(request,requireEstimateDb(),'field-read',true); return {id:a.userId,email:a.email,role:a.role,canSubmit:['admin','office','field'].includes(a.role),canAmend:['admin','office'].includes(a.role)}; }
+async function actor(request:Request) { const a=await requireActor(request,requireEstimateDb(),'field-read'); return {id:a.userId,email:a.email,role:a.role,canSubmit:['admin','office','field'].includes(a.role),canAmend:['admin','office'].includes(a.role)}; }
 async function record(shiftId:string):Promise<FieldRecord|null>{
  const r=await requireEstimateDb().prepare('SELECT * FROM field_records WHERE shift_id=? AND organisation_id=?').bind(shiftId,ORG()).first<Record<string,unknown>>();
  return r?{shiftId:String(r.shift_id),revision:Number(r.revision),status:String(r.status),data:JSON.parse(String(r.data)),plan:JSON.parse(String(r.plan)),job:JSON.parse(String(r.job)),updatedAt:String(r.updated_at)}:null;
@@ -49,6 +49,6 @@ async function handlePOST(request:Request){try{
  return Response.json({record:user.role==='field'?fieldRecord(saved):saved,user},{status:previous?200:201});
 }catch(e){console.error(e);if(String(e).includes('UNIQUE'))return jsonError('Another save completed first. Reload to reconcile your retained draft.',409);return jsonError('Save failed. Your draft has been retained on this device.',503);}}
 
-export const GET=withActor(handleGET,'field-read');
+export const GET=withActor(handleGET,'field-read','field');
 
-export const POST=withActor(handlePOST,'field');
+export const POST=withActor(handlePOST,'field','field');

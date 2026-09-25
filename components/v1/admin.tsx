@@ -3,6 +3,7 @@ import {useState} from 'react';
 import Link from 'next/link';
 import {Plus,Trash2} from 'lucide-react';
 import {api,useApi,useAction,useSession,ErrorState,Loading,Btn,Field,field,Section,Pill,dateText,EmptyState} from './kit';
+import {AiAdmin,BillingAdmin,ImsDraftAssist} from './ai';
 import {RegisterView} from './register-view';
 import {CompanyProfile} from './company';
 import {WorkspaceBrandSettings} from '@/components/workspace-brand';
@@ -73,13 +74,13 @@ export function ActivityLog({projectId}:{projectId?:string}){
 }
 
 export function AdminArea({sub,onNavigate}:{sub:string;onNavigate:(label:never)=>void}){
- const {can}=useSession();
+ const {can}=useSession();const [libraryTick,setLibraryTick]=useState(0);
  void onNavigate;
  if(sub==='Company')return <CompanyProfile/>;
  if(sub==='Rates')return <RatesAdmin/>;
- if(sub==='Company Library')return <RegisterView register="library" description="Reusable company knowledge. Tender returnables and project setup link to these items instead of duplicating them."/>;
+ if(sub==='Company Library')return <div className="grid gap-4"><RegisterView key={libraryTick} register="library" description="Reusable company knowledge. Tender returnables and project setup link to these items instead of duplicating them."/><ImsDraftAssist onApplied={()=>setLibraryTick(t=>t+1)}/></div>;
  if(sub==='Team & Permissions')return <TeamAdmin/>;
- if(sub==='Integrations')return can('org.admin')?<IntegrationsAdmin/>:<EmptyState title="Integrations are managed by administrators."/>;
+ if(sub==='Integrations')return can('org.admin')?<div className="grid gap-4"><IntegrationsAdmin/><AiAdmin/>{can('entitlements.manage')&&<BillingAdmin/>}</div>:<EmptyState title="Integrations are managed by administrators."/>;
  if(sub==='Settings')return <div className="grid gap-4"><WorkspaceBrandSettings/><EntitlementsAdmin/>{can('audit.view')&&<ActivityLog/>}</div>;
  return null;
 }

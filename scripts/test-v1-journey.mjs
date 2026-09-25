@@ -14,11 +14,35 @@ const db=await connect();
 const objects=new Map();
 const s3=httpServer(async(req,res)=>{const url=new URL(req.url,'http://localhost');const key=decodeURIComponent(url.pathname.replace(/^\/test-bucket\//,''));if(req.method==='PUT'){const chunks=[];for await(const c of req)chunks.push(c);objects.set(key,Buffer.concat(chunks));res.end();}else if(req.method==='GET'){if(!objects.has(key)){res.writeHead(404,{'Content-Type':'application/xml'});res.end('<Error><Code>NoSuchKey</Code></Error>');return;}res.end(objects.get(key));}else{objects.delete(key);res.end();}});
 await new Promise(r=>s3.listen(0,'127.0.0.1',r));
+// External-service fixtures: the official ABR JSON service shape, an Anthropic-compatible
+// messages endpoint and signed billing webhooks. Real providers are never called in tests.
+const suffix=Date.now().toString(36);
+let aiCalls=0;
+const ext=httpServer(async(req,res)=>{
+ const url=new URL(req.url,'http://localhost');
+ if(url.pathname==='/abr/AbnDetails.aspx'){
+  const abn=url.searchParams.get('abn');res.setHeader('Content-Type','text/javascript');
+  if(url.searchParams.get('guid')!=='fixture-guid')return res.end('callback({"Message":"The GUID entered is not recognised as a Registered Party"})');
+  if(abn==='51824753556')return res.end('callback({"Abn":"51824753556","AbnStatus":"Active","EntityName":"ALPHA CIVIL PTY LTD","EntityTypeName":"Australian Private Company","Gst":"2001-07-01","BusinessName":["Alpha Civil"],"AddressState":"NSW","AddressPostcode":"2000","Message":""})');
+  return res.end('callback({"Abn":"","Message":"No record found"})');
+ }
+ if(url.pathname==='/v1/messages'&&req.method==='POST'){
+  const chunks=[];for await(const c of req)chunks.push(c);const b=JSON.parse(Buffer.concat(chunks).toString());aiCalls++;
+  if(req.headers['x-api-key']!=='fixture-key'){res.writeHead(401);return res.end('{}');}
+  if(String(b.messages?.[0]?.content||'').includes('FAIL-PLEASE')){res.writeHead(500);return res.end('{}');}
+  const text=/Safe Work Method/.test(b.system)?JSON.stringify({steps:[{index:0,hazards:'Trench wall collapse',controls:'Bench or shore trenches deeper than 1.5 m; exclusion zone',confidence:0.8},{index:99,hazards:'ignored',controls:'ignored'}]})
+   :/integrated management system/.test(b.system)?JSON.stringify({title:'Traffic management procedure',content:'1. Purpose\n2. Scope [to confirm]\n3. Responsibilities',confidence:0.7}):'{}';
+  res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({model:b.model,content:[{type:'text',text}],usage:{input_tokens:120,output_tokens:40}}));
+ }
+ res.writeHead(404);res.end();
+});
+await new Promise(r=>ext.listen(0,'127.0.0.1',r));
+const EXT=`http://127.0.0.1:${ext.address().port}`,OPERATOR=`operator-${suffix}@example.invalid`,BILLING_SECRET='fixture-billing-secret';
+Object.assign(process.env,{ABR_GUID:'fixture-guid',ABR_BASE_URL:`${EXT}/abr/`,AI_ENABLED:'true',AI_PROVIDER:'anthropic',AI_API_KEY:'fixture-key',AI_MODEL:'fixture-model',AI_BASE_URL:EXT,BILLING_PROVIDER:'fixture-billing',BILLING_WEBHOOK_SECRET:BILLING_SECRET,PLATFORM_OPERATOR_EMAILS:OPERATOR});
 const PORT=33191,base=`http://localhost:${PORT}`;
 Object.assign(process.env,{R2_ENDPOINT:`http://127.0.0.1:${s3.address().port}`,R2_ACCESS_KEY_ID:'fixture',R2_SECRET_ACCESS_KEY:'fixture',R2_BUCKET_NAME:'test-bucket',EMAIL_ENABLED:'false',BETTER_AUTH_SECRET:'journey-test-secret-with-at-least-32-characters',BETTER_AUTH_URL:base});
 const app=spawn(process.execPath,['node_modules/next/dist/bin/next','start','-p',String(PORT),'--hostname','127.0.0.1'],{env:process.env,stdio:['ignore','pipe','pipe']});
 let appLog='';app.stdout.on('data',b=>appLog+=b);app.stderr.on('data',b=>appLog+=b);
-const suffix=Date.now().toString(36);
 let step='startup';
 try{
  for(let i=0;i<120;i++){try{if((await fetch(base+'/login')).ok)break;}catch{}if(i===119)throw new Error(appLog);await new Promise(r=>setTimeout(r,500));}
@@ -41,7 +65,7 @@ try{
  let profile=(await json(await call('/api/platform/onboarding','PUT',{legal_name:'Alpha Civil Pty Ltd',trading_name:'Alpha Civil',abn:'51 824 753 556',business_activities:['Civil construction','Drainage'],operating_regions:['NSW'],workforce_size:'21–50',onboarding_step:4,complete:true},A.cookie),200)).profile;
  assert.equal(profile.completed,true);assert.equal(profile.abn,'51824753556');assert.deepEqual(profile.business_activities,['Civil construction','Drainage']);
  ws=await json(await call('/api/workspace','GET',undefined,A.cookie),200);assert.equal(ws.onboarding.completed,true);assert.equal(ws.brand.companyName,'Alpha Civil');
- const abn=await json(await call('/api/platform/abn?abn=51824753556','GET',undefined,A.cookie),200);assert.equal(abn.valid,true);assert.equal(abn.registry.status,'not-configured','no fake registry lookup');
+ const abn=await json(await call('/api/platform/abn?abn=51824753556','GET',undefined,A.cookie),200);assert.equal(abn.valid,true);assert.equal(abn.registry,null,'the register is only queried on request');
  console.log('PASS A: signup, organisation + membership, beta entitlements, onboarding with ABN checksum, company profile, independent second organisation');
 
  // ---------------------------------------------------------------- Scenario B
@@ -317,5 +341,92 @@ try{
  const orgAudit=await json(await call('/api/platform/audit','GET',undefined,A.cookie),200);
  for(const e of ['estimate.approved','tender.submitted','tender.awarded','entitlement.changed','organisation.onboarding.completed'])assert(orgAudit.events.some(x=>x.event_type===e),'audit missing '+e);
  console.log('PASS entitlements (read-only, disabled 404, nav flag, data retained), closeout gate, closed-project write refusal, reopen with reason, audit trail');
+
+ // ---------------------------------------------------------------- Scenario R: role matrix (one member, role changed between checks)
+ step='R roles';
+ const R=await signup('role-r');
+ await db.execute('UPDATE users SET organisation_id=? WHERE id=?',[memberA.organisation_id,R.user.id]);
+ const as=async role=>db.execute('UPDATE users SET role=? WHERE id=?',[role,R.user.id]);
+ const expect=async(role,checks)=>{await as(role);for(const [method,path,status,body] of checks){const r=await call(path,method,body,R.cookie);assert.equal(r.status,status,`${role} ${method} ${path}: ${(await r.text()).slice(0,200)}`);}};
+ const noRates=async(role)=>{await as(role);const d=await json(await call('/api/delivery','GET',undefined,R.cookie),200);assert(!/"(rate|hourlyRate|approvedBudget|contractValue|materialCost)"/.test(JSON.stringify(d)),role+' sees no rates in the schedule');};
+ await expect('office',[['GET','/api/commercial/claims?projectId='+projectId,200],['GET','/api/team',403],['GET','/api/estimates/rates',200]]);
+ await expect('estimator',[['GET','/api/tenders/register',200],['GET','/api/estimates',200],['GET','/api/commercial/claims?projectId='+projectId,200],['GET','/api/operations/resources?kind=workers',200],['POST','/api/operations/resources',403,{action:'savePlant',plant:{name:'x',status:'Available'}}],['GET','/api/team',403],['POST','/api/estimates/approval',403,{estimateId,action:'approve'}]]);
+ await expect('scheduler',[['GET','/api/operations/resources?kind=workers',200],['GET','/api/commercial/claims?projectId='+projectId,403],['GET','/api/estimates',403],['GET','/api/tenders/register',403],['GET','/api/dockets',403]]);await noRates('scheduler');
+ const sched=await json(await call('/api/operations/resources?kind=workers','GET',undefined,R.cookie),200);assert(sched.workers.every(w=>!('hourly_rate' in w)),'scheduler never receives worker rates');
+ await expect('project_manager',[['GET',`/api/projects/control?id=${projectId}`,200],['GET','/api/commercial/claims?projectId='+projectId,200],['POST','/api/estimates/approval',403,{estimateId,action:'approve'}],['GET','/api/team',403],['GET','/api/tenders/register',200]]);
+ await expect('supervisor',[['GET','/api/field/today',200],['GET','/api/commercial/claims?projectId='+projectId,403],['GET','/api/dockets',403],['GET','/api/estimates',403]]);await noRates('supervisor');
+ await expect('accounts',[['GET','/api/commercial/claims?projectId='+projectId,200],['GET','/api/dockets',200],['GET','/api/tenders/register',403],['POST','/api/operations/resources',403,{action:'savePlant',plant:{name:'x',status:'Available'}}],['GET','/api/estimates',403]]);
+ await expect('read_only',[['GET','/api/projects',200],['GET','/api/registers/risks?parentId='+projectId,200],['POST','/api/registers/risks',403,{parentId:projectId,values:{title:'x'}}],['GET','/api/commercial/claims?projectId='+projectId,403],['POST','/api/field/today',403,{shiftId:shift.id,workDate:today}],['GET','/api/team',403]]);await noRates('read_only');
+ await as('estimator');
+ const sup=new FormData();sup.set('contextType','library');sup.set('supersedesId',insuranceDoc.id);sup.set('file',new File(['%PDF-1.4 v2'],'v2.pdf',{type:'application/pdf'}));
+ assert.equal((await call('/api/documents','POST',sup,R.cookie)).status,403,'only the uploader or a document approver can replace a document');
+ const supC=new FormData();supC.set('contextType','library');supC.set('supersedesId',insuranceDoc.id);supC.set('file',new File(['%PDF-1.4 v2'],'v2.pdf',{type:'application/pdf'}));
+ assert.equal((await call('/api/documents','POST',supC,C.cookie)).status,404,'field cannot see or replace office documents');
+ await json(await call('/api/team','PATCH',{userId:R.user.id,expected:{role:'estimator',active:true},next:{role:'accounts',active:true}},A.cookie),200,'admin assigns a V1 role');
+ await json(await call('/api/team','PATCH',{userId:A.user.id,expected:{role:'admin',active:true},next:{role:'read_only',active:true}},A.cookie),409,'last admin protected');
+ console.log('PASS R roles: office, estimator, scheduler, project manager, supervisor, accounts, read-only gates; money hidden from non-commercial roles; document supersede authorisation; role change + last-admin protection');
+
+ // ---------------------------------------------------------------- Scenario H: ABN register, AI orchestration, billing
+ step='H ABN';
+ let reg1=await json(await call('/api/platform/abn?abn=51824753556&lookup=1','GET',undefined,A.cookie),200);assert.equal(reg1.registry.status,'found');assert.equal(reg1.registry.record.entityName,'ALPHA CIVIL PTY LTD');
+ const nf=await json(await call('/api/platform/abn','POST',{abn:'53004085616'},A.cookie),404);assert.equal(nf.code,'ABN_NOT_FOUND');
+ await json(await call('/api/platform/abn','POST',{abn:'51824753556'},C.cookie),403,'only admins confirm ABNs');
+ const conf=await json(await call('/api/platform/abn','POST',{abn:'51824753556'},A.cookie),200);assert.equal(conf.record.source,'ABR');
+ let prof=(await json(await call('/api/platform/onboarding','GET',undefined,A.cookie),200)).profile;
+ assert.deepEqual([prof.abn_verification,prof.abn_lookup_source,prof.abn_entity_name,prof.gst_registered_from,prof.legal_name],['abr-verified','ABR','ALPHA CIVIL PTY LTD','2001-07-01','ALPHA CIVIL PTY LTD']);assert(prof.abn_lookup_at);
+ await json(await call('/api/platform/onboarding','PUT',{abn:'53 004 085 616'},A.cookie),200);
+ prof=(await json(await call('/api/platform/onboarding','GET',undefined,A.cookie),200)).profile;assert.equal(prof.abn_verification,'format-checked','changing the ABN clears the register confirmation');assert.equal(prof.abn_lookup_at,null);
+ step='H AI';
+ let st=await json(await call('/api/ai','GET',undefined,A.cookie),200);
+ assert(st.installation.every(g=>g.ok),'installation ready');assert.equal(st.organisationEnabled,false,'AI is off for an organisation until an admin switches it on');
+ await json(await call('/api/hseq/swms','POST',{action:'revise',id:sw.swmsId,reason:'Add controls'},A.cookie),200);
+ const gated=await json(await call('/api/ai','POST',{action:'swms-assist',swmsId:sw.swmsId},A.cookie),403);assert.equal(gated.code,'AI_UNAVAILABLE');assert(gated.gates.some(g=>g.key==='organisation'&&!g.ok));
+ assert.equal(aiCalls,0,'no provider call while gated');
+ await json(await call('/api/ai','PUT',{enabled:true},A.cookie),422,'switching on requires acknowledgement');
+ await json(await call('/api/ai','PUT',{enabled:true,acknowledged:true},C.cookie),403);
+ await json(await call('/api/ai','PUT',{enabled:true,acknowledged:true},A.cookie),200);
+ assert.equal((await call('/api/ai','POST',{action:'swms-assist',swmsId:sw.swmsId},C.cookie)).status,403,'field role cannot run AI');
+ const aiRun=await json(await call('/api/ai','POST',{action:'swms-assist',swmsId:sw.swmsId},A.cookie),200);
+ assert.equal(aiRun.replay,false);assert.equal(aiRun.suggestions.length,1,'out-of-range step suggestions are discarded');assert.equal(aiCalls,1);
+ const aiAgain=await json(await call('/api/ai','POST',{action:'swms-assist',swmsId:sw.swmsId},A.cookie),200);assert.equal(aiAgain.replay,true);assert.equal(aiCalls,1,'idempotent: the provider is not called (or billed) twice');
+ const [[ledger]]=await db.execute("SELECT status,input_tokens,output_tokens,provider,model FROM ai_usage_ledger WHERE organisation_id=? AND feature='swms.assist'",[memberA.organisation_id]);assert.deepEqual([ledger.status,ledger.input_tokens,ledger.output_tokens,ledger.provider,ledger.model],['completed',120,40,'anthropic','fixture-model']);
+ const sugg=aiRun.suggestions[0];assert.equal(sugg.status,'suggested');assert(sugg.sourceLocation&&sugg.confidence===0.8&&sugg.extractedAt,'source-linked with confidence and time');
+ await json(await call('/api/ai','POST',{action:'decide',id:sugg.id,decision:'accepted'},A.cookie),200);
+ swms=await json(await call('/api/hseq/swms?id='+sw.swmsId,'GET',undefined,A.cookie),200);
+ const draftRev=swms.revisions.find(r=>r.id===swms.swms.currentRevisionId);assert.equal(draftRev.status,'draft','AI never approves or issues');assert.match(draftRev.content.workSteps[0].controls,/shore trenches/);
+ await json(await call('/api/ai','POST',{action:'decide',id:sugg.id,decision:'accepted'},A.cookie),409,'a suggestion is decided once');
+ const imsAi=await json(await call('/api/ai','POST',{action:'ims-draft',title:'Traffic management procedure',category:'Procedure',brief:'Night works on arterial roads'},A.cookie),200);
+ const libDraft=await json(await call('/api/ai','POST',{action:'decide',id:imsAi.suggestions[0].id,decision:'accepted'},A.cookie),200);
+ const [[libRow]]=await db.execute('SELECT status,title FROM library_items WHERE id=?',[libDraft.appliedEntityId]);assert.deepEqual([libRow.status,libRow.title],['draft','Traffic management procedure'],'IMS draft lands as Draft');
+ const failed=await json(await call('/api/ai','POST',{action:'ims-draft',title:'FAIL-PLEASE',category:'Procedure',brief:'x'},A.cookie),502);assert.equal(failed.code,'AI_FAILED');
+ const [[failRow]]=await db.execute("SELECT status,error FROM ai_usage_ledger WHERE organisation_id=? AND feature='ims.draft' AND status='failed'",[memberA.organisation_id]);assert(failRow,'provider failure recorded in the ledger');
+ assert.equal((await call('/api/ai','POST',{action:'tender-requirements',tenderId},A.cookie)).status,409,'no suggestions for a tender that has been awarded');
+ const usageList=await json(await call('/api/ai?usage=1','GET',undefined,A.cookie),200);assert(usageList.usage.length>=3);
+ await json(await call('/api/ai','PUT',{enabled:false},A.cookie),200);
+ assert.equal((await json(await call('/api/ai','POST',{action:'swms-assist',swmsId:sw.swmsId},A.cookie),403)).code,'AI_UNAVAILABLE','switching off takes effect immediately');
+ step='H billing';
+ const {createHmac}=await import('node:crypto');
+ const signed=(event,secret=BILLING_SECRET,t=Math.floor(Date.now()/1000))=>{const raw=JSON.stringify(event);return fetch(base+'/api/billing/webhook',{method:'POST',headers:{'Content-Type':'application/json','x-billing-signature':`t=${t},v1=${createHmac('sha256',secret).update(`${t}.${raw}`).digest('hex')}`},body:raw});};
+ const orgA=memberA.organisation_id,subEvent=(id,type,data={})=>({id,type,data:{organisationId:orgA,customerId:'cus_A',subscriptionId:'sub_A',...data}});
+ assert.equal((await fetch(base+'/api/billing/webhook',{method:'POST',body:JSON.stringify(subEvent('evt_x','subscription.created',{status:'active',modules:[]}))})).status,401,'unsigned webhook refused');
+ assert.equal((await signed(subEvent('evt_forged','subscription.created',{status:'active',modules:[]}),'wrong-secret')).status,401,'forged signature refused');
+ const [[noForged]]=await db.execute("SELECT COUNT(*) AS n FROM billing_events WHERE event_id IN ('evt_x','evt_forged')");assert.equal(Number(noForged.n),0,'refused deliveries are never stored');
+ const modulesOn=['pipeline','estimating','projects','ims','operations','field','dockets','commercial','ai'];
+ await json(await signed(subEvent('evt_1','subscription.created',{planCode:'provider-plan-a',status:'active',modules:modulesOn})),200);
+ const dupBilling=await json(await signed(subEvent('evt_1','subscription.created',{planCode:'provider-plan-a',status:'active',modules:modulesOn})),200);assert.equal(dupBilling.duplicate,true,'duplicate delivery acknowledged, not re-applied');
+ ws=await json(await call('/api/workspace','GET',undefined,A.cookie),200);assert.equal(ws.entitlements.reports,'read_only','modules outside the plan become read-only');assert.equal(ws.entitlements.commercial,'active');
+ await json(await signed(subEvent('evt_2','payment.failed')),200);
+ let billing=await json(await call('/api/billing','GET',undefined,A.cookie),200);assert.equal(billing.subscriptions[0].status,'past_due');assert(billing.subscriptions[0].last_payment_failed_at);
+ ws=await json(await call('/api/workspace','GET',undefined,A.cookie),200);assert.equal(ws.entitlements.commercial,'active','payment failure keeps access during the grace period');
+ assert.equal((await signed({id:'evt_bad',type:'subscription.updated',data:{organisationId:memberB.organisation_id,customerId:'cus_A',subscriptionId:'sub_B'}})).status,422,'a customer cannot be moved to another organisation');
+ await json(await signed(subEvent('evt_3','subscription.cancelled')),200);
+ ws=await json(await call('/api/workspace','GET',undefined,A.cookie),200);assert(Object.entries(ws.entitlements).filter(([m])=>m!=='core').every(([,v])=>v==='read_only'),'cancellation → read-only, never deleted');
+ const [[claimsKept]]=await db.execute('SELECT COUNT(*) AS n FROM progress_claims WHERE organisation_id=?',[orgA]);assert(Number(claimsKept.n)>0);
+ await json(await call('/api/billing','POST',{organisationId:orgA,action:'activate',reference:'INV-2026-001',planCode:'manual-agreement',modules:[...modulesOn,'reports']},A.cookie),403,'an organisation admin cannot grant paid modules');
+ const Op=await signup('operator');assert.equal(Op.email,OPERATOR);
+ await json(await call('/api/billing','POST',{organisationId:orgA,action:'activate',reference:'INV-2026-001',planCode:'manual-agreement',modules:[...modulesOn,'reports']},Op.cookie),200,'platform operator records a manual agreement');
+ ws=await json(await call('/api/workspace','GET',undefined,A.cookie),200);assert.equal(ws.entitlements.reports,'active');assert.equal(ws.entitlements.commercial,'active');
+ billing=await json(await call('/api/billing','GET',undefined,A.cookie),200);assert(billing.events.length>=3);assert.equal(billing.configured,true);
+ console.log('PASS H: ABN register lookup → confirm → source/time recorded, change clears confirmation; AI five gates, acknowledgement, idempotent ledger (no second provider call), source-linked suggestions, drafts only, failure recorded, switch-off immediate; billing signature/forgery refusal, idempotent events, plan → entitlements, payment grace, cancellation read-only, cross-org customer refusal, manual path operator-only');
  console.log('PASS V1 journey complete');
-}catch(error){console.error('FAILED at',step);console.error(appLog.slice(-4000));throw error;}finally{app.kill();s3.close();await db.end();}
+}catch(error){console.error('FAILED at',step);console.error(appLog.slice(-4000));throw error;}finally{app.kill();s3.close();ext.close();await db.end();}

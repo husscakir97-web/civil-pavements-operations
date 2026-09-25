@@ -3,6 +3,7 @@ import {useState} from 'react';
 import {Download,FileSignature,Plus,Trash2} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,dateText,Pill} from './kit';
+import {AiAssist} from './ai';
 import {useCachedApi,useOffline,requestId,isNetworkFailure} from './offline';
 import {allowedTransitions} from '@/lib/platform/workflow';
 import {HIGH_RISK_WORK,PPE_OPTIONS,type SwmsContent} from '@/lib/v1/swms-content';
@@ -75,6 +76,7 @@ function SwmsDetail({id,shiftId,onChanged}:{id:string;shiftId?:string;onChanged:
    }}><FileSignature aria-hidden className="size-4"/>I have read and understood this SWMS</Btn>}
   </div>
   {transitions.length>0&&!editing&&<div className="grid gap-2 rounded-lg border bg-slate-50 p-3"><textarea className={`${field} min-h-14`} placeholder="Note (recorded in the audit trail)" value={note} onChange={e=>setNote(e.target.value)}/><div className="flex flex-wrap gap-2">{transitions.map(t=><Btn key={t.to} variant="secondary" busy={busy} onClick={()=>void act({action:'transition',to:t.to,note:note||undefined})}>{t.label}</Btn>)}</div></div>}
+  {role!=='field'&&shown.status==='draft'&&!editing&&<AiAssist feature="swms.assist" title="Suggest hazards and controls" description="Proposes hazards and controls for each work step using the hierarchy of controls. Accepted suggestions are added to this draft only; review, approval and issue remain with people." entityType="swms" entityId={id} runBody={{action:'swms-assist',swmsId:id}} onApplied={done}/>}
   <ErrorState error={actionError}/>
   {queued&&<p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Your acknowledgement is saved on this device and will be sent when you are back online. If the SWMS is revised before then, you will be asked to read the new revision.</p>}
   {cachedAt&&<p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-900">Offline copy saved {new Date(cachedAt).toLocaleString('en-AU')}.</p>}

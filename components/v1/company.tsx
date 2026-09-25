@@ -2,7 +2,7 @@
 // Organisation onboarding (progressive, skippable) and the company profile it creates.
 import {useState} from 'react';
 import {Check} from 'lucide-react';
-import {api,useApi,useAction,useSession,ErrorState,Loading,Btn,Field,FieldGroup,field,Section,PageHeader} from './kit';
+import {api,useApi,useAction,useSession,ErrorState,Loading,Btn,Field,FieldGroup,field,Section,PageHeader,dateText} from './kit';
 import {BUSINESS_ACTIVITIES,REGIONS,WORKFORCE,PROJECT_SIZES,TENDERING,HSEQ_MATURITY,ESTIMATING,ONBOARDING_STEPS} from '@/lib/v1/onboarding';
 
 type Profile=Record<string,unknown>&{completed?:boolean;onboarding_step?:number};
@@ -14,12 +14,24 @@ function Chips({options,value,onChange}:{options:readonly string[];value:string[
 }
 function Choice({options,value,onChange}:{options:readonly string[];value:unknown;onChange:(v:string)=>void}){return <select className={field} value={String(value||'')} onChange={e=>onChange(e.target.value)}><option value="">Choose…</option>{options.map(o=><option key={o}>{o}</option>)}</select>;}
 
+type Registry={status:'not-configured'|'invalid'|'not-found'|'error';message:string}|{status:'found';record:{abn:string;entityName:string;entityType:string;abnStatus:string;gstRegisteredFrom:string|null;businessNames:string[];lookedUpAt:string}};
+/** Official ABN Register confirmation: look up, show what the register says, and only save when an admin confirms. */
+function AbnVerify({abn,onVerified}:{abn:string;onVerified:()=>void}){
+ const {busy,error,run}=useAction();const [reg,setReg]=useState<Registry|null>(null);
+ return <div className="mb-4 grid gap-2 rounded-lg border bg-slate-50 p-3 text-sm">
+  <div className="flex flex-wrap items-center gap-2"><span>Confirm this ABN against the Australian Business Register.</span><Btn variant="secondary" busy={busy} onClick={()=>void run(()=>api<{registry:Registry}>(`/api/platform/abn?abn=${abn}&lookup=1`),r=>setReg(r.registry))}>Look up on the ABN Register</Btn></div>
+  {reg&&reg.status!=='found'&&<p role="status" className={reg.status==='not-configured'?'text-slate-600':'text-red-700'}>{reg.message}</p>}
+  {reg?.status==='found'&&<div className="grid gap-1 rounded border bg-white p-3"><p><strong>{reg.record.entityName}</strong> · {reg.record.entityType}</p><p>ABN status: {reg.record.abnStatus} · {reg.record.gstRegisteredFrom?`GST registered from ${dateText(reg.record.gstRegisteredFrom)}`:'Not registered for GST'}</p>{reg.record.businessNames.length>0&&<p className="text-xs text-slate-500">Business names: {reg.record.businessNames.join(', ')}</p>}<p className="text-xs text-slate-500">Source: ABN Lookup (abr.business.gov.au), retrieved {new Date(reg.record.lookedUpAt).toLocaleString('en-AU')}</p>
+   <div className="flex gap-2"><Btn busy={busy} onClick={()=>void run(()=>api('/api/platform/abn',{method:'POST',body:{abn,useLegalName:true}}),onVerified)}>Confirm and use these details</Btn><Btn variant="ghost" onClick={()=>setReg(null)}>Not my business</Btn></div></div>}
+  <ErrorState error={error}/>
+ </div>;
+}
 function Step({step,draft,set,abn}:{step:number;draft:Profile;set:(k:string,v:unknown)=>void;abn:{valid:boolean|null;message:string}}){
  const t=(k:string)=>String(draft[k]??'');
  if(step===0)return <div className="grid gap-4 sm:grid-cols-2">
   <Field label="Legal business name" required><input className={field} value={t('legal_name')} onChange={e=>set('legal_name',e.target.value)} autoComplete="organization"/></Field>
   <Field label="Trading name"><input className={field} value={t('trading_name')} onChange={e=>set('trading_name',e.target.value)}/></Field>
-  <Field label="ABN" hint={abn.message||'11 digits. We check the ATO checksum; registry lookup is not connected yet.'}><input className={field} inputMode="numeric" value={t('abn')} onChange={e=>set('abn',e.target.value)} aria-invalid={abn.valid===false}/></Field>
+  <Field label="ABN" hint={abn.message||'11 digits. We check the ATO checksum now; you can confirm it against the ABN Register from the company profile.'}><input className={field} inputMode="numeric" value={t('abn')} onChange={e=>set('abn',e.target.value)} aria-invalid={abn.valid===false}/></Field>
   <div/>
   <Field label="Registered address"><textarea className={`${field} min-h-20`} value={t('registered_address')} onChange={e=>set('registered_address',e.target.value)}/></Field>
   <Field label="Operating address"><textarea className={`${field} min-h-20`} value={t('operating_address')} onChange={e=>set('operating_address',e.target.value)}/></Field>
@@ -84,6 +96,7 @@ export function CompanyProfile(){
  if(editing)return <OnboardingForm initial={{...p,onboarding_step:0}} onDone={()=>{setEditing(false);refresh();}}/>;
  const row=(label:string,v:unknown)=><div className="grid gap-0.5 border-b py-2 text-sm sm:grid-cols-3"><dt className="text-slate-500">{label}</dt><dd className="sm:col-span-2">{Array.isArray(v)?(v.length?v.join(', '):<span className="text-slate-400">Not provided</span>):v?String(v):<span className="text-slate-400">Not provided</span>}</dd></div>;
  return <Section title="Company profile" description={p.completed?'Onboarding complete':'Onboarding not finished — complete the remaining steps when ready.'} actions={data!.canEdit&&<Btn variant="secondary" onClick={()=>setEditing(true)}>Edit profile</Btn>}>
-  <dl>{row('Legal name',p.legal_name)}{row('Trading name',p.trading_name)}{row('ABN',p.abn?`${String(p.abn).replace(/(\d{2})(\d{3})(\d{3})(\d{3})/,'$1 $2 $3 $4')} · checksum valid · registry not verified`:null)}{row('Registered address',p.registered_address)}{row('Operating address',p.operating_address)}{row('Business activities',p.business_activities)}{row('Operating regions',p.operating_regions)}{row('Disciplines',p.disciplines)}{row('Workforce',p.workforce_size)}{row('Typical project size',p.typical_project_size)}{row('Plant and equipment',p.plant_summary)}{row('Key clients',p.key_clients)}{row('Certifications',p.certifications)}{row('Tendering activity',p.tendering_activity)}{row('HSEQ maturity',p.hseq_maturity)}{row('Estimating approach',p.estimating_approach)}</dl>
+  {Boolean(data!.canEdit&&p.abn&&p.abn_verification!=='abr-verified')&&<AbnVerify abn={String(p.abn)} onVerified={refresh}/>}
+  <dl>{row('Legal name',p.legal_name)}{row('Trading name',p.trading_name)}{row('ABN',p.abn?`${String(p.abn).replace(/(\d{2})(\d{3})(\d{3})(\d{3})/,'$1 $2 $3 $4')} · checksum valid · ${p.abn_verification==='abr-verified'?`confirmed on the ABN Register${p.abn_lookup_at?` ${dateText(String(p.abn_lookup_at).slice(0,10))}`:''}: ${p.abn_entity_name||''}${p.abn_status?` (${p.abn_status})`:''}${p.gst_registered_from?`, GST registered from ${dateText(p.gst_registered_from)}`:', not registered for GST'}`:'not yet confirmed on the ABN Register'}`:null)}{row('Registered address',p.registered_address)}{row('Operating address',p.operating_address)}{row('Business activities',p.business_activities)}{row('Operating regions',p.operating_regions)}{row('Disciplines',p.disciplines)}{row('Workforce',p.workforce_size)}{row('Typical project size',p.typical_project_size)}{row('Plant and equipment',p.plant_summary)}{row('Key clients',p.key_clients)}{row('Certifications',p.certifications)}{row('Tendering activity',p.tendering_activity)}{row('HSEQ maturity',p.hseq_maturity)}{row('Estimating approach',p.estimating_approach)}</dl>
  </Section>;
 }

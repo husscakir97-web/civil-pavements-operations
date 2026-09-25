@@ -36,6 +36,8 @@ export const PUT=api({permission:'admin',module:'core',capability:'org.admin'},a
   const before=await one('SELECT * FROM organisation_profiles WHERE organisation_id=? FOR UPDATE',[actor.organisationId],conn);
   const values:Record<string,unknown>={};
   for(const [k,v] of Object.entries(b)){if(k==='complete'||v===undefined)continue;values[k]=(LIST_FIELDS as readonly string[]).includes(k)||k==='risk_matrix'?(v===null?null:JSON.stringify(v)):v;}
+  // A changed ABN loses its register confirmation until it is looked up again.
+  if(values.abn!==undefined&&values.abn!==before?.abn)Object.assign(values,{abn_verification:'format-checked',abn_entity_name:null,abn_entity_type:null,abn_status:null,gst_registered_from:null,abn_lookup_source:null,abn_lookup_at:null});
   const merged={...before,...values};
   if(b.complete){if(!String(merged.legal_name||'').trim())fail(422,'Enter your legal business name to finish onboarding.');values.onboarding_completed_at=before?.onboarding_completed_at||nowIso();}
   const now=nowIso();

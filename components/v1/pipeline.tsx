@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic';
 import {ArrowRight,Plus,Trophy} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,Section,PageHeader,NextAction,Progress,Tabs,Stat,money,dateText,Pill} from './kit';
+import {AiAssist} from './ai';
 import {RegisterView,usePeople,DocumentInput} from './register-view';
 import {EstimateApprovalPanel} from './estimating';
 import {useNav} from './nav';
@@ -110,13 +111,26 @@ function IntakeTab({t,closed,onChanged}:{t:Tender;closed:boolean;onChanged:()=>v
 }
 
 function RequirementsTab({t,closed,onChanged}:{t:Tender;closed:boolean;onChanged:()=>void}){
- const {can}=useSession();const {busy,error,run}=useAction();const [message,setMessage]=useState('');
+ const {can}=useSession();const [tick,setTick]=useState(0);const {busy,error,run}=useAction();const [message,setMessage]=useState('');
  return <div className="grid gap-4">
   {!closed&&can('pipeline.edit')&&<Section title="Suggested requirements from documents" description="Reads fields extracted from the tender documents on the Intake tab. Suggestions stay Suggested until a person confirms or rejects each one; manual entry always works.">
    <div className="flex flex-wrap items-center gap-3"><Btn variant="secondary" busy={busy} onClick={()=>void run(()=>api<{created:number}>('/api/tenders/workspace',{method:'POST',body:{action:'suggest-requirements',id:t.id}}),r=>{setMessage(r.created?`${r.created} suggestion${r.created===1?'':'s'} added for review.`:'No new suggestions. Process documents on the Intake tab first, or add requirements manually.');onChanged();})}>Create suggestions from documents</Btn>{message&&<span role="status" className="text-sm text-slate-600">{message}</span>}</div><div className="mt-2"><ErrorState error={error}/></div>
   </Section>}
-  <RegisterView register="requirements" parentId={t.id} onChanged={onChanged} hideCreate={closed} description="Mandatory requirements must be complete (or not applicable) before submission."/>
+  {!closed&&<AiAssist feature="tender.requirements" title="AI requirement suggestions" description="Reads the text of the tender documents on the Intake tab and proposes requirements with the page or clause they came from. Accepted suggestions are added as Suggested requirements for a person to confirm." entityType="tender" entityId={t.id} runBody={{action:'tender-requirements',tenderId:t.id}} onApplied={()=>{setTick(x=>x+1);onChanged();}}/>}
+  <RegisterView key={tick} register="requirements" parentId={t.id} onChanged={onChanged} hideCreate={closed} description="Mandatory requirements must be complete (or not applicable) before submission."/>
+  {!closed&&<ResponseAssist tenderId={t.id} onApplied={()=>setTick(x=>x+1)}/>}
  </div>;
+}
+
+/** Non-price response drafting from the Company Library, one requirement at a time. */
+function ResponseAssist({tenderId,onApplied}:{tenderId:string;onApplied:()=>void}){
+ const {data}=useApi<{records:Array<{id:string;title:string;category:string|null;status:string}>}>(`/api/registers/requirements?parentId=${tenderId}`);
+ const options=(data?.records||[]).filter(r=>!['complete','not_applicable','rejected'].includes(r.status)&&r.category!=='commercial');
+ const [id,setId]=useState('');
+ const chosen=options.find(o=>o.id===id)?.id||options[0]?.id;
+ if(!chosen)return null;
+ return <AiAssist key={chosen} feature="response.draft" title="Draft a non-price response" description="Drafts a response from your current Company Library entries only. Pricing and commercial requirements are excluded. Accepting puts the draft in the requirement's response for you to edit and complete." entityType="requirement" entityId={chosen} runBody={{action:'draft-response',requirementId:chosen}} onApplied={onApplied}
+  extra={<Field label="Requirement"><select className={field} value={chosen} onChange={e=>setId(e.target.value)}>{options.map(o=><option key={o.id} value={o.id}>{o.title.slice(0,80)}</option>)}</select></Field>}/>;
 }
 
 const BID_FIELDS:Array<[string,string]>=[['strategic_fit','Strategic fit'],['capacity','Capacity'],['capability','Capability'],['client_assessment','Client'],['location_assessment','Project location'],['contract_risks','Contract risks'],['programme','Programme'],['resources','Resources'],['commercial_risks','Major commercial risks'],['hseq_risks','Major HSEQ risks'],['competition','Competition (where known)']];

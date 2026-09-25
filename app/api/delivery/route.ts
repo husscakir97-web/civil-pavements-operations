@@ -3,7 +3,7 @@ import {withActor} from '@/lib/platform/route';
 import type { Database } from '@/lib/platform/database';
 import { imsBlockers } from '@/lib/ims-readiness';
 import { requireActor } from '@/lib/authz';
-import { currentOrganisationId as ORG, requireEstimateDb, safeJson, jsonError } from '@/lib/estimates-db';
+import { currentOrganisationId, currentOrganisationId as ORG, requireEstimateDb, safeJson, jsonError } from '@/lib/estimates-db';
 import { CHECKS, SHIFT_STATUSES, mergeJob, shiftWarnings, type DeliveryRecord, type Meta } from '@/lib/planning';
 export const dynamic = 'force-dynamic';
 const tables = ['jobs','shifts','workers','crews','plant','suppliers','subcontractors'] as const;
@@ -35,6 +35,8 @@ async function handlePOST(request:Request) {
       if(!SHIFT_STATUSES.includes(record.status)) return jsonError('Invalid shift status.');
       if(!/^\d{4}-\d{2}-\d{2}$/.test(String(metadata.date)) || !/^\d{2}:\d{2}$/.test(String(metadata.start)) || !/^\d{2}:\d{2}$/.test(String(metadata.finish))) return jsonError('Date, start and finish are required.');
       const jobs=await load(db,'jobs'); if(!jobs.some(j=>j.id===metadata.jobId)) return jsonError('Select an existing job.');
+      const stage=await db.prepare('SELECT stage FROM jobs WHERE organisation_id=? AND id=?').bind(currentOrganisationId(),String(metadata.jobId)).first<{stage:string|null}>();
+      if(stage?.stage==='closed') return jsonError('This project is closed. Reopen it before scheduling work.',409);
       const resources=(await Promise.all(tables.slice(2).map(t=>load(db,t)))).flat();
       warnings=shiftWarnings(saved,jobs,await load(db,'shifts'),resources);
       if (['Ready','In Progress'].includes(record.status)) warnings.push(...await imsBlockers(db,ORG(),String(metadata.jobId)));

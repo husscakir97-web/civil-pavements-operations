@@ -20,7 +20,8 @@
     "data:import": "node --env-file-if-exists=.env scripts/import-data.mjs",
     "data:attach-admin": "node --env-file-if-exists=.env scripts/attach-admin.mjs",
     "test:mysql": "node --env-file-if-exists=.env scripts/test-mysql.mjs",
-    "test:fresh": "node --env-file-if-exists=.env scripts/test-fresh-start.mjs"
+    "test:fresh": "node --env-file-if-exists=.env scripts/test-fresh-start.mjs",
+    "test:v1": "node --env-file-if-exists=.env scripts/test-v1-journey.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

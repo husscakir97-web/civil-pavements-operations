@@ -201,7 +201,7 @@ async function handlePUT(request: Request) {
     if ((record.status === "approved" || previous.status === "approved") && record.status !== previous.status && !can(actor.role, "docket.approve")) return jsonError("Only an authorised office user can approve or unapprove dockets.", 403);
     if (["included_claim", "invoiced"].includes(record.status)) return jsonError("Dockets are marked claimed by the claims workflow, not by editing.", 409);
     // SEAM: approved docket → actual cost (idempotent); leaving approved reverses unclaimed cost.
-    const seam = record.status === "approved" || previous.status === "approved" ? await docketCostStatements(id, record.status) : { statements: [], posted: 0, message: null };
+    const seam = record.status === "approved" || previous.status === "approved" ? await docketCostStatements(id, record.status, { docket_no: record.docketNo, work_date: record.workDate, amount: record.amount, quantity: record.quantity, quantity_unit: record.quantityUnit, labour_hours: record.labourHours, line_items: JSON.stringify(record.lineItems ?? []), links: JSON.stringify(record.links ?? {}), notes: record.notes }) : { statements: [], posted: 0, message: null };
     const update = db
       .prepare(
         `UPDATE dockets SET

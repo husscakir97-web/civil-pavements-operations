@@ -58,7 +58,7 @@ export async function listSwms(projectId?:string|null){
 
 export async function getSwms(id:string){
  const a=actor(),s=await loadSwms(id);
- const revisions=await query('SELECT id,revision_number,status,origin,change_reason,submitted_by,submitted_at,approved_by,approved_at,issued_by,issued_at,superseded_at,created_at,content FROM swms_revisions WHERE organisation_id=? AND swms_id=? ORDER BY revision_number DESC',[a.organisationId,id]);
+ const revisions=await query('SELECT id,revision_number,status,origin,change_reason,submitted_by,submitted_at,approved_by,approved_at,issued_by,issued_at,superseded_at,created_at,updated_at,content FROM swms_revisions WHERE organisation_id=? AND swms_id=? ORDER BY revision_number DESC',[a.organisationId,id]);
  if(a.role==='field'&&!s.issued_revision_id)fail(404,'SWMS not found.');
  const visible=a.role==='field'?revisions.filter(r=>r.id===s.issued_revision_id):revisions;
  const acks=s.issued_revision_id?await query('SELECT worker_name,user_id,acknowledged_at,shift_id FROM swms_acknowledgements WHERE organisation_id=? AND swms_revision_id=? ORDER BY acknowledged_at',[a.organisationId,s.issued_revision_id]):[];
@@ -147,9 +147,11 @@ export async function acknowledgeSwms(id:string,shiftId?:string|null){
   if(!s.issued_revision_id)fail(409,'This SWMS has not been issued to site.');
   if(shiftId&&!await one('SELECT id FROM shifts WHERE organisation_id=? AND id=?',[a.organisationId,shiftId],conn))fail(404,'Shift not found.');
   const now=nowIso();
+  const existing=await one('SELECT id FROM swms_acknowledgements WHERE organisation_id=? AND swms_revision_id=? AND user_id=?',[a.organisationId,s.issued_revision_id,a.userId],conn);
+  if(existing)return {acknowledged:true,revisionId:s.issued_revision_id,alreadyAcknowledged:true};
   const inserted=await exec('INSERT INTO swms_acknowledgements (id,organisation_id,swms_id,swms_revision_id,user_id,worker_name,shift_id,acknowledged_at) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id',[uuid(),a.organisationId,id,s.issued_revision_id,a.userId,(a.name||a.email).slice(0,160),shiftId||null,now],conn);
-  if(inserted===1)await audit({event:'swms.acknowledged',entityType:'swms',entityId:id,projectId:s.project_id,summary:`${a.name||a.email} acknowledged the issued SWMS`,after:{revisionId:s.issued_revision_id,shiftId}},conn);
-  return {acknowledged:true,revisionId:s.issued_revision_id,alreadyAcknowledged:inserted!==1};
+  if(inserted)await audit({event:'swms.acknowledged',entityType:'swms',entityId:id,projectId:s.project_id,summary:`${a.name||a.email} acknowledged the issued SWMS`,after:{revisionId:s.issued_revision_id,shiftId}},conn);
+  return {acknowledged:true,revisionId:s.issued_revision_id,alreadyAcknowledged:false};
  });
 }
 

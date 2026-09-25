@@ -1,0 +1,256 @@
+// V1 end-to-end business journey against the PRODUCTION server, real Better Auth
+// sessions and MySQL (database name must end in _test), with a local S3 fixture.
+// Scenarios: A new organisation · B win work · C prepare · D deliver · E money ·
+// F field permissions · G tenant attack · plus entitlements, closeout and audit.
+// Run after `npm run build`: npm run test:v1
+import assert from 'node:assert/strict';
+import {createServer as httpServer} from 'node:http';
+import {spawn} from 'node:child_process';
+import {connect} from './mysql-config.mjs';
+if(!process.env.MYSQL_DATABASE?.endsWith('_test'))throw new Error('MYSQL_DATABASE must name a disposable database ending in _test');
+const run=(file,extra={})=>new Promise((resolve,reject)=>{const child=spawn(process.execPath,[file],{env:{...process.env,...extra},stdio:['ignore','pipe','pipe']});let log='';child.stdout.on('data',b=>log+=b);child.stderr.on('data',b=>log+=b);child.on('exit',code=>code===0?resolve(log):reject(new Error(log)));});
+await run('scripts/migrate.mjs');
+const db=await connect();
+const objects=new Map();
+const s3=httpServer(async(req,res)=>{const url=new URL(req.url,'http://localhost');const key=decodeURIComponent(url.pathname.replace(/^\/test-bucket\//,''));if(req.method==='PUT'){const chunks=[];for await(const c of req)chunks.push(c);objects.set(key,Buffer.concat(chunks));res.end();}else if(req.method==='GET'){if(!objects.has(key)){res.writeHead(404,{'Content-Type':'application/xml'});res.end('<Error><Code>NoSuchKey</Code></Error>');return;}res.end(objects.get(key));}else{objects.delete(key);res.end();}});
+await new Promise(r=>s3.listen(0,'127.0.0.1',r));
+const PORT=33191,base=`http://localhost:${PORT}`;
+Object.assign(process.env,{R2_ENDPOINT:`http://127.0.0.1:${s3.address().port}`,R2_ACCESS_KEY_ID:'fixture',R2_SECRET_ACCESS_KEY:'fixture',R2_BUCKET_NAME:'test-bucket',EMAIL_ENABLED:'false',BETTER_AUTH_SECRET:'journey-test-secret-with-at-least-32-characters',BETTER_AUTH_URL:base});
+const app=spawn(process.execPath,['node_modules/next/dist/bin/next','start','-p',String(PORT),'--hostname','127.0.0.1'],{env:process.env,stdio:['ignore','pipe','pipe']});
+let appLog='';app.stdout.on('data',b=>appLog+=b);app.stderr.on('data',b=>appLog+=b);
+const suffix=Date.now().toString(36);
+let step='startup';
+try{
+ for(let i=0;i<120;i++){try{if((await fetch(base+'/login')).ok)break;}catch{}if(i===119)throw new Error(appLog);await new Promise(r=>setTimeout(r,500));}
+ const call=async(path,method='GET',body,cookie)=>{for(let attempt=0;;attempt++){const r=await fetch(base+path,{method,headers:{origin:base,...(cookie?{cookie}:{}),...(body instanceof FormData||body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:body instanceof FormData?body:JSON.stringify(body),redirect:'manual'});if(r.status!==429||attempt>=3)return r;await new Promise(res=>setTimeout(res,(Number(r.headers.get('retry-after'))||10)*1000+200));}};
+ const json=async(r,expected,label)=>{const text=await r.text();assert.equal(r.status,expected,`${label||step}: ${text.slice(0,600)}`);return text?JSON.parse(text):null;};
+ const cookieOf=r=>r.headers.getSetCookie().map(c=>c.split(';')[0]).filter(c=>!c.endsWith('=')).join('; ');
+ const signup=async name=>{const email=`${name}-${suffix}@example.invalid`;const r=await call('/api/auth/sign-up/email','POST',{name,email,password:'Journey-strong-password-42'});const body=await json(r,200,'signup '+name);const cookie=cookieOf(r);assert(cookie,'signup must create a session when email is disabled');return {user:body.user,cookie,email};};
+ const reg=(key,cookie)=>({list:(q='')=>call(`/api/registers/${key}${q}`,'GET',undefined,cookie),create:(parentId,values)=>call(`/api/registers/${key}`,'POST',{parentId,values},cookie),update:(id,revision,values)=>call(`/api/registers/${key}`,'PATCH',{id,revision,values},cookie),move:(id,transition,note)=>call(`/api/registers/${key}`,'PATCH',{id,transition,note},cookie),remove:id=>call(`/api/registers/${key}?id=${id}`,'DELETE',undefined,cookie)});
+
+ // ---------------------------------------------------------------- Scenario A
+ step='A new organisation';
+ const A=await signup('admin-a'),B=await signup('admin-b');
+ let ws=await json(await call('/api/workspace','GET',undefined,A.cookie),200);
+ assert.equal(ws.role,'admin');assert.equal(ws.onboarding.completed,false);assert(Object.values(ws.entitlements).every(s=>s==='active'),'beta trial grants every module');
+ const [[memberA]]=await db.execute('SELECT organisation_id FROM users WHERE id=?',[A.user.id]),[[memberB]]=await db.execute('SELECT organisation_id FROM users WHERE id=?',[B.user.id]);
+ assert.notEqual(memberA.organisation_id,memberB.organisation_id,'independent signups create separate organisations');
+ const [[entCount]]=await db.execute('SELECT COUNT(*) AS n FROM organisation_entitlements WHERE organisation_id=?',[memberA.organisation_id]);assert.equal(Number(entCount.n),11);
+ await json(await call('/api/platform/onboarding','PUT',{abn:'12 345 678 901'},A.cookie),400,'invalid ABN rejected');
+ await json(await call('/api/platform/onboarding','PUT',{complete:true},A.cookie),422,'legal name required to finish');
+ let profile=(await json(await call('/api/platform/onboarding','PUT',{legal_name:'Alpha Civil Pty Ltd',trading_name:'Alpha Civil',abn:'51 824 753 556',business_activities:['Civil construction','Drainage'],operating_regions:['NSW'],workforce_size:'21–50',onboarding_step:4,complete:true},A.cookie),200)).profile;
+ assert.equal(profile.completed,true);assert.equal(profile.abn,'51824753556');assert.deepEqual(profile.business_activities,['Civil construction','Drainage']);
+ ws=await json(await call('/api/workspace','GET',undefined,A.cookie),200);assert.equal(ws.onboarding.completed,true);assert.equal(ws.brand.companyName,'Alpha Civil');
+ const abn=await json(await call('/api/platform/abn?abn=51824753556','GET',undefined,A.cookie),200);assert.equal(abn.valid,true);assert.equal(abn.registry.status,'not-configured','no fake registry lookup');
+ console.log('PASS A: signup, organisation + membership, beta entitlements, onboarding with ABN checksum, company profile, independent second organisation');
+
+ // ---------------------------------------------------------------- Scenario B
+ step='B win work';
+ const upload=async(cookie,fields,name='evidence.pdf',content='%PDF-1.4 fixture')=>{const f=new FormData();for(const [k,v] of Object.entries(fields))f.set(k,v);f.set('file',new File([content],name,{type:'application/pdf'}));return call('/api/documents','POST',f,cookie);};
+ const insuranceDoc=(await json(await upload(A.cookie,{contextType:'library',category:'Insurance',title:'Public liability certificate'}),201)).document;
+ await json(await upload(A.cookie,{contextType:'library'},'malware.exe'),415,'unsupported file type rejected');
+ const lib=reg('library',A.cookie);
+ const libItem=(await json(await lib.create(null,{category:'Insurance',title:'Public liability $20m',document_id:insuranceDoc.id,expiry_date:'2099-06-30',owner_name:'Office'}),201)).record;
+ await json(await lib.move(libItem.id,'current'),200);
+ const opps=reg('opportunities',A.cookie);
+ const opp=(await json(await opps.create(null,{name:'Riverside drainage upgrade',client_name:'Riverside Council',estimated_value:850000,probability:60,closing_date:'2099-01-15'}),201)).record;
+ assert.equal(opp.stage,'lead');
+ await json(await call('/api/tenders/register','POST',{opportunityId:opp.id},A.cookie),409,'unqualified opportunity cannot convert');
+ await json(await opps.move(opp.id,'converted'),409,'conversion is a dedicated action');
+ await json(await opps.move(opp.id,'qualified'),200);
+ const {tenderId}=await json(await call('/api/tenders/register','POST',{opportunityId:opp.id},A.cookie),201);
+ await json(await call('/api/tenders/register','POST',{opportunityId:opp.id},A.cookie),409,'one tender per opportunity');
+ const tf=new FormData();tf.set('opportunityId',opp.id);tf.set('file',new File(['Tender scope: drainage'],'tender-scope.txt',{type:'text/plain'}));await json(await call('/api/tenders','POST',tf,A.cookie),201,'tender document upload');
+ const reqs=reg('requirements',A.cookie),rets=reg('returnables',A.cookie);
+ const req1=(await json(await reqs.create(tenderId,{title:'Provide ISO 45001 aligned WHS management plan',category:'HSEQ',mandatory:true,source_document:'tender-scope.txt',source_page:'s4.2'}),201)).record;
+ assert.equal(req1.status,'open','manual requirements start open (not suggested)');
+ const ret1=(await json(await rets.create(tenderId,{title:'Insurance certificates',category:'insurance',mandatory:true,library_item_id:libItem.id}),201)).record;
+ let t=(await json(await call('/api/tenders/workspace?id='+tenderId,'GET',undefined,A.cookie),200)).tender;
+ assert.equal(t.stage,'draft');assert.equal(t.stats.documents,1);assert.equal(t.nextAction,'Start the bid / no-bid review');
+ await json(await call('/api/tenders/workspace','POST',{action:'bid-decision',id:tenderId,decision:'bid',reason:'fit'},A.cookie),409,'decision requires a bid review');
+ await json(await call('/api/tenders/workspace','POST',{action:'bid-review',id:tenderId,values:{strategic_fit:'Core drainage client',capacity:'Crew available Feb',recommendation:'bid',recommendation_reason:'Strong fit'}},A.cookie),200);
+ await json(await call('/api/tenders/workspace','POST',{action:'bid-decision',id:tenderId,decision:'bid',reason:'Strategic client'},A.cookie),200);
+ const {estimateId}=await json(await call('/api/tenders/workspace','POST',{action:'create-estimate',id:tenderId,mode:'general'},A.cookie),200);
+ let est=(await json(await call('/api/estimates?id='+estimateId,'GET',undefined,A.cookie),200)).estimate;
+ assert.equal(est.data.includePaving,false,'general estimates are discipline-neutral');
+ const items=[{section:'Drainage',costCode:'100',category:'labour',description:'Pipe laying crew',quantity:120,unit:'m',productivity:10,rateBasis:'hour',rate:95},{section:'Drainage',costCode:'300',category:'material',description:'375mm RCP',quantity:120,unit:'m',productivity:0,rateBasis:'unit',rate:180},{section:'Drainage',costCode:'200',category:'plant',description:'20t excavator',quantity:12,unit:'h',productivity:0,rateBasis:'unit',rate:210}];
+ est=(await json(await call('/api/estimates','PUT',{id:estimateId,data:{...est.data,clientName:'Riverside Council',projectName:'Riverside drainage upgrade',workType:'Drainage',items,marginValue:15,overheadsPct:8,contingencyPct:3}},A.cookie),200)).estimate;
+ const tenderApprovalEarly=await call('/api/tenders/workspace','POST',{action:'submit',id:tenderId,method:'Portal'},A.cookie);assert.equal(tenderApprovalEarly.status,409,'cannot submit before approval stage');
+ await json(await call('/api/estimates/approval','POST',{estimateId,action:'submit'},A.cookie),200);
+ await json(await call('/api/estimates','PUT',{id:estimateId,data:est.data},A.cookie),409,'estimate in review is locked');
+ await json(await call('/api/estimates/approval','POST',{estimateId,action:'approve',notes:'Checked rates'},A.cookie),200);
+ const approval=await json(await call('/api/estimates/approval?estimateId='+estimateId,'GET',undefined,A.cookie),200);
+ assert.equal(approval.state,'approved');const approvedSell=approval.revisions[0].sellPrice;assert(approvedSell>0);
+ // direct cost = 120/10*95 + 120*180 + 12*210 = 1140+21600+2520 = 25260
+ assert.equal(approval.revisions[0].directCost,25260,'deterministic estimate arithmetic');
+ await json(await call('/api/tenders/workspace','POST',{action:'request-approval',id:tenderId},A.cookie),200);
+ await json(await call('/api/tenders/workspace','POST',{action:'approval-decision',id:tenderId,approve:true,notes:'Approved to submit'},A.cookie),200);
+ const blocked=await json(await call('/api/tenders/workspace','POST',{action:'submit',id:tenderId,method:'Portal'},A.cookie),422,'mandatory items gate submission');
+ assert.deepEqual(blocked.checks.map(c=>c.key).sort(),['requirements','returnables']);
+ await json(await reqs.move(req1.id,'complete'),200);await json(await rets.move(ret1.id,'complete'),200);
+ t=(await json(await call('/api/tenders/workspace','POST',{action:'submit',id:tenderId,method:'Client portal',version:'Rev A',notes:'Uploaded 4pm'},A.cookie),200)).tender;
+ assert.equal(t.stage,'submitted');assert(t.submittedAt);
+ const clar=(await json(await reg('clarifications',A.cookie).create(tenderId,{question:'Confirm pipe class',received_date:'2099-01-20',due_date:'2099-01-22',price_impact:0}),201)).record;
+ assert.equal(clar.reference,'CLR-001');
+ await json(await reg('clarifications',A.cookie).update(clar.id,clar.revision,{response:'Class 3 as specified'}),200);
+ await json(await reg('clarifications',A.cookie).move(clar.id,'responded'),200);
+ const award=await json(await call('/api/tenders/workspace','POST',{action:'award',id:tenderId},A.cookie),200);
+ assert.equal(award.projectCreated,true);const projectId=award.jobId;
+ const again=await json(await call('/api/tenders/workspace','POST',{action:'award',id:tenderId},A.cookie),200);assert.equal(again.alreadyAwarded,true,'award is idempotent');
+ console.log('PASS B: library + documents, opportunity → tender lineage, documents, requirements, bid review/decision, estimate items, approval lock, internal approval, submission gate, clarification, award');
+
+ // ---------------------------------------------------------------- Scenario C
+ step='C prepare';
+ let pw=await json(await call('/api/projects/workspace?id='+projectId,'GET',undefined,A.cookie),200);
+ assert.equal(pw.project.stage,'setup');assert.equal(pw.project.sourceTenderId,tenderId);assert.equal(pw.project.sourceEstimateId,estimateId);
+ assert.equal(pw.baselines.length,1);assert.equal(pw.baselines[0].contractValue,approvedSell,'baseline inherits the approved revision');assert.equal(pw.baselines[0].estimateRevisionId,approval.revisions[0].id);
+ assert.equal(pw.baselines[0].clarifications[0].reference,'CLR-001','clarifications preserved in baseline');
+ assert(pw.readiness.blockers.some(b=>b.startsWith('SWMS')),'readiness blocked without SWMS');
+ assert.equal(pw.project.nextAction,'Approve SWMS before mobilisation');
+ pw=await json(await call('/api/projects/workspace','PATCH',{id:projectId,revision:pw.project.revision,projectManagerName:'Pat Manager',startDate:'2099-02-01',contractNumber:'RC-2099-01'},A.cookie),200);
+ await json(await call('/api/projects/workspace','POST',{action:'transition',id:projectId,to:'ready'},A.cookie),422,'cannot mark ready with blockers');
+ const risks=reg('risks',A.cookie);
+ const risk=(await json(await risks.create(projectId,{title:'Trench collapse',category:'safety',initial_likelihood:4,initial_consequence:5,residual_likelihood:2,residual_consequence:4}),201)).record;
+ assert.equal(risk.initial_rating,'Extreme');assert.equal(risk.residual_rating,'Medium','deterministic risk rating');
+ await json(await risks.move(risk.id,'controlled'),422,'controls required before approval');
+ await json(await risks.update(risk.id,risk.revision,{controls:'Shoring boxes; competent person inspection'}),200);
+ await json(await risks.move(risk.id,'controlled'),200);
+ const sw=await json(await call('/api/hseq/swms','POST',{action:'create',projectId,title:'Pipe laying in trench',questionnaire:{activity:'Excavate and lay stormwater pipe',workSteps:['Excavate trench','Install shoring','Lay pipe','Backfill'],highRiskWork:['excavation','mobile-plant'],ppe:['Hard hat','Safety boots'],emergency:'Call 000; first aider on site',responsiblePeople:'Site supervisor'}},A.cookie),201);
+ let swms=await json(await call('/api/hseq/swms?id='+sw.swmsId,'GET',undefined,A.cookie),200);
+ assert.equal(swms.revisions[0].origin,'template');
+ const gaps=await json(await call('/api/hseq/swms','POST',{action:'transition',id:sw.swmsId,to:'review'},A.cookie),422,'incomplete SWMS cannot go to review');assert(gaps.gaps.length);
+ const content={...swms.revisions[0].content,workSteps:swms.revisions[0].content.workSteps.map(s=>({...s,hazards:s.hazards||'Plant, trench collapse',controls:s.controls||'Exclusion zone, shoring'}))};
+ swms=await json(await call('/api/hseq/swms','POST',{action:'save',id:sw.swmsId,revisionId:sw.revisionId,updatedAt:swms.revisions[0].updated_at,content},A.cookie),200);
+ for(const to of ['review','approved','issued'])swms=await json(await call('/api/hseq/swms','POST',{action:'transition',id:sw.swmsId,to},A.cookie),200,'swms '+to);
+ assert.equal(swms.swms.status,'issued');
+ await json(await call('/api/hseq/swms','POST',{action:'save',id:sw.swmsId,revisionId:sw.revisionId,updatedAt:swms.revisions[0].updated_at,content},A.cookie),409,'issued SWMS is immutable');
+ const pdf=await call(`/api/hseq/swms?id=${sw.swmsId}&format=pdf`,'GET',undefined,A.cookie);assert.equal(pdf.status,200);assert.equal(pdf.headers.get('content-type'),'application/pdf');assert((await pdf.arrayBuffer()).byteLength>500);
+ const itp=(await json(await reg('itps',A.cookie).create(projectId,{title:'Pipe installation ITP',activity:'Pipe laying'}),201)).record;
+ // IMS pack items not needed for this job are marked not applicable with a recorded reason (approver only).
+ const ims=await json(await call('/api/ims?jobId='+projectId,'GET',undefined,A.cookie),200);
+ for(const item of ims.jobPack||ims.job_pack||[])await json(await call('/api/ims','PATCH',{kind:'job-pack',id:item.id,status:'Not Applicable',reason:'Covered by company IMS for this minor works contract'},A.cookie),200,'ims n/a');
+ pw=await json(await call('/api/projects/workspace?id='+projectId,'GET',undefined,A.cookie),200);
+ const checklist=reg('readiness',A.cookie);
+ for(const cat of pw.readiness.categories)for(const item of cat.items.filter(i=>i.source==='checklist'&&!i.ok))await json(await checklist.move(item.id,'complete'),200);
+ pw=await json(await call('/api/projects/workspace?id='+projectId,'GET',undefined,A.cookie),200);
+ assert.deepEqual(pw.readiness.blockers,[],'readiness complete');assert.equal(pw.readiness.percent,100);
+ await json(await call('/api/projects/workspace','POST',{action:'transition',id:projectId,to:'ready'},A.cookie),200);
+ pw=await json(await call('/api/projects/workspace','POST',{action:'transition',id:projectId,to:'active'},A.cookie),200);
+ assert.equal(pw.project.stage,'active');
+ console.log('PASS C: project from award, inherited baseline + lineage + clarifications, setup, risk rating/controls, SWMS draft→review→approve→issue, immutable issue, PDF, ITP, readiness gate → ready → active');
+
+ // ---------------------------------------------------------------- Scenario D + F
+ step='D deliver';
+ const C=await signup('field-c');
+ await db.execute("UPDATE users SET organisation_id=?,role='field' WHERE id=?",[memberA.organisation_id,C.user.id]);
+ const workerId=`worker-${suffix}`;
+ await db.execute('INSERT INTO workers (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)',[workerId,memberA.organisation_id,'Casey Field','active',JSON.stringify({role:'Pipe layer',hourlyRate:88,competencyExpiry:'2099-12-31',userId:C.user.id}),new Date().toISOString()]);
+ const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Australia/Sydney',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+ const shift=(await json(await call('/api/delivery','POST',{kind:'shifts',record:{id:'',name:'Pipe laying day 1',status:'Planned',metadata:{jobId:projectId,date:today,start:'07:00',finish:'15:30',scope:'Lay 40m of 375 RCP',instructions:'Shoring inspected before entry',assignments:[{resourceId:workerId,category:'workers',name:'Casey Field',role:'Pipe layer',hours:8,rate:88,payload:0,trips:0,userId:C.user.id}]}}},A.cookie),201)).record;
+ let day=await json(await call('/api/field/today','GET',undefined,C.cookie),200);
+ const mine=day.today.find(s=>s.id===shift.id);assert(mine,'field user sees assigned shift today');assert.equal(mine.swmsOutstanding,1);
+ const fieldText=JSON.stringify(day);for(const k of ['"rate"','contractValue','approvedBudget','hourlyRate','sellPrice'])assert(!fieldText.includes(k),'field Today leaked '+k);
+ const ack=await json(await call('/api/hseq/swms','POST',{action:'acknowledge',id:sw.swmsId,shiftId:shift.id},C.cookie),200);assert.equal(ack.acknowledged,true);
+ const ack2=await json(await call('/api/hseq/swms','POST',{action:'acknowledge',id:sw.swmsId,shiftId:shift.id},C.cookie),200);assert.equal(ack2.alreadyAcknowledged,true,'acknowledgement is idempotent');
+ day=await json(await call('/api/field/today','GET',undefined,C.cookie),200);assert.equal(day.today.find(s=>s.id===shift.id).swmsOutstanding,0);
+ const inc=await json(await reg('incidents',C.cookie).create(projectId,{incident_type:'near miss',occurred_at:`${today}T10:30`,description:'Spoil fell near edge'}),201,'field reports incident');assert.equal(inc.record.status,'reported');
+ const fd=await json(await call('/api/field/today','POST',{shiftId:shift.id,docketNo:`D-${suffix}`,workDate:today,labourHours:8,quantity:40,quantityUnit:'m',notes:'40m laid',lines:[{description:'Pipe laying crew',quantity:8,unit:'h'}]},C.cookie),201);
+ assert.equal(fd.status,'review');
+ step='F field permissions';
+ for(const path of ['/api/estimates','/api/estimates/rates','/api/tenders/register',`/api/tenders/workspace?id=${tenderId}`,`/api/commercial/claims?projectId=${projectId}`,`/api/projects/control?id=${projectId}`,'/api/commercial/portfolio','/api/reports/v1','/api/team',`/api/projects/workspace?id=${projectId}`,'/api/platform/audit','/api/registers/variations?parentId='+projectId,'/api/registers/opportunities'])assert.equal((await call(path,'GET',undefined,C.cookie)).status,403,'field denied '+path);
+ assert.equal((await call('/api/estimates/rates','POST',{name:'x'},C.cookie)).status,403);
+ assert.equal((await call('/api/registers/risks','POST',{parentId:projectId,values:{title:'x'}},C.cookie)).status,403,'field cannot create risks');
+ const fieldSwms=await json(await call('/api/hseq/swms?projectId='+projectId,'GET',undefined,C.cookie),200);assert.equal(fieldSwms.swms.length,1,'field sees issued SWMS only');
+ const fieldSearch=await json(await call('/api/search?q=Riverside','GET',undefined,C.cookie),200);assert(!fieldSearch.results.some(r=>['Tender','Opportunity','Estimate','Variation','Claim','Invoice','Docket'].includes(r.type)),'field search has no commercial records');
+ const fieldHome=await json(await call('/api/platform/home','GET',undefined,C.cookie),200);assert(!JSON.stringify(fieldHome).match(/docket|variation|claim|invoice/i),'field home has no commercial actions');
+ console.log('PASS D/F: schedule + assignment, field Today, SWMS acknowledgement (idempotent), incident report, field docket; field denied rates/estimates/tenders/claims/margin/admin/audit, no commercial search or home leakage');
+
+ // ---------------------------------------------------------------- Scenario E
+ step='E money';
+ const docket=(await json(await call(`/api/dockets?month=${today.slice(0,7)}`,'GET',undefined,A.cookie),200)).dockets.find(d=>d.id===fd.docketId);
+ assert(docket,'office sees the field docket');
+ const priced={...docket,amount:1200,lineItems:[{description:'Pipe laying crew',quantity:8,unit:'h',rate:150,amount:1200}],status:'approved'};
+ const approved=await json(await call('/api/dockets','PUT',priced,A.cookie),200);assert.equal(approved.costLinesPosted,1);
+ await json(await call('/api/dockets','PUT',priced,A.cookie),200);
+ const [[costs]]=await db.execute("SELECT COUNT(*) AS n,SUM(amount) AS total FROM cost_transactions WHERE organisation_id=? AND source_id=? AND status='actual'",[memberA.organisation_id,docket.id]);
+ assert.equal(Number(costs.n),1,'re-approval does not duplicate costs');assert.equal(Number(costs.total),1200);
+ await json(await call('/api/dockets','PUT',{...priced,status:'review'},A.cookie),200);
+ const [[reversed]]=await db.execute("SELECT COUNT(*) AS n FROM cost_transactions WHERE organisation_id=? AND source_id=? AND status='actual'",[memberA.organisation_id,docket.id]);assert.equal(Number(reversed.n),0,'unapproving reverses cost');
+ await json(await call('/api/dockets','PUT',priced,A.cookie),200);
+ const vars=reg('variations',A.cookie);
+ const v=(await json(await vars.create(projectId,{title:'Additional pit',cause:'client instruction',value:9000,cost:6000,notice_date:today}),201)).record;
+ assert.equal(v.reference,'VAR-001');
+ await json(await vars.move(v.id,'approved'),409,'variation must be submitted first');
+ await json(await vars.move(v.id,'submitted'),200);await json(await vars.move(v.id,'approved','Client email 12/1'),200);
+ await json(await vars.update(v.id,3,{value:1}),409,'approved variation locked');
+ let claims=await json(await call('/api/commercial/claims?projectId='+projectId,'GET',undefined,A.cookie),200);
+ const contractLine=claims.claimable.find(l=>l.lineType==='contract'),varLine=claims.claimable.find(l=>l.lineType==='variation'),docketLine=claims.claimable.find(l=>l.lineType==='docket');
+ assert(contractLine&&varLine&&docketLine,'contract, approved variation and approved docket are claimable');
+ await json(await call('/api/commercial/claims','POST',{action:'create',projectId,period:today.slice(0,7),lines:[{lineType:'contract',sourceId:contractLine.sourceId,thisClaim:contractLine.contractValue+1}]},A.cookie),422,'cannot claim beyond contract value');
+ const claim=await json(await call('/api/commercial/claims','POST',{action:'create',projectId,period:today.slice(0,7),lines:[{lineType:'contract',sourceId:contractLine.sourceId,thisClaim:10000},{lineType:'variation',sourceId:varLine.sourceId,thisClaim:9000},{lineType:'docket',sourceId:docketLine.sourceId,thisClaim:1200}]},A.cookie),201);
+ assert.equal(claim.grossAmount,20200);
+ await json(await call('/api/dockets','PUT',{...priced,status:'review'},A.cookie),409,'claimed docket is locked');
+ await json(await call('/api/commercial/claims','POST',{action:'transition',claimId:claim.claimId,to:'internal_approval'},A.cookie),200);
+ await json(await call('/api/commercial/claims','POST',{action:'create',projectId,period:today.slice(0,7),lines:[{lineType:'docket',sourceId:docketLine.sourceId,thisClaim:1200}]},A.cookie),409,'open claim / docket already claimed');
+ await json(await call('/api/commercial/claims','POST',{action:'transition',claimId:claim.claimId,to:'submitted'},A.cookie),200);
+ await json(await call('/api/commercial/claims','POST',{action:'certify',claimId:claim.claimId,certifiedAmount:19800},A.cookie),200);
+ const inv=await json(await call('/api/commercial/claims','POST',{action:'invoice',claimId:claim.claimId,invoiceNumber:`INV-${suffix}`,invoiceDate:today,dueDate:today},A.cookie),201);
+ assert.equal(inv.gst,1980);assert.equal(inv.total,21780);
+ await json(await call('/api/commercial/claims','POST',{action:'invoice-action',invoiceId:inv.invoiceId,invoiceAction:'issue'},A.cookie),200);
+ await json(await call('/api/commercial/claims','POST',{action:'invoice-action',invoiceId:inv.invoiceId,invoiceAction:'payment',amount:30000,date:today},A.cookie),422,'overpayment rejected');
+ await json(await call('/api/commercial/claims','POST',{action:'invoice-action',invoiceId:inv.invoiceId,invoiceAction:'payment',amount:21780,date:today},A.cookie),200);
+ claims=await json(await call('/api/commercial/claims?projectId='+projectId,'GET',undefined,A.cookie),200);assert.equal(claims.claims[0].status,'paid');assert.equal(claims.claims[0].variance,-400);
+ const control=await json(await call('/api/projects/control?id='+projectId,'GET',undefined,A.cookie),200);const f=control.financials.forecast;
+ assert.equal(f.currentContract,Math.round((approvedSell+9000)*100)/100,'approved variation updates current contract, not original');assert.equal(f.originalContract,approvedSell);
+ assert.equal(f.actual,1200);assert.equal(f.claimed,20200);assert.equal(f.certified,19800);assert.equal(f.invoiced,19800);assert.equal(f.paid,19800,'paid is reported ex-GST like invoiced');assert.equal(f.outstanding,0);
+ assert.equal(control.estimateVsActual.available,true);assert.equal(control.estimateVsActual.categories.find(c=>c.category==='labour').actual,1200);
+ const report=await json(await call('/api/reports/v1','GET',undefined,A.cookie),200);assert(report.commercial.totals.currentContract>=f.currentContract);assert.equal(report.pipeline.conversionPct,100);
+ console.log('PASS E: docket approval posts cost idempotently + reversal, variation lifecycle and lock, claim limits, no double docket claim, internal approval → submit → certify → invoice (GST) → payment, forecast/control, estimate vs actual, reports');
+
+ // ---------------------------------------------------------------- Scenario G
+ step='G tenant attack';
+ const attacks=[['GET',`/api/tenders/workspace?id=${tenderId}`],['GET',`/api/projects/workspace?id=${projectId}`],['GET',`/api/projects/control?id=${projectId}`],['GET',`/api/commercial/claims?projectId=${projectId}`],['GET',`/api/hseq/swms?id=${sw.swmsId}`],['GET',`/api/documents?id=${insuranceDoc.id}`],['GET',`/api/tenders/export?id=${tenderId}`],['GET',`/api/registers/risks?parentId=${projectId}`],['GET',`/api/registers/requirements?parentId=${tenderId}`]];
+ for(const [method,path] of attacks)assert.equal((await call(path,method,undefined,B.cookie)).status,404,'foreign read '+path);
+ assert.equal((await call('/api/registers/risks','PATCH',{id:risk.id,revision:9,values:{title:'hacked'}},B.cookie)).status,404,'foreign update');
+ assert.equal((await call('/api/registers/risks','PATCH',{id:risk.id,transition:'closed'},B.cookie)).status,404,'foreign transition');
+ assert.equal((await call(`/api/registers/library?id=${libItem.id}`,'DELETE',undefined,B.cookie)).status,404,'foreign delete');
+ assert.equal((await call('/api/registers/risks','POST',{parentId:projectId,values:{title:'plant'}},B.cookie)).status,404,'foreign parent write');
+ assert.equal((await call('/api/tenders/workspace','POST',{action:'award',id:tenderId},B.cookie)).status,404,'foreign award');
+ assert.equal((await call('/api/commercial/claims','POST',{action:'certify',claimId:claim.claimId,certifiedAmount:1},B.cookie)).status,404,'foreign claim');
+ assert.equal((await call('/api/hseq/swms','POST',{action:'acknowledge',id:sw.swmsId},B.cookie)).status,404,'foreign SWMS');
+ const bSearch=await json(await call('/api/search?q=Riverside','GET',undefined,B.cookie),200);assert.equal(bSearch.results.length,0,'no cross-tenant search');
+ const bLists=await json(await call('/api/registers/library','GET',undefined,B.cookie),200);assert.equal(bLists.records.length,0);
+ const bReport=await json(await call('/api/reports/v1','GET',undefined,B.cookie),200);assert.equal(bReport.commercial.projects.length,0,'no cross-tenant reporting');
+ const [[unchanged]]=await db.execute('SELECT title FROM risks WHERE id=?',[risk.id]);assert.equal(unchanged.title,'Trench collapse');
+ console.log('PASS G: organisation B cannot read, update, transition, delete, award, certify, acknowledge, search, list, report or export organisation A records by known IDs');
+
+ // ---------------------------------------------------------------- Entitlements, closeout, audit
+ step='entitlements';
+ await json(await call('/api/platform/entitlements','PUT',{module:'commercial',status:'read_only'},A.cookie),200);
+ await json(await call('/api/commercial/claims?projectId='+projectId,'GET',undefined,A.cookie),200,'read-only keeps data readable');
+ assert.equal((await call('/api/registers/variations','POST',{parentId:projectId,values:{title:'x',value:1}},A.cookie)).status,403,'read-only blocks writes');
+ await json(await call('/api/platform/entitlements','PUT',{module:'commercial',status:'disabled'},A.cookie),200);
+ assert.equal((await call('/api/commercial/claims?projectId='+projectId,'GET',undefined,A.cookie)).status,404,'disabled module 404s');
+ ws=await json(await call('/api/workspace','GET',undefined,A.cookie),200);assert.equal(ws.entitlements.commercial,'disabled');
+ const [[kept]]=await db.execute('SELECT COUNT(*) AS n FROM progress_claims WHERE organisation_id=?',[memberA.organisation_id]);assert.equal(Number(kept.n),1,'downgrade never deletes data');
+ await json(await call('/api/platform/entitlements','PUT',{module:'commercial',status:'active'},A.cookie),200);
+ await json(await call('/api/platform/entitlements','PUT',{module:'commercial',status:'active'},C.cookie),403,'field cannot manage entitlements');
+ step='closeout';
+ await json(await call('/api/projects/workspace','POST',{action:'transition',id:projectId,to:'practical_completion'},A.cookie),200);
+ pw=await json(await call('/api/projects/workspace','POST',{action:'transition',id:projectId,to:'closeout'},A.cookie),200);
+ const close=await json(await call('/api/projects/workspace','POST',{action:'transition',id:projectId,to:'closed'},A.cookie),422,'closeout checklist gates closure');assert(close.blockers.length);
+ const closeoutItems=await json(await reg('closeout',A.cookie).list('?parentId='+projectId),200);
+ for(const item of closeoutItems.records)await json(await reg('closeout',A.cookie).move(item.id,'complete'),200);
+ pw=await json(await call('/api/projects/workspace','POST',{action:'transition',id:projectId,to:'closed'},A.cookie),200);assert.equal(pw.project.stage,'closed');
+ assert.equal((await call('/api/delivery','POST',{kind:'shifts',record:{id:'',name:'Late shift',status:'Planned',metadata:{jobId:projectId,date:today,start:'07:00',finish:'15:00',assignments:[]}}},A.cookie)).status,409,'closed project refuses new shifts');
+ assert.equal((await call('/api/registers/risks','POST',{parentId:projectId,values:{title:'late'}},A.cookie)).status,409,'closed project refuses new records');
+ await json(await call('/api/projects/workspace','POST',{action:'transition',id:projectId,to:'closeout'},A.cookie),422,'reopening needs a reason');
+ await json(await call('/api/projects/workspace','POST',{action:'transition',id:projectId,to:'closeout',reason:'Defect rectification'},A.cookie),200);
+ step='audit';
+ const audit=await json(await call('/api/platform/audit?projectId='+projectId,'GET',undefined,A.cookie),200);
+ for(const e of ['project.created','baseline.created','swms.approved','swms.acknowledged','docket.approved','variations.approved','claim.submitted','claim.certified','invoice.paid','project.closed'])assert(audit.events.some(x=>x.event_type===e),'audit missing '+e);
+ const orgAudit=await json(await call('/api/platform/audit','GET',undefined,A.cookie),200);
+ for(const e of ['estimate.approved','tender.submitted','tender.awarded','entitlement.changed','organisation.onboarding.completed'])assert(orgAudit.events.some(x=>x.event_type===e),'audit missing '+e);
+ console.log('PASS entitlements (read-only, disabled 404, nav flag, data retained), closeout gate, closed-project write refusal, reopen with reason, audit trail');
+ console.log('PASS V1 journey complete');
+}catch(error){console.error('FAILED at',step);console.error(appLog.slice(-4000));throw error;}finally{app.kill();s3.close();await db.end();}

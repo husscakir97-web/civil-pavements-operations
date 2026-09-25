@@ -148,7 +148,7 @@ export async function createRecord(key:string,parentId:string|null,input:Record<
   if(def.scope==='itp')row.project_id=parent.project_id;
   if(def.machine)row[stateCol(def)]=opts.initialState||MACHINES[def.machine].initial;
   Object.assign(row,await nextReference(def,parent,conn));
-  if(def.key==='requirements'){row.opportunity_id=parent.opportunityId;row.origin=opts.origin||'manual';row.requirement_type=row.category||'Project-specific';}
+  if(def.key==='requirements'){delete row.created_by;row.opportunity_id=parent.opportunityId;row.origin=opts.origin||'manual';row.requirement_type=row.category||'Project-specific';}
   if(def.key==='opportunities'){row.status=row.stage;row.metadata=JSON.stringify({client:row.client_name,estimatedValue:row.estimated_value,probability:row.probability,tenderCloseDate:row.closing_date});}
   if(def.key==='incidents')row.reported_by=a.userId;
   if(def.key==='variations'){

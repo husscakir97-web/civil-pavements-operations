@@ -2,6 +2,7 @@
 // Reads projects, commercial, dockets and field data; all arithmetic is in
 // lib/platform/finance.ts. Commercial figures are returned only to roles with
 // commercial.view and organisations with the commercial module usable.
+// All revenue-side figures (claimed, certified, invoiced, paid) are ex-GST.
 import {actorContext} from '@/lib/platform/context';
 import {can} from '@/lib/platform/permissions';
 import {getEntitlements,usable} from '@/lib/platform/entitlements';
@@ -45,7 +46,7 @@ export async function projectFinancials(projectId:string){
  const claimed=sum(claims.filter(c=>['submitted','certified','invoiced','paid'].includes(c.status)),c=>Number(c.gross_amount));
  const certified=sum(claims.filter(c=>c.certified_amount!=null),c=>Number(c.certified_amount));
  const liveInvoices=invoices.filter(i=>i.status!=='void'&&i.status!=='draft');
- const f=forecast({originalContract,approvedVariations:sum(approved,v=>Number(v.approved_value??v.value)),pendingVariations:sum(variations.filter(v=>['draft','submitted'].includes(v.status)),v=>Number(v.value)),originalBudget,approvedVariationCost:sum(approved,v=>Number(v.cost)),actual:Object.values(actualByCat).reduce((n,v)=>n+v,0),committed,accrued,claimed,certified,invoiced:sum(liveInvoices,i=>Number(i.amount_ex_gst)),paid:sum(liveInvoices,i=>Number(i.paid_amount))});
+ const f=forecast({originalContract,approvedVariations:sum(approved,v=>Number(v.approved_value??v.value)),pendingVariations:sum(variations.filter(v=>['draft','submitted'].includes(v.status)),v=>Number(v.value)),originalBudget,approvedVariationCost:sum(approved,v=>Number(v.cost)),actual:Object.values(actualByCat).reduce((n,v)=>n+v,0),committed,accrued,claimed,certified,invoiced:sum(liveInvoices,i=>Number(i.amount_ex_gst)),paid:sum(liveInvoices,i=>Number(i.total)>0?Number(i.paid_amount)*Number(i.amount_ex_gst)/Number(i.total):0)});
  const budgetByCat=baseline?{labour:Number(baseline.budget_labour),plant:Number(baseline.budget_plant),material:Number(baseline.budget_material),subcontract:Number(baseline.budget_subcontract),other:Number(baseline.budget_other)+Number(baseline.budget_indirect)}:null;
  return {forecast:f,hasBaseline:Boolean(baseline),budgetByCategory:budgetByCat,actualByCategory:actualByCat};
 }

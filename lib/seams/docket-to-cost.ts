@@ -8,7 +8,7 @@ import {actorContext} from '@/lib/platform/context';
 import {seamEnabled} from '@/lib/platform/entitlements';
 import {safeJson} from '@/lib/estimates-db';
 
-type Docket={id:string;docket_no:string;work_date:string;amount:number;quantity:number;quantity_unit:string;labour_hours:number;line_items:string;links:string;status:string;notes:string};
+export type Docket={id:string;docket_no:string;work_date:string;amount:number;quantity:number;quantity_unit:string;labour_hours:number;line_items:string;links:string;status:string;notes:string};
 const r2=(n:unknown)=>Math.round((Number(n)||0)*100)/100;
 export function costCategory(text:string){
  const s=text.toLowerCase();
@@ -31,10 +31,12 @@ export function docketCostLines(d:Docket){
 }
 
 /** Returns statements to run in the same transaction as the docket status change. */
-export async function docketCostStatements(docketId:string,nextStatus:string):Promise<{statements:Statement[];posted:number;message:string|null}>{
+export async function docketCostStatements(docketId:string,nextStatus:string,next:Partial<Docket>={}):Promise<{statements:Statement[];posted:number;message:string|null}>{
  const actor=actorContext.getStore()!,org=actor.organisationId,now=new Date().toISOString();
- const d=await database.prepare('SELECT id,docket_no,work_date,amount,quantity,quantity_unit,labour_hours,line_items,links,status,notes FROM dockets WHERE organisation_id=? AND id=?').bind(org,docketId).first<Docket>();
- if(!d)return {statements:[],posted:0,message:null};
+ const stored=await database.prepare('SELECT id,docket_no,work_date,amount,quantity,quantity_unit,labour_hours,line_items,links,status,notes FROM dockets WHERE organisation_id=? AND id=?').bind(org,docketId).first<Docket>();
+ if(!stored)return {statements:[],posted:0,message:null};
+ // Cost lines reflect the values being saved in this same transaction.
+ const d:Docket={...stored,...next,status:stored.status};
  const claimed=['included_claim','invoiced'].includes(d.status);
  if(nextStatus!=='approved'){
   if(claimed)return {statements:[],posted:0,message:null};

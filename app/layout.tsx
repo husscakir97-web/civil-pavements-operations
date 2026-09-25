@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Pavement Operations OS · Docket Recon",
-  description: "Operational and commercial control for asphalt, road surfacing and civil contractors.",
+  title: "Infrastruct",
+  description: "The operating system for civil and infrastructure contractors: win, prepare, resource, deliver, control money and learn.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

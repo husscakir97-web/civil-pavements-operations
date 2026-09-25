@@ -112,6 +112,10 @@ export const MACHINES={
   active:[{to:'closed',label:'Close',capability:'document.approve'},{to:'draft',label:'Return to draft',capability:'document.approve'}],
   closed:[{to:'active',label:'Reopen',capability:'document.approve'}],
  }),
+ itpItem:m('open',{open:{label:'Open',tone:'warning'},pass:{label:'Pass',tone:'success'},fail:{label:'Fail',tone:'danger'},na:{label:'Not applicable',tone:'neutral'}},{
+  open:[{to:'pass',label:'Record pass',capability:'itp.complete'},{to:'fail',label:'Record fail',capability:'itp.complete'},{to:'na',label:'Not applicable',capability:'itp.complete'}],
+  pass:[{to:'open',label:'Reopen',capability:'document.approve'}],fail:[{to:'open',label:'Reopen',capability:'document.approve'}],na:[{to:'open',label:'Reopen',capability:'document.approve'}],
+ }),
  checklist:m('open',{open:{label:'Open',tone:'warning'},complete:{label:'Complete',tone:'success'},not_applicable:{label:'Not applicable',tone:'neutral'}},{
   open:[{to:'complete',label:'Mark complete',capability:'project.edit'},{to:'not_applicable',label:'Not applicable',capability:'project.edit'}],
   complete:[{to:'open',label:'Reopen',capability:'project.edit'}],

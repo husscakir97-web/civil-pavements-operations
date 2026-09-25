@@ -1,0 +1,63 @@
+// Central document service. Files stay private in R2; downloads only through
+// authenticated, organisation-scoped routes. Field users see field-visible files only.
+import {createHash} from 'node:crypto';
+import {actorContext} from './context';
+import {bucket} from './storage';
+import {audit} from './audit';
+import {fail} from './http';
+import {query,one,exec,tx,nowIso,uuid,type Row} from './sql';
+
+export const MAX_DOCUMENT_BYTES=40*1024*1024;
+const ALLOWED=/\.(pdf|png|jpe?g|gif|webp|heic|txt|csv|docx?|xlsx?|pptx?|zip|msg|eml|dwg|dxf)$/i;
+const CONTEXTS=['organisation','library','tender','project','swms','itp','incident','ncr','action','variation','claim','requirement','returnable','clarification','checklist','field'] as const;
+export type DocumentContext=typeof CONTEXTS[number];
+export const isContext=(v:string):v is DocumentContext=>(CONTEXTS as readonly string[]).includes(v);
+
+export function publicDocument(r:Row){return {id:r.id,title:r.title,fileName:r.file_name,contentType:r.content_type,sizeBytes:Number(r.size_bytes),category:r.category,version:Number(r.version),status:r.status,visibility:r.visibility,source:r.source,contextType:r.context_type,contextId:r.context_id,projectId:r.project_id,uploadedBy:r.uploaded_by,createdAt:r.created_at,url:`/api/documents?id=${encodeURIComponent(r.id)}`};}
+
+export async function storeDocument(file:File,meta:{contextType:DocumentContext;contextId?:string|null;projectId?:string|null;category?:string;title?:string;visibility?:'office'|'field';supersedesId?:string|null;source?:string}){
+ const actor=actorContext.getStore()!;
+ if(!file.size)fail(400,'The file is empty.');
+ if(file.size>MAX_DOCUMENT_BYTES)fail(413,'Files must be 40 MB or smaller.');
+ if(!ALLOWED.test(file.name))fail(415,'This file type is not accepted. Use PDF, image, Office, CSV, text or ZIP files.');
+ const bytes=new Uint8Array(await file.arrayBuffer());
+ const sha256=createHash('sha256').update(bytes).digest('hex');
+ const id=uuid(),key=`documents/${actor.organisationId}/${id}`,now=nowIso();
+ const visibility=actor.role==='field'?'field':meta.visibility||'office';
+ await bucket.put(key,bytes,{httpMetadata:{contentType:file.type||'application/octet-stream'}});
+ return tx(async conn=>{
+  let version=1;
+  if(meta.supersedesId){
+   const prev=await one('SELECT id,version,context_type,context_id FROM documents WHERE organisation_id=? AND id=? FOR UPDATE',[actor.organisationId,meta.supersedesId],conn);
+   if(!prev)fail(404,'Document to replace not found.');
+   version=Number(prev!.version)+1;
+   await exec("UPDATE documents SET status='superseded',updated_at=? WHERE organisation_id=? AND id=?",[now,actor.organisationId,prev!.id],conn);
+  }
+  const row={id,organisation_id:actor.organisationId,context_type:meta.contextType,context_id:meta.contextId||null,project_id:meta.projectId||null,category:(meta.category||'General').slice(0,60),title:(meta.title||file.name).slice(0,255),file_name:file.name.slice(0,255),content_type:(file.type||'application/octet-stream').slice(0,120),size_bytes:file.size,storage_key:key,sha256,version,status:'current',visibility,source:meta.source||'upload',supersedes_id:meta.supersedesId||null,uploaded_by:actor.userId,created_at:now,updated_at:now};
+  const cols=Object.keys(row);
+  await exec(`INSERT INTO documents (${cols.join(',')}) VALUES (${cols.map(()=>'?').join(',')})`,Object.values(row),conn);
+  await audit({event:'document.uploaded',entityType:'document',entityId:id,projectId:row.project_id,summary:`${row.title} (v${version})`,after:{contextType:row.context_type,contextId:row.context_id,sha256,version}},conn);
+  return publicDocument(row);
+ });
+}
+
+export async function listDocuments(filter:{contextType?:string|null;contextId?:string|null;projectId?:string|null;includeSuperseded?:boolean}){
+ const actor=actorContext.getStore()!;
+ const where=['organisation_id=?'],values:unknown[]=[actor.organisationId];
+ if(filter.contextType){where.push('context_type=?');values.push(filter.contextType);}
+ if(filter.contextId){where.push('context_id=?');values.push(filter.contextId);}
+ if(filter.projectId){where.push('project_id=?');values.push(filter.projectId);}
+ if(!filter.includeSuperseded)where.push("status='current'");
+ if(actor.role==='field')where.push("visibility='field'");
+ return (await query(`SELECT * FROM documents WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT 500`,values)).map(publicDocument);
+}
+
+export async function openDocument(id:string){
+ const actor=actorContext.getStore()!;
+ const row=await one('SELECT * FROM documents WHERE organisation_id=? AND id=?',[actor.organisationId,id]);
+ if(!row)fail(404,'Document not found.');
+ if(actor.role==='field'&&row!.visibility!=='field')fail(403,'This file is available to office staff only.');
+ const object=await bucket.get(row!.storage_key);
+ if(!object)fail(404,'The stored file is unavailable.');
+ return new Response(object!.body,{headers:{'Content-Type':row!.content_type,'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(row!.file_name)}`,'X-Content-Type-Options':'nosniff','Cache-Control':'private, no-store'}});
+}

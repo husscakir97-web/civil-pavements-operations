@@ -9,8 +9,8 @@ import type {ModuleKey} from './modules';
 import type {Actor,Permission} from '@/lib/authz';
 
 export class HttpError extends Error{constructor(readonly status:number,message:string,readonly details?:Record<string,unknown>){super(message);}}
-export const fail=(status:number,message:string,details?:Record<string,unknown>):never=>{throw new HttpError(status,message,details);};
-export const notFound=(what='Record')=>fail(404,`${what} not found.`);
+export function fail(status:number,message:string,details?:Record<string,unknown>):never{throw new HttpError(status,message,details);}
+export function notFound(what='Record'):never{throw new HttpError(404,`${what} not found.`);}
 
 export type Ctx={request:Request;actor:Actor;url:URL;params:URLSearchParams};
 type Options={permission:Permission;module:ModuleKey;capability?:Capability};

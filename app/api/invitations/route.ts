@@ -15,7 +15,7 @@ export const POST=withActor(async(request)=>{
  const [existing]=await getPool().execute<RowDataPacket[]>('SELECT id FROM users WHERE organisation_id=? AND LOWER(email)=?',[actor.organisationId,email]);
  if(existing.length)return Response.json({error:'This person is already a member. Use Team & permissions to change their access.'},{status:409});
  await getPool().execute('INSERT INTO organisation_invitations (id,organisation_id,email,role,token_hash,invited_by,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?)',[id,actor.organisationId,email,input.data.role,digest(token),actor.userId,new Date(Date.now()+72*3600000),new Date()]);
- try{await sendEmail(email,'Invitation to Civil & Pavements Operations',`You have been invited as ${input.data.role}. Sign up or sign in using ${email}, then accept: ${process.env.BETTER_AUTH_URL}/invite?token=${token}`);}catch{await getPool().execute('DELETE FROM organisation_invitations WHERE id=?',[id]);return Response.json({error:'Email could not be sent. Check email configuration and retry.'},{status:503});}
+ try{await sendEmail(email,'Invitation to Infrastruct',`You have been invited as ${input.data.role}. Sign up or sign in using ${email}, then accept: ${process.env.BETTER_AUTH_URL}/invite?token=${token}`);}catch{await getPool().execute('DELETE FROM organisation_invitations WHERE id=?',[id]);return Response.json({error:'Email could not be sent. Check email configuration and retry.'},{status:503});}
  return Response.json({sent:true},{status:201});
 },'admin');
 export const PUT=withActor(async(request)=>{

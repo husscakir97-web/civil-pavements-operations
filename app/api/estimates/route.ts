@@ -21,6 +21,8 @@ import {
   safeJson,
   type GenericRow,
 } from "@/lib/estimates-db";
+import { assertEditable } from '@/lib/modules/estimating/approval';
+import { HttpError } from '@/lib/platform/http';
 import { requireActor } from '@/lib/authz';
 
 export const dynamic = "force-dynamic";
@@ -276,7 +278,12 @@ async function handlePUT(request: Request) {
     if (!id) return jsonError("An estimate ID is required.");
     const row = await getEstimateRow(db, id);
     if (!row) return jsonError("The estimate was not found.", 404);
+    const workflow = await assertEditable(id).catch((e: unknown) => e);
+    if (workflow instanceof HttpError) return jsonError(workflow.message, workflow.status);
     const current = rowToEstimate(row);
+    if (isStatus(body.status) && body.status === "Awarded" && current.status !== "Awarded") {
+      return jsonError("Award an estimate from its approved revision (Award action), not by editing its status.", 409);
+    }
     const currentMetadata = parseMetadata(row.metadata);
     const libraries = await getRateLibraries(db);
     const data = normaliseEstimateData(body.data ?? current.data, libraries[0] ?? DEFAULT_RATE_LIBRARY);
@@ -313,6 +320,8 @@ async function handlePUT(request: Request) {
         .bind(name, status, JSON.stringify(nextMetadata), currentOrganisationId(), id),
       revisionStatement(db, revisionId, id, name, status, revisionNumber, data, totals, validation, cleanText(body.reason, 500) || (action === "reopen" ? "Reopened for revision" : "Saved revision"), now),
       auditStatement(db, action === "reopen" ? "estimate.reopened" : "estimate.revised", id, { status, revisionNumber, reason: cleanText(body.reason, 500) }, now),
+      // Approved revisions are immutable; editing starts a new working draft.
+      db.prepare("UPDATE estimates SET workflow_state='draft', updated_at=? WHERE organisation_id=? AND id=? AND workflow_state='approved'").bind(now, currentOrganisationId(), id),
     ];
     await db.batch(statements);
     const saved = await getEstimateRow(db, id);

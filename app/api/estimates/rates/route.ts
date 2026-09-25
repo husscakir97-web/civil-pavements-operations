@@ -1,4 +1,5 @@
 import {withActor} from '@/lib/platform/route';
+import {actorContext} from '@/lib/platform/context';
 import {
   DEFAULT_RATE_LIBRARY,
   type RateItem,
@@ -71,6 +72,9 @@ async function handlePOST(request: Request) {
          VALUES (?, ?, ?, ?, ?, ?)`,
       ).bind(id, currentOrganisationId(), library.name, "active", JSON.stringify({ ...library, id }), now).run();
     }
+    const actor = actorContext.getStore()!;
+    await db.prepare('INSERT INTO audit_log (id,organisation_id,actor_user_id,actor_email,event_type,entity_type,entity_id,summary,before_state,after_state,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+      .bind(crypto.randomUUID(), currentOrganisationId(), actor.userId, actor.email, result ? 'rates.updated' : 'rates.created', 'rate_library', id, `Rate library ${library.name} ${result ? 'updated' : 'created'}. Approved estimate revisions keep their frozen rates.`, previous?.metadata ?? null, JSON.stringify({ ...library, id }), now).run();
     return Response.json({ rateLibrary: { ...library, id } });
   } catch (error) {
     console.error("save rate library", error);

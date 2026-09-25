@@ -60,6 +60,7 @@ try{
  const compiled=ts.transpileModule(await readFile('lib/estimate-calculations.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.ES2022,target:ts.ScriptTarget.ES2022}}).outputText;
  const {makeDefaultEstimate}=await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'));
  r=await call('/api/estimates','POST',{data:{...makeDefaultEstimate(),clientName:'Integration client',projectName:'Integration job',site:'Test site'},status:'Draft'},a.cookie);assert.equal(r.status,201,await r.clone().text());const estimate=(await r.json()).estimate;
+ r=await call('/api/estimates/award','POST',{estimateId:estimate.id},a.cookie);assert.equal(r.status,422,'Award requires an approved revision');for(const action of ['submit','approve']){r=await call('/api/estimates/approval','POST',{estimateId:estimate.id,action},a.cookie);assert.equal(r.status,200,await r.clone().text());}
  r=await call('/api/estimates/award','POST',{estimateId:estimate.id},a.cookie);assert.equal(r.status,201,await r.clone().text());const job=(await r.json()).job;
  r=await call('/api/delivery','GET',undefined,a.cookie);const savedJob=(await r.json()).jobs.find(j=>j.id===job.id);const baseline=structuredClone(savedJob.metadata.approvedBudget);
  r=await call('/api/delivery','POST',{kind:'jobs',record:{...savedJob,metadata:{...savedJob.metadata,approvedBudget:{directCost:1},po:'PO1'}}},a.cookie);assert.equal(r.status,200,await r.clone().text());assert.deepEqual((await r.json()).record.metadata.approvedBudget,baseline);

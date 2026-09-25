@@ -11,7 +11,7 @@ require('./test-services.cjs').prepare(sql);const db = {prepare(query){ let valu
 
 const cache={};
 function load(file){file=path.resolve(file);const external=require('./test-services.cjs').mock(file,db,sql,typeof bucket==='undefined'?undefined:bucket);if(external)return external;if(cache[file])return cache[file].exports;const loadedModule={exports:{}};cache[file]=loadedModule;const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;new Function('require','module','exports',code)(name=>name.startsWith('@/')?load(name.slice(2)+'.ts'):name.startsWith('./')?load(path.resolve(path.dirname(file),name)+'.ts'):name.startsWith('.')?load(path.resolve(path.dirname(file),name)+'.ts'):require(name),loadedModule,loadedModule.exports);return loadedModule.exports;}
-const estimate=load('app/api/estimates/route.ts'), award=load('app/api/estimates/award/route.ts'), delivery=load('app/api/delivery/route.ts'), calc=load('lib/estimate-calculations.ts'), planning=load('lib/planning.ts');
+const estimate=load('app/api/estimates/route.ts'), award=load('app/api/estimates/award/route.ts'), approval=load('app/api/estimates/approval/route.ts'), delivery=load('app/api/delivery/route.ts'), calc=load('lib/estimate-calculations.ts'), planning=load('lib/planning.ts');
 const request=body=>new Request('https://test.invalid/api',{method:'POST',headers:{'Content-Type':'application/json','x-test-user-id':'test-owner','x-test-user-email':'admin@example.invalid'},body:JSON.stringify(body)});
 
 const field=load('app/api/field/route.ts'), fns=load('lib/field.ts');
@@ -19,6 +19,7 @@ function req(body,email='admin@example.invalid'){return new Request('https://tes
 (async()=>{
  const data={...calc.makeDefaultEstimate(),clientName:'Field test client',projectName:'Field job',site:'Site'};
  let res=await estimate.POST(request({data,status:'Draft'}));const eid=(await res.json()).estimate.id;
+ await approval.POST(request({estimateId:eid,action:'submit'}));await approval.POST(request({estimateId:eid,action:'approve'}));
  res=await award.POST(request({estimateId:eid}));const jobId=(await res.json()).job.id;
  const job=(await (await delivery.GET(new Request('https://test.invalid',{headers:{'x-test-user-id':'test-owner','x-test-user-email':'admin@example.invalid'}}))).json()).jobs[0],baseline=structuredClone(job.metadata.approvedBudget);
  let shift={id:'',name:'Field test shift',status:'Planned',metadata:{jobId,date:'2026-10-01',start:'20:00',finish:'04:00',tonnes:100,area:400,assignments:[{resourceId:'w1',category:'workers',name:'Worker',role:'Worker',hours:8,rate:60,payload:0,trips:0}],materialCost:10000}};

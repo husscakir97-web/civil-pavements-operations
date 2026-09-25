@@ -37,7 +37,22 @@ malformed values). It then upgrades and proves every legacy row is byte-identica
 
 ## 3. Deploy
 
-1. Merge the PR (human decision), then deploy from Hostinger as usual.
+Hostinger builds the branch selected in hPanel (currently `hostinger-migration`, see
+`HOSTINGER-MIGRATION.md`). **If automatic deployment is enabled for that branch, a merge into it
+deploys immediately**, so take the backup in section 2 *before* merging. Merging `hostinger-migration`
+into `main` does not change production while hPanel still points at `hostinger-migration`. Switching
+the production branch to `main` is a separate, deliberate hPanel change: select `main` with the same
+install/build/start settings and environment variables, then redeploy.
+
+| Hostinger setting | Value |
+|---|---|
+| Repository / branch | `husscakir97-web/civil-pavements-operations` / `hostinger-migration` (or `main` once switched) |
+| Node version | 22.x |
+| Install / build / start | `npm ci` / `npm run build` / `npm start` |
+| Required variables | `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `NODE_ENV=production` |
+| Email | `EMAIL_ENABLED=false` (current choice), or `true` with the SMTP variables |
+
+1. Merge the PR (human decision), then deploy from Hostinger as usual (or confirm the automatic deployment started).
 2. `npm start` (or the build hook) runs `scripts/migrate.mjs`. Expect log lines like:
    ```
    Applied 0003_v1_platform.sql
@@ -52,15 +67,30 @@ malformed values). It then upgrades and proves every legacy row is byte-identica
 
 ## 4. Verify (about 10 minutes)
 
-1. Sign in as an admin. Home loads, and Admin → Integrations shows which services are connected.
-2. **Operations → Resources → Migration issues.** Review each flagged legacy value (invalid dates,
+Record the deployed commit from Hostinger's deployment history and check it matches the merge commit.
+
+Database checks in phpMyAdmin (read-only queries):
+```sql
+SELECT name, applied_at FROM app_migrations ORDER BY name;          -- ends with 0003_v1_platform.sql, 0004_v1_resources_retention.sql
+SELECT organisation_id, status, counts, completed_at FROM app_backfills;   -- one 'completed' row per organisation with legacy resources
+SELECT entity_type, field, COUNT(*) FROM data_migration_issues WHERE status='open' GROUP BY entity_type, field;
+```
+The issue count should match the `issues` figure in the backfill log line. Issues are values that
+could not be mapped safely (they are kept, never guessed). An organisation with no legacy
+resources has no backfill row.
+
+1. Sign in as an existing admin with the existing password. Home loads, and Admin → Integrations shows which services are connected.
+2. Open an existing project. It shows its setup, baseline and commercial figures.
+3. **R2 access:** Admin → Company Library → upload a small PDF, then open it. It downloads. Delete nothing in the bucket.
+4. **Operations → Resources → Migration issues.** Review each flagged legacy value (invalid dates,
    non-numeric rates, assignments pointing at deleted records). Correct the worker, plant item or
    shift, then *Mark resolved*. Legacy values are kept on the record.
-3. Operations → Schedule: open an existing shift and save it without changes. It should save, or
+5. Operations → Schedule: open an existing shift and save it without changes. It should save, or
    show scheduling conflicts. Drafts always save.
-4. Open a project → Commercial: existing claims and invoices are listed. New claims show gross,
+6. Open a project → Commercial: existing claims and invoices are listed. New claims show gross,
    retention, net and GST.
-5. Field user on a phone: Today loads. Turn on flight mode, capture a docket, turn signal back on,
+7. Roles: a Field or Supervisor user sees the mobile field shell with no prices; an Accounts user sees Commercial but no Admin.
+8. Field user on a phone: Today loads. Turn on flight mode, capture a docket, turn signal back on,
    and the docket syncs.
 
 ## 5. Roll back

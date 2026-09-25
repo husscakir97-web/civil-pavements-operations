@@ -63,6 +63,16 @@ export const organisationProfiles=mysqlTable('organisation_profiles',{
  hseqMaturity:varchar('hseq_maturity',{length:60}),
  estimatingApproach:varchar('estimating_approach',{length:60}),
  riskMatrix:text('risk_matrix'),
+ // 0004: official ABN lookup provenance and the organisation-level AI switch.
+ abnLookupSource:varchar('abn_lookup_source',{length:40}),
+ abnLookupAt:stamp('abn_lookup_at'),
+ abnEntityName:varchar('abn_entity_name',{length:255}),
+ abnEntityType:varchar('abn_entity_type',{length:120}),
+ abnStatus:varchar('abn_status',{length:40}),
+ gstRegisteredFrom:day('gst_registered_from'),
+ aiEnabled:int('ai_enabled').notNull().default(0),
+ aiEnabledBy:ref('ai_enabled_by'),
+ aiEnabledAt:stamp('ai_enabled_at'),
  onboardingStep:int('onboarding_step').notNull().default(0),
  onboardingCompletedAt:stamp('onboarding_completed_at'),
  updatedBy:ref('updated_by'),
@@ -442,6 +452,13 @@ export const progressClaims=mysqlTable('progress_claims',{
  status:varchar('status',{length:30}).notNull().default('draft'),
  grossAmount:money('gross_amount').notNull().default('0'),
  certifiedAmount:money('certified_amount'),
+ // 0004 retention: amounts are ex-GST. Net = gross - retention withheld + retention released.
+ retentionWithheld:money('retention_withheld').notNull().default('0'),
+ retentionReleased:money('retention_released').notNull().default('0'),
+ retentionReleaseReason:text('retention_release_reason'),
+ netAmount:money('net_amount'),
+ certifiedRetention:money('certified_retention'),
+ certifiedNet:money('certified_net'),
  approvedBy:ref('approved_by'),approvedAt:stamp('approved_at'),
  submittedBy:ref('submitted_by'),submittedAt:stamp('submitted_at'),
  certifiedBy:ref('certified_by'),certifiedAt:stamp('certified_at'),
@@ -476,3 +493,144 @@ export const clientInvoices=mysqlTable('client_invoices',{
  paidAmount:money('paid_amount').notNull().default('0'),
  ...lifecycle(),
 },t=>[uniqueIndex('idx_invoices_number').on(t.organisationId,t.invoiceNumber),uniqueIndex('idx_invoices_claim').on(t.organisationId,t.claimId),index('idx_invoices_org_project').on(t.organisationId,t.projectId)]);
+
+// ---------------------------------------------------------------- resources (0004)
+// Workers, plant and shifts keep their legacy tables and IDs and gain typed
+// columns (db/schema.ts). These tables hold the one-to-many parts.
+export const workerCompetencies=mysqlTable('worker_competencies',{
+ id:id(),organisationId:org(),workerId:ref('worker_id').notNull(),
+ competencyType:varchar('competency_type',{length:160}).notNull(),
+ reference:varchar('reference',{length:120}),
+ issuedDate:day('issued_date'),
+ expiryDate:day('expiry_date'),
+ documentId:ref('document_id'),
+ status:varchar('status',{length:20}).notNull().default('current'),
+ source:varchar('source',{length:20}).notNull().default('manual'),
+ ...lifecycle(),
+},t=>[uniqueIndex('idx_competencies_unique').on(t.organisationId,t.workerId,t.competencyType),index('idx_competencies_org_expiry').on(t.organisationId,t.expiryDate)]);
+
+export const shiftAssignments=mysqlTable('shift_assignments',{
+ id:id(),organisationId:org(),shiftId:ref('shift_id').notNull(),
+ resourceType:varchar('resource_type',{length:20}).notNull(),
+ resourceId:ref('resource_id').notNull(),
+ role:varchar('role',{length:80}),
+ startTime:varchar('start_time',{length:5}),
+ finishTime:varchar('finish_time',{length:5}),
+ source:varchar('source',{length:20}).notNull().default('manual'),
+ createdBy:ref('created_by'),createdAt:stamp('created_at').notNull(),
+},t=>[uniqueIndex('idx_assignments_unique').on(t.organisationId,t.shiftId,t.resourceType,t.resourceId),index('idx_assignments_org_resource').on(t.organisationId,t.resourceType,t.resourceId)]);
+
+// Records a legacy row that could not be migrated cleanly. Never deleted by code.
+export const dataMigrationIssues=mysqlTable('data_migration_issues',{
+ id:id(),organisationId:org(),
+ migration:varchar('migration',{length:60}).notNull(),
+ entityType:varchar('entity_type',{length:40}).notNull(),
+ entityId:ref('entity_id').notNull(),
+ field:varchar('field',{length:80}).notNull(),
+ issue:varchar('issue',{length:500}).notNull(),
+ legacyValue:text('legacy_value'),
+ status:varchar('status',{length:20}).notNull().default('open'),
+ resolvedBy:ref('resolved_by'),resolvedAt:stamp('resolved_at'),
+ createdAt:stamp('created_at').notNull(),
+},t=>[uniqueIndex('idx_migration_issues_unique').on(t.organisationId,t.migration,t.entityType,t.entityId,t.field),index('idx_migration_issues_org_status').on(t.organisationId,t.status)]);
+
+// Offline/field sync idempotency: one row per client-generated request id.
+export const clientRequests=mysqlTable('client_requests',{
+ id:id(),organisationId:org(),
+ clientRequestId:varchar('client_request_id',{length:80}).notNull(),
+ userId:ref('user_id').notNull(),
+ kind:varchar('kind',{length:40}).notNull(),
+ entityType:varchar('entity_type',{length:40}),
+ entityId:ref('entity_id'),
+ status:varchar('status',{length:20}).notNull(),
+ responseStatus:int('response_status').notNull().default(200),
+ response:text('response'),
+ createdAt:stamp('created_at').notNull(),
+},t=>[uniqueIndex('idx_client_requests_unique').on(t.organisationId,t.clientRequestId),index('idx_client_requests_org_user').on(t.organisationId,t.userId)]);
+
+// ---------------------------------------------------------------- AI (0004, not activated)
+// Idempotent usage ledger: one row per (organisation, idempotency key).
+export const aiUsageLedger=mysqlTable('ai_usage_ledger',{
+ id:id(),organisationId:org(),
+ idempotencyKey:varchar('idempotency_key',{length:120}).notNull(),
+ feature:varchar('feature',{length:60}).notNull(),
+ provider:varchar('provider',{length:40}).notNull(),
+ model:varchar('model',{length:120}),
+ status:varchar('status',{length:20}).notNull(),
+ inputTokens:int('input_tokens').notNull().default(0),
+ outputTokens:int('output_tokens').notNull().default(0),
+ error:varchar('error',{length:500}),
+ entityType:varchar('entity_type',{length:40}),
+ entityId:ref('entity_id'),
+ requestedBy:ref('requested_by').notNull(),
+ createdAt:stamp('created_at').notNull(),
+ completedAt:stamp('completed_at'),
+},t=>[uniqueIndex('idx_ai_ledger_key').on(t.organisationId,t.idempotencyKey),index('idx_ai_ledger_org_created').on(t.organisationId,t.createdAt)]);
+
+// AI output is only ever a suggestion, linked to its source and the ledger entry.
+export const aiSuggestions=mysqlTable('ai_suggestions',{
+ id:id(),organisationId:org(),
+ ledgerId:ref('ledger_id').notNull(),
+ feature:varchar('feature',{length:60}).notNull(),
+ entityType:varchar('entity_type',{length:40}).notNull(),
+ entityId:ref('entity_id').notNull(),
+ field:varchar('field',{length:80}),
+ content:text('content').notNull(),
+ sourceDocumentId:ref('source_document_id'),
+ sourceLocation:varchar('source_location',{length:120}),
+ confidence:double('confidence'),
+ extractedAt:stamp('extracted_at').notNull(),
+ status:varchar('status',{length:20}).notNull().default('suggested'),
+ decidedBy:ref('decided_by'),decidedAt:stamp('decided_at'),
+ appliedEntityId:ref('applied_entity_id'),
+ createdAt:stamp('created_at').notNull(),
+},t=>[index('idx_ai_suggestions_org_entity').on(t.organisationId,t.entityType,t.entityId),index('idx_ai_suggestions_org_status').on(t.organisationId,t.status)]);
+
+// ---------------------------------------------------------------- billing (0004, provider-neutral)
+export const billingCustomers=mysqlTable('billing_customers',{
+ id:id(),organisationId:org(),
+ provider:varchar('provider',{length:40}).notNull(),
+ providerCustomerId:varchar('provider_customer_id',{length:191}),
+ billingEmail:varchar('billing_email',{length:254}),
+ ...lifecycle(),
+},t=>[uniqueIndex('idx_billing_customers_org_provider').on(t.organisationId,t.provider),index('idx_billing_customers_provider_id').on(t.provider,t.providerCustomerId)]);
+
+export const billingSubscriptions=mysqlTable('billing_subscriptions',{
+ id:id(),organisationId:org(),
+ provider:varchar('provider',{length:40}).notNull(),
+ providerSubscriptionId:varchar('provider_subscription_id',{length:191}),
+ planCode:varchar('plan_code',{length:60}).notNull(),
+ status:varchar('status',{length:20}).notNull(),
+ modules:text('modules').notNull(),
+ trialEndsAt:stamp('trial_ends_at'),
+ currentPeriodEnd:stamp('current_period_end'),
+ cancelAt:stamp('cancel_at'),
+ cancelledAt:stamp('cancelled_at'),
+ lastPaymentFailedAt:stamp('last_payment_failed_at'),
+ changedBy:ref('changed_by'),
+ ...lifecycle(),
+},t=>[index('idx_billing_subscriptions_org').on(t.organisationId,t.status),uniqueIndex('idx_billing_subscriptions_provider').on(t.provider,t.providerSubscriptionId)]);
+
+// Every webhook delivery is logged once (unique provider event id) before it is applied.
+export const billingEvents=mysqlTable('billing_events',{
+ id:id(),organisationId:org(),
+ provider:varchar('provider',{length:40}).notNull(),
+ eventId:varchar('event_id',{length:191}).notNull(),
+ eventType:varchar('event_type',{length:120}).notNull(),
+ signatureValid:int('signature_valid').notNull(),
+ status:varchar('status',{length:20}).notNull(),
+ error:varchar('error',{length:500}),
+ payload:text('payload').notNull(),
+ receivedAt:stamp('received_at').notNull(),
+ processedAt:stamp('processed_at'),
+},t=>[uniqueIndex('idx_billing_events_unique').on(t.provider,t.eventId),index('idx_billing_events_org').on(t.organisationId,t.receivedAt)]);
+
+// Records each one-off data backfill run by scripts/migrate.mjs (append-only).
+export const appBackfills=mysqlTable('app_backfills',{
+ id:id(),organisationId:org(),
+ name:varchar('name',{length:80}).notNull(),
+ status:varchar('status',{length:20}).notNull(),
+ counts:text('counts').notNull(),
+ startedAt:stamp('started_at').notNull(),
+ completedAt:stamp('completed_at'),
+},t=>[index('idx_app_backfills_org_name').on(t.organisationId,t.name)]);

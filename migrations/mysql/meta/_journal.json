@@ -29,6 +29,13 @@
       "when": 1790305723643,
       "tag": "0003_v1_platform",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1790313660234,
+      "tag": "0004_v1_resources_retention",
+      "breakpoints": true
     }
   ]
 }

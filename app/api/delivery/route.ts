@@ -5,6 +5,8 @@ import { imsBlockers } from '@/lib/ims-readiness';
 import { requireActor } from '@/lib/authz';
 import { currentOrganisationId, currentOrganisationId as ORG, requireEstimateDb, safeJson, jsonError } from '@/lib/estimates-db';
 import { CHECKS, SHIFT_STATUSES, mergeJob, shiftWarnings, type DeliveryRecord, type Meta } from '@/lib/planning';
+import { evaluateShift, blocking, loadResources, loadNearbyShifts, shiftInput, type Conflict } from '@/lib/modules/operations/conflicts';
+import { shiftStatements } from '@/lib/v1/resource-sync';
 export const dynamic = 'force-dynamic';
 const tables = ['jobs','shifts','workers','crews','plant','suppliers','subcontractors'] as const;
 async function load(db: Database, table: string): Promise<DeliveryRecord[]> {
@@ -19,7 +21,7 @@ async function handlePOST(request:Request) {
   try {
     const body=await request.json() as {kind:string;record:DeliveryRecord};
     if (!['jobs','shifts'].includes(body.kind)) return jsonError('Invalid record type.');
-    const db=requireEstimateDb(); await requireActor(request, db, 'write'); const record=body.record;
+    const db=requireEstimateDb(); const actor=await requireActor(request, db, 'write'); const record=body.record;
     if (!record?.name?.trim()) return jsonError('Name is required.');
     const existing=record.id ? (await load(db,body.kind)).find(r=>r.id===record.id) : undefined;
     if(record.id && !existing) return jsonError('Record no longer exists.',404);
@@ -27,6 +29,12 @@ async function handlePOST(request:Request) {
     const metadata=body.kind==='jobs' ? mergeJob(existing?.metadata || {},record.metadata || {}) : {...existing?.metadata,...record.metadata};
     const saved={...record,id,metadata};
     let warnings:string[]=[];
+    let conflicts:Conflict[]=[];
+    const sync:{sql:string;params:unknown[]}[]=[];
+    if(body.kind==='jobs' && existing){
+      const current=await db.prepare('SELECT stage FROM jobs WHERE organisation_id=? AND id=?').bind(ORG(),id).first<{stage:string|null}>();
+      if(current?.stage==='closed') return jsonError('This project is closed. Reopen it from the project workspace before changing it.',409);
+    }
     if(body.kind==='jobs' && record.status==='Ready to Commence'){
       const blockers=await imsBlockers(db,ORG(),id);
       if(blockers.length)return jsonError('Complete mandatory IMS requirements before commencement.',422,{warnings:blockers});
@@ -37,16 +45,25 @@ async function handlePOST(request:Request) {
       const jobs=await load(db,'jobs'); if(!jobs.some(j=>j.id===metadata.jobId)) return jsonError('Select an existing job.');
       const stage=await db.prepare('SELECT stage FROM jobs WHERE organisation_id=? AND id=?').bind(currentOrganisationId(),String(metadata.jobId)).first<{stage:string|null}>();
       if(stage?.stage==='closed') return jsonError('This project is closed. Reopen it before scheduling work.',409);
-      const resources=(await Promise.all(tables.slice(2).map(t=>load(db,t)))).flat();
+      const byTable=await Promise.all(tables.slice(2).map(t=>load(db,t)));
+      const resources=byTable.flat();
       warnings=shiftWarnings(saved,jobs,await load(db,'shifts'),resources);
+      // Deterministic conflict engine over typed resources (double-booking, inactive,
+      // competencies, plant compliance). Blocks apply to Planned / Ready / In Progress.
+      const input=shiftInput({...saved,metadata});
+      conflicts=evaluateShift(input,await loadResources(db,ORG(),input.assignments),await loadNearbyShifts(db,ORG(),input.date));
+      const blocks=blocking(record.status,conflicts);
+      if(blocks.length) return jsonError(`Resolve ${blocks.length===1?'this scheduling conflict':`these ${blocks.length} scheduling conflicts`} or save the shift as Draft.`,409,{conflicts,warnings});
+      const known={jobIds:new Set(jobs.map(j=>j.id)),resources:new Map(byTable.flatMap((rows,i)=>rows.map(r=>[r.id,tables[i+2]] as [string,string])))};
+      sync.push(...shiftStatements(ORG(),{id,name:record.name.trim(),status:record.status,metadata},known,new Date().toISOString(),()=>crypto.randomUUID(),actor.userId).statements);
       if (['Ready','In Progress'].includes(record.status)) warnings.push(...await imsBlockers(db,ORG(),String(metadata.jobId)));
       const checks=metadata.checks as Record<string,boolean> || {};
       if (['Ready','In Progress'].includes(record.status) && (warnings.length || CHECKS.some(c=>!checks[c]))) return jsonError('Resolve warnings and complete the checklist before marking Ready or In Progress.',422,{warnings});
     }
     const now=new Date().toISOString();
     const write=existing ? db.prepare(`UPDATE ${body.kind} SET name=?,status=?,metadata=? WHERE id=? AND organisation_id=?`).bind(record.name.trim(),record.status,JSON.stringify(metadata),id,ORG()) : db.prepare(`INSERT INTO ${body.kind} (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)`).bind(id,ORG(),record.name.trim(),record.status,JSON.stringify(metadata),now);
-    await db.batch([write,db.prepare('INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(),ORG(),`${body.kind}.${existing?'updated':'created'}`,'recorded',JSON.stringify({recordId:id}),now)]);
-    return Response.json({record:saved,warnings},{status:existing?200:201});
+    await db.batch([write,...sync.map(s=>db.prepare(s.sql).bind(...s.params)),db.prepare('INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(),ORG(),`${body.kind}.${existing?'updated':'created'}`,'recorded',JSON.stringify({recordId:id}),now)]);
+    return Response.json({record:saved,warnings,conflicts},{status:existing?200:201});
   } catch(e) { console.error(e);return jsonError('Unable to save. Your changes are still in the form.',503); }
 }
 

@@ -3,6 +3,7 @@ import {requireEstimateDb} from '@/lib/estimates-db';
 import {actorContext} from '@/lib/platform/context';
 import {can,type Capability} from '@/lib/platform/permissions';
 import {getEntitlements,usable} from '@/lib/platform/entitlements';
+import {documentContextsFor} from '@/lib/platform/documents';
 import type {ModuleKey} from '@/lib/platform/modules';
 
 // Global search across authorised records. Every spec declares the module it
@@ -36,7 +37,8 @@ async function handleGET(request:Request){
   const allowed=specs.filter(s=>usable(entitlements,s.module)&&(s.capability==='field'?true:can(actor.role,s.capability)));
   const like=`%${q.replace(/[\\%_]/g,m=>'\\'+m)}%`;
   const groups=await Promise.all(allowed.map(async spec=>{
-   const fieldDocs=spec.table==='documents'&&actor.role==='field'?" AND visibility='field'":'';
+   const docContexts=documentContextsFor(actor.role).map(c=>`'${c}'`).join(',')||"''";
+   const fieldDocs=spec.table==='documents'?(actor.role==='field'?" AND visibility='field'":` AND context_type IN (${docContexts})`):'';
    const fieldSwms=spec.table==='swms'&&actor.role==='field'?' AND issued_revision_id IS NOT NULL':'';
    const r=await db.prepare(`SELECT id,${spec.name} AS name,${spec.status} AS status,${spec.detail} AS detail${spec.project?`,${spec.project} AS project_id`:''} FROM ${spec.table} WHERE organisation_id=? ${spec.filter||''}${fieldDocs}${fieldSwms} AND (${spec.match.map(c=>`${c} LIKE ?`).join(' OR ')}) LIMIT 10`).bind(actor.organisationId,...spec.match.map(()=>like)).all<Record<string,unknown>>();
    return r.results.map(x=>({id:String(x.id),name:String(x.name??''),status:String(x.status??''),detail:String(x.detail??'').slice(0,200),type:spec.type,area:spec.area,projectId:x.project_id?String(x.project_id):null}));

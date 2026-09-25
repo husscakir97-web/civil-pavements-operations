@@ -49,6 +49,18 @@ const matrix={
 for(const [r,{yes,no}] of Object.entries(matrix)){for(const [p,m] of yes)assert(gate(r,p,m),`${r} should pass ${p}/${m||'core'}`);for(const [p,m] of no)assert(!gate(r,p,m),`${r} must not pass ${p}/${m||'core'}`);}
 for(const r of ['scheduler','supervisor','field','read_only'])assert.equal(perm.can(r,'commercial.view'),false,r+' never sees money');
 assert.equal(perm.can('estimator','estimate.approve'),false);assert.equal(perm.can('project_manager','claim.approve'),false);assert.equal(perm.can('accounts','claim.approve'),true);
+// Admin navigation is capability-driven: no role sees administration it cannot use.
+const navDef=load('lib/v1/navigation.ts');
+assert.deepEqual(navDef.adminSubsFor('admin'),['Company','People','Plant','Rates','Company Library','Team & Permissions','Integrations','Settings']);
+assert.deepEqual(navDef.adminSubsFor('estimator'),['Rates','Company Library'],'estimator: rates (read) and library, no organisation/security/entitlements');
+assert.deepEqual(navDef.adminSubsFor('scheduler'),['People','Plant'],'operations: people and plant only');
+assert.deepEqual(navDef.adminSubsFor('project_manager'),['People','Plant']);
+assert.deepEqual(navDef.adminSubsFor('accounts'),[],'accounts: no admin area');
+assert.deepEqual(navDef.adminSubsFor('read_only'),[],'read-only: no admin area');
+assert.deepEqual(navDef.adminSubsFor('field'),[]);assert.deepEqual(navDef.adminSubsFor('supervisor'),[]);
+assert(!navDef.adminSubsFor('office').some(k=>['Team & Permissions','Integrations','Settings','Company'].includes(k)),'office has no organisation administration');
+assert.deepEqual(navDef.FIELD_SHELL_ROLES,['field','supervisor']);
+for(const r of navDef.FIELD_SHELL_ROLES)assert.equal(perm.can(r,'commercial.view'),false,r+' shell never carries money');
 assert.equal(perm.can('read_only','project.edit'),false);assert(perm.capabilitiesFor('read_only').every(c=>c.endsWith('.view')),'read-only holds view capabilities only');
 
 // ABN checksum (ATO algorithm) — format only, no fake registry lookups.
@@ -73,7 +85,9 @@ assert.deepEqual(fin.retention(T,0,50,50),{gross:0,withheld:0,released:50,net:50
 assert.deepEqual(fin.retention(T,-200,50),{gross:-200,withheld:0,released:0,net:-200,heldAfter:50});
 assert.throws(()=>fin.retention(T,100,40,40.01),/exceeds retention held/);assert.throws(()=>fin.retention(T,100,40,-1),/negative/);
 assert.equal(fin.retention(T,333.33,0).withheld,16.67,'rounded to cents');
-assert.deepEqual(fin.retentionHeld([{retentionWithheld:50,certifiedRetention:40,retentionReleased:0},{retentionWithheld:30,certifiedRetention:null,retentionReleased:20}]),{withheld:70,released:20,held:50},'certified retention supersedes claimed');assert.throws(()=>fin.claimLine(1000,100,-200),/negative adjustment/);
+assert.deepEqual(fin.retentionHeld([{status:'certified',retentionWithheld:50,certifiedRetention:40,retentionReleased:0},{status:'submitted',retentionWithheld:30,certifiedRetention:null,retentionReleased:20}]),{withheld:70,released:20,held:50},'certified retention supersedes claimed');
+assert.deepEqual(fin.retentionHeld([{status:'invoiced',retentionWithheld:50,certifiedRetention:40,retentionReleased:0},{status:'draft',retentionWithheld:30,certifiedRetention:null,retentionReleased:20},{status:'internal_approval',retentionWithheld:10,certifiedRetention:null,retentionReleased:0}]),{withheld:40,released:0,held:40},'drafts and claims awaiting internal approval hold no retention');
+assert.deepEqual([...fin.RETENTION_HELD_STATES],['submitted','certified','invoiced','paid']);assert.throws(()=>fin.claimLine(1000,100,-200),/negative adjustment/);
 assert.deepEqual(fin.gst(19800),{amountExGst:19800,gst:1980,total:21780});
 assert.equal(fin.readinessPercent([{mandatory:true,ok:true},{mandatory:true,ok:false},{mandatory:false,ok:false}]),50);assert.equal(fin.readinessPercent([]),null);
 

@@ -49,7 +49,7 @@ export async function projectFinancials(projectId:string){
  const f=forecast({originalContract,approvedVariations:sum(approved,v=>Number(v.approved_value??v.value)),pendingVariations:sum(variations.filter(v=>['draft','submitted'].includes(v.status)),v=>Number(v.value)),originalBudget,approvedVariationCost:sum(approved,v=>Number(v.cost)),actual:Object.values(actualByCat).reduce((n,v)=>n+v,0),committed,accrued,claimed,certified,invoiced:sum(liveInvoices,i=>Number(i.amount_ex_gst)),paid:sum(liveInvoices,i=>Number(i.total)>0?Number(i.paid_amount)*Number(i.amount_ex_gst)/Number(i.total):0)});
  const budgetByCat=baseline?{labour:Number(baseline.budget_labour),plant:Number(baseline.budget_plant),material:Number(baseline.budget_material),subcontract:Number(baseline.budget_subcontract),other:Number(baseline.budget_other)+Number(baseline.budget_indirect)}:null;
  // Retention on claims the client has received (submitted onwards); drafts hold nothing yet.
- const retention=retentionHeld(claims.filter(c=>['submitted','certified','invoiced','paid'].includes(c.status)).map(c=>({retentionWithheld:Number(c.retention_withheld||0),certifiedRetention:c.certified_retention==null?null:Number(c.certified_retention),retentionReleased:Number(c.retention_released||0)})));
+ const retention=retentionHeld(claims.map(c=>({status:String(c.status),retentionWithheld:Number(c.retention_withheld||0),certifiedRetention:c.certified_retention==null?null:Number(c.certified_retention),retentionReleased:Number(c.retention_released||0)})));
  return {forecast:f,retention,hasBaseline:Boolean(baseline),budgetByCategory:budgetByCat,actualByCategory:actualByCat};
 }
 

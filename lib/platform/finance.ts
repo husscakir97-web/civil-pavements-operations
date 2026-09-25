@@ -51,10 +51,20 @@ export function retention(terms:RetentionTerms,gross:number,heldBefore:number,re
  const released=r(release);
  return {gross:r(gross),withheld,released,net:r(gross-withheld+released),heldAfter:r(heldBefore+withheld-released)};
 }
-/** Retention held on a set of claims: certified retention where certified, otherwise the claimed retention, less releases. */
-export function retentionHeld(claims:Array<{retentionWithheld:number;certifiedRetention:number|null;retentionReleased:number}>){
- const withheld=r(claims.reduce((s,c)=>s+(c.certifiedRetention??c.retentionWithheld),0));
- const released=r(claims.reduce((s,c)=>s+c.retentionReleased,0));
+/**
+ * Claim states in which retention is actually held (the claim has gone to the client).
+ * Drafts and claims awaiting internal approval hold nothing. This is the only definition:
+ * the claims panel, project control, the portfolio, releases and new-claim caps all use it.
+ * The cap stays safe because a project has at most one unsent (draft / internal approval)
+ * claim, and a new claim can only be started once every earlier claim has been submitted.
+ */
+export const RETENTION_HELD_STATES=['submitted','certified','invoiced','paid'] as const;
+export const holdsRetention=(status:string)=>(RETENTION_HELD_STATES as readonly string[]).includes(status);
+/** Retention held on a set of claims: certified retention where certified, otherwise the claimed retention, less releases. Claims that have not gone to the client are ignored. */
+export function retentionHeld(claims:Array<{status:string;retentionWithheld:number;certifiedRetention:number|null;retentionReleased:number}>){
+ const held=claims.filter(c=>holdsRetention(c.status));
+ const withheld=r(held.reduce((s,c)=>s+(c.certifiedRetention??c.retentionWithheld),0));
+ const released=r(held.reduce((s,c)=>s+c.retentionReleased,0));
  return {withheld,released,held:r(withheld-released)};
 }
 export const gst=(amountExGst:number,ratePct=10)=>{const g=r(amountExGst*ratePct/100);return {amountExGst:r(amountExGst),gst:g,total:r(amountExGst+g)};};

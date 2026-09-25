@@ -24,6 +24,8 @@ export const idb={
  set:(store:string,key:string,value:unknown)=>run<void>(store,'readwrite',s=>s.put(value,key)),
  del:(store:string,key:string)=>run<void>(store,'readwrite',s=>s.delete(key)),
 };
+/** Cached copies of field data are removed at sign-out; queued work and drafts stay until sent or discarded. */
+export async function clearOfflineCache(){try{await run<void>('cache','readwrite',st=>st.clear());}catch{/* storage unavailable */}}
 const queueStore:QueueStore={
  list:()=>run<QueueItem[]>('queue','readonly',s=>s.getAll()),
  put:item=>run<void>('queue','readwrite',s=>s.put(item)),

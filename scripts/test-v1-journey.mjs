@@ -276,6 +276,18 @@ try{
  assert.equal((await call('/api/tenders/workspace','POST',{action:'award',id:tenderId},B.cookie)).status,404,'foreign award');
  assert.equal((await call('/api/commercial/claims','POST',{action:'certify',claimId:claim.claimId,certifiedAmount:1},B.cookie)).status,404,'foreign claim');
  assert.equal((await call('/api/hseq/swms','POST',{action:'acknowledge',id:sw.swmsId},B.cookie)).status,404,'foreign SWMS');
+ // Resources, shifts, dockets, variations, invoices and documents by known IDs.
+ const bWorkers=await json(await call('/api/operations/resources?kind=workers','GET',undefined,B.cookie),200);assert(!bWorkers.workers.some(w=>w.id===workerId),'no cross-tenant resources');
+ assert.equal((await call('/api/operations/resources','POST',{action:'saveWorker',id:workerId,worker:{firstName:'Hacked',status:'Active'}},B.cookie)).status,404,'foreign worker update');
+ assert.equal((await call('/api/operations/resources','POST',{action:'saveCompetency',workerId,competency:{competencyType:'x'}},B.cookie)).status,404,'foreign competency');
+ assert.equal((await call('/api/delivery','POST',{kind:'shifts',record:{...shift,name:'Hijack'}},B.cookie)).status,404,'foreign shift update');
+ const bDelivery=await json(await call('/api/delivery','GET',undefined,B.cookie),200);assert(!bDelivery.shifts.some(x=>x.id===shift.id),'no cross-tenant shifts');
+ assert.notEqual((await call('/api/dockets','PUT',{...priced,notes:'hacked'},B.cookie)).status,200,'foreign docket update refused');
+ const [[docketAfter]]=await db.execute('SELECT notes,organisation_id FROM dockets WHERE id=?',[priced.id]);assert.notEqual(docketAfter.notes,'hacked');assert.equal(docketAfter.organisation_id,memberA.organisation_id);
+ assert.equal((await call('/api/registers/variations','PATCH',{id:v.id,transition:'rejected'},B.cookie)).status,404,'foreign variation');
+ assert.equal((await call('/api/commercial/claims?invoiceId='+inv.invoiceId,'GET',undefined,B.cookie)).status,404,'foreign invoice PDF');
+ assert.equal((await call('/api/commercial/claims','POST',{action:'invoice-action',invoiceId:inv.invoiceId,invoiceAction:'void'},B.cookie)).status,404,'foreign invoice action');
+ assert.equal((await call('/api/documents?id='+insuranceDoc.id,'GET',undefined,B.cookie)).status,404,'foreign document download');
  const bSearch=await json(await call('/api/search?q=Riverside','GET',undefined,B.cookie),200);assert.equal(bSearch.results.length,0,'no cross-tenant search');
  const bLists=await json(await call('/api/registers/library','GET',undefined,B.cookie),200);assert.equal(bLists.records.length,0);
  const bReport=await json(await call('/api/reports/v1','GET',undefined,B.cookie),200);assert.equal(bReport.commercial.projects.length,0,'no cross-tenant reporting');
@@ -316,10 +328,14 @@ try{
  await json(await call('/api/commercial/claims','POST',{action:'create',projectId,period:today.slice(0,7),lines:[],retentionRelease:{amount:20,reason:''}},A.cookie),422,'release needs a reason');
  const c3=await json(await call('/api/commercial/claims','POST',{action:'create',projectId,period:today.slice(0,7),lines:[{lineType:'contract',sourceId:cl.sourceId,thisClaim:1000}],retentionRelease:{amount:20,reason:'Practical completion'}},A.cookie),201);
  assert.deepEqual([c3.retentionWithheld,c3.retentionReleased,c3.netAmount],[30,20,990],'cap limits withholding to 70 in total; release is added to net');
+ await json(await call('/api/commercial/claims','POST',{action:'transition',claimId:c3.claimId,to:'internal_approval'},A.cookie),200);
+ await json(await call('/api/commercial/claims','POST',{action:'create',projectId,period:today.slice(0,7),lines:[{lineType:'contract',sourceId:cl.sourceId,thisClaim:1000}]},A.cookie),409,'one unsent claim at a time, so unsent retention can never be double-counted against the cap');
+ await json(await call('/api/commercial/claims','POST',{action:'transition',claimId:c3.claimId,to:'draft'},A.cookie),200);
  claims=await json(await call('/api/commercial/claims?projectId='+projectId,'GET',undefined,A.cookie),200);
  const h2=claims.claims.find(c=>c.id===c2.claimId);
  assert.deepEqual([h2.grossAmount,h2.retentionWithheld,h2.netAmount,h2.certifiedAmount,h2.certifiedRetention,h2.certifiedNet],[1000,50,950,800,40,760],'earlier claim history is never rewritten');
- assert.deepEqual([claims.retention.withheld,claims.retention.released,claims.retention.held],[70,20,50]);
+ assert.deepEqual([claims.retention.withheld,claims.retention.released,claims.retention.held],[40,0,40],'a draft claim neither withholds nor releases retention');
+ const portfolio=await json(await call('/api/commercial/portfolio','GET',undefined,A.cookie),200);assert.equal(portfolio.projects.find(x=>x.id===projectId).retentionHeld,40,'portfolio uses the same definition');
  await json(await call('/api/commercial/claims','POST',{action:'delete',claimId:c3.claimId},A.cookie),200);
  const releaseOnly=await json(await call('/api/commercial/claims','POST',{action:'create',projectId,period:today.slice(0,7),lines:[],retentionRelease:{amount:40,reason:'End of defects period'}},A.cookie),201);
  assert.deepEqual([releaseOnly.grossAmount,releaseOnly.retentionWithheld,releaseOnly.netAmount],[0,0,40],'release-only claim');
@@ -360,6 +376,15 @@ try{
  await expect('supervisor',[['GET','/api/field/today',200],['GET','/api/commercial/claims?projectId='+projectId,403],['GET','/api/dockets',403],['GET','/api/estimates',403]]);await noRates('supervisor');
  await expect('accounts',[['GET','/api/commercial/claims?projectId='+projectId,200],['GET','/api/dockets',200],['GET','/api/tenders/register',403],['POST','/api/operations/resources',403,{action:'savePlant',plant:{name:'x',status:'Available'}}],['GET','/api/estimates',403]]);
  await expect('read_only',[['GET','/api/projects',200],['GET','/api/registers/risks?parentId='+projectId,200],['POST','/api/registers/risks',403,{parentId:projectId,values:{title:'x'}}],['GET','/api/commercial/claims?projectId='+projectId,403],['POST','/api/field/today',403,{shiftId:shift.id,workDate:today}],['GET','/api/team',403]]);await noRates('read_only');
+ // Documents follow the record they belong to: tender pricing never reaches scheduling roles.
+ await as('admin');
+ const pricing=(await json(await upload(A.cookie,{contextType:'tender',contextId:tenderId,category:'Pricing',title:'Priced schedule'}),201)).document;
+ await as('scheduler');
+ assert.equal((await call('/api/documents?id='+pricing.id,'GET',undefined,R.cookie)).status,403,'scheduler cannot open tender documents');
+ const schedDocs=await json(await call('/api/documents?contextType=tender&contextId='+tenderId,'GET',undefined,R.cookie),200);assert.equal(schedDocs.documents.length,0,'nor list them');
+ const schedSearch=await json(await call('/api/search?q=Priced','GET',undefined,R.cookie),200);assert(!schedSearch.results.some(r=>r.id===pricing.id),'nor find them in search');
+ await as('estimator');
+ assert.equal((await call('/api/documents?id='+pricing.id,'GET',undefined,R.cookie)).status,200,'estimator can open tender documents');
  await as('estimator');
  const sup=new FormData();sup.set('contextType','library');sup.set('supersedesId',insuranceDoc.id);sup.set('file',new File(['%PDF-1.4 v2'],'v2.pdf',{type:'application/pdf'}));
  assert.equal((await call('/api/documents','POST',sup,R.cookie)).status,403,'only the uploader or a document approver can replace a document');

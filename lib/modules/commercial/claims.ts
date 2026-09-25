@@ -44,8 +44,8 @@ export async function claimable(projectId:string,conn?:PoolConnection){
 const terms=(p:Row):RetentionTerms=>({enabled:Boolean(Number(p.retention_enabled)),pct:Number(p.retention_pct||0),cap:p.retention_cap_amount==null?null:Number(p.retention_cap_amount)});
 /** Retention held on the project's claims numbered before `beforeNumber` (all claims when null). */
 async function heldExcluding(projectId:string,beforeNumber:number|null,conn?:PoolConnection){
- const rows=await query('SELECT retention_withheld,certified_retention,retention_released FROM progress_claims WHERE organisation_id=? AND project_id=?'+(beforeNumber!=null?' AND number<?':''),[actor().organisationId,projectId,...(beforeNumber!=null?[beforeNumber]:[])],conn);
- return retentionHeld(rows.map(c=>({retentionWithheld:Number(c.retention_withheld),certifiedRetention:c.certified_retention==null?null:Number(c.certified_retention),retentionReleased:Number(c.retention_released)})));
+ const rows=await query('SELECT status,retention_withheld,certified_retention,retention_released FROM progress_claims WHERE organisation_id=? AND project_id=?'+(beforeNumber!=null?' AND number<?':''),[actor().organisationId,projectId,...(beforeNumber!=null?[beforeNumber]:[])],conn);
+ return retentionHeld(rows.map(c=>({status:String(c.status),retentionWithheld:Number(c.retention_withheld),certifiedRetention:c.certified_retention==null?null:Number(c.certified_retention),retentionReleased:Number(c.retention_released)})));
 }
 export async function retentionSummary(projectId:string,conn?:PoolConnection){
  const p=await project(projectId,conn);

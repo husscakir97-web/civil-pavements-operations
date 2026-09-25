@@ -11,6 +11,7 @@ import { WorkspaceBrandProvider } from "@/components/workspace-brand";
 import { useSession, Tabs } from "@/components/v1/kit";
 import { NavContext, parseRoute, routeHash, useNav, type Route } from "@/components/v1/nav";
 import { OfflineProvider } from "@/components/v1/offline";
+import { ADMIN_SUBS, FIELD_SHELL_ROLES } from "@/lib/v1/navigation";
 import type { Capability } from "@/lib/platform/permissions";
 
 const loading = () => <div role="status" className="workspace-placeholder"><span className="sr-only">Loading workspace…</span><div className="h-7 w-52 rounded bg-slate-200/70"/><div className="mt-3 h-4 w-72 max-w-full rounded bg-slate-200/50"/><div className="mt-8 grid gap-4 sm:grid-cols-3">{[0,1,2].map(i=><div key={i} className="h-28 rounded-xl border bg-white"/>)}</div><div className="mt-5 h-64 rounded-xl border bg-white"/></div>;
@@ -52,7 +53,7 @@ const FieldToday = dynamic(() => loaders.field().then(m => m.FieldToday), { load
 const ResourcesArea = dynamic(() => loaders.resources().then(m => m.ResourcesArea), { loading });
 const FieldWorkspace = dynamic(() => loaders.fieldRecords().then(m => m.FieldWorkspace), { loading });
 
-type Area = { key: string; label: string; icon: LucideIcon; module?: string; capability?: Capability; subs?: Array<{ key: string; module?: string; capability?: Capability }>; preload: () => Promise<unknown> };
+type Area = { key: string; label: string; icon: LucideIcon; module?: string; capability?: Capability; subs?: Array<{ key: string; module?: string; capability?: Capability; anyOf?: Capability[] }>; preload: () => Promise<unknown> };
 const AREAS: Area[] = [
   { key: "Home", label: "Home", icon: Home, preload: loaders.home },
   { key: "Pipeline", label: "Pipeline", icon: BriefcaseBusiness, module: "pipeline", capability: "pipeline.view", subs: [{ key: "Opportunities" }, { key: "Tenders" }, { key: "Estimates", module: "estimating" }], preload: loaders.pipeline },
@@ -61,7 +62,7 @@ const AREAS: Area[] = [
   { key: "Commercial", label: "Commercial", icon: DollarSign, module: "commercial", capability: "commercial.view", preload: loaders.commercial },
   { key: "IMS & HSEQ", label: "IMS & HSEQ", icon: ShieldCheck, module: "ims", capability: "hseq.view", preload: loaders.hseq },
   { key: "Reports", label: "Reports", icon: BarChart3, module: "reports", capability: "reports.view", preload: loaders.reports },
-  { key: "Admin", label: "Admin", icon: Settings, subs: [{ key: "Company" }, { key: "People" }, { key: "Plant" }, { key: "Rates" }, { key: "Company Library" }, { key: "Team & Permissions" }, { key: "Integrations", capability: "org.admin" }, { key: "Settings" }], preload: loaders.admin },
+  { key: "Admin", label: "Admin", icon: Settings, subs: ADMIN_SUBS, preload: loaders.admin },
 ];
 
 export function PavementOS() {
@@ -94,7 +95,8 @@ function Router() {
   const [skipOnboarding, setSkipOnboarding] = useState(() => { try { return typeof window !== "undefined" && sessionStorage.getItem("onboarding-skipped") === "1"; } catch { return false; } });
   if (session.role === "read-only") return loading();
   const nav = { route, navigate };
-  if (session.role === "field") return <NavContext.Provider value={nav}><OfflineProvider><FieldShell /></OfflineProvider></NavContext.Provider>;
+  // Field workers and supervisors work from the mobile field shell (price-free, offline-capable).
+  if (FIELD_SHELL_ROLES.includes(session.role)) return <NavContext.Provider value={nav}><OfflineProvider><FieldShell /></OfflineProvider></NavContext.Provider>;
   if (session.role === "admin" && !session.onboarding.completed && !skipOnboarding) {
     return <main className="min-h-screen bg-[#f6f7f9] p-4 sm:p-8"><Onboarding onDone={() => navigate("Home")} /><div className="mx-auto mt-4 max-w-3xl text-center"><button className="text-sm text-slate-500 underline" onClick={() => { try { sessionStorage.setItem("onboarding-skipped", "1"); } catch { /* ignore */ } setSkipOnboarding(true); }}>Skip setup and go to the workspace</button></div></main>;
   }
@@ -102,12 +104,12 @@ function Router() {
 }
 
 function FieldShell() {
-  const { brand, userEmail } = useSession();
+  const { brand, userEmail, role } = useSession();
   // The service worker keeps the app shell available offline; queued work lives in IndexedDB.
   useEffect(() => { if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {}); }, []);
   const [tab, setTab] = useState<"today" | "records" | "search">("today");
   return <div className="min-h-screen bg-[#f6f7f9] pb-20 text-slate-900">
-    <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b bg-white px-4 py-3"><div className="min-w-0"><p className="truncate font-semibold">{brand.companyName}</p><p className="text-xs text-slate-500">Field</p></div><Link href="/account" className="flex min-h-11 items-center rounded-lg border px-3 text-sm" title={userEmail}>Account</Link></header>
+    <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b bg-white px-4 py-3"><div className="min-w-0"><p className="truncate font-semibold">{brand.companyName}</p><p className="text-xs text-slate-500">{role === "supervisor" ? "Supervisor" : "Field"}</p></div><Link href="/account" className="flex min-h-11 items-center rounded-lg border px-3 text-sm" title={userEmail}>Account</Link></header>
     <Toaster position="top-center" richColors />
     <main className="p-4 sm:p-6">{tab === "today" ? <FieldToday onOpenRecords={() => setTab("records")} /> : tab === "records" ? <FieldWorkspace /> : <SearchV1 />}</main>
     <nav aria-label="Field navigation" className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t bg-white pb-[env(safe-area-inset-bottom)]">{([["today", "Today", Home], ["records", "Shift records", ClipboardList], ["search", "Search", Search]] as const).map(([k, label, Icon]) => <button key={k} onClick={() => setTab(k)} aria-current={tab === k ? "page" : undefined} className={`flex min-h-16 flex-col items-center justify-center gap-1 text-xs font-medium ${tab === k ? "text-orange-700" : "text-slate-500"}`}><Icon aria-hidden className="size-5" />{label}</button>)}</nav>
@@ -119,8 +121,9 @@ function WorkspaceShell() {
   const { brand, userEmail, role } = session;
   const [open, setOpen] = useState(false);
   const { route, navigate } = useNav();
-  const allowed = (item: { module?: string; capability?: Capability }) => (!item.module || session.module(item.module)) && (!item.capability || session.can(item.capability));
-  const areas = AREAS.filter(allowed);
+  const allowed = (item: { module?: string; capability?: Capability; anyOf?: Capability[] }) => (!item.module || session.module(item.module)) && (!item.capability || session.can(item.capability)) && (!item.anyOf?.length || item.anyOf.some(c => session.can(c)));
+  // An area with sub-pages is shown only when at least one of them is permitted.
+  const areas = AREAS.filter(a => allowed(a) && (!a.subs || a.subs.some(allowed)));
   const area = areas.find(a => a.key === route.area) ?? (route.area === "Search" ? null : areas[0]);
   const subs = area?.subs?.filter(allowed) ?? [];
   const sub = subs.find(s => s.key === route.sub)?.key ?? subs[0]?.key;

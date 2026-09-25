@@ -1,12 +1,15 @@
 'use client';
 import {createContext,useContext,useEffect,useState,type ReactNode,type CSSProperties} from 'react';
 import {defaultBrand,type WorkspaceBrand} from '@/lib/workspace-brand';
+import type {Entitlements} from '@/lib/platform/modules';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
-const Context=createContext({brand:defaultBrand,canEdit:false,userEmail:'',role:'read-only',refresh:async()=>{}});
+type Session={brand:WorkspaceBrand;canEdit:boolean;userEmail:string;userId:string;userName:string;role:string;capabilities:string[];entitlements:Entitlements|null;onboarding:{completed:boolean;step:number}};
+const initial:Session={brand:defaultBrand,canEdit:false,userEmail:'',userId:'',userName:'',role:'read-only',capabilities:[],entitlements:null,onboarding:{completed:true,step:0}};
+const Context=createContext<Session&{refresh:()=>Promise<void>}>({...initial,refresh:async()=>{}});
 export const useWorkspaceBrand=()=>useContext(Context);
 export function WorkspaceBrandProvider({children}:{children:ReactNode}){
- const [data,setData]=useState({brand:defaultBrand,canEdit:false,userEmail:'',role:'read-only'});
+ const [data,setData]=useState<Session>(initial);
  async function refresh(){const r=await fetch('/api/workspace',{cache:'no-store'});if(r.ok)setData(await r.json());}
  useEffect(()=>{let active=true;fetch('/api/workspace',{cache:'no-store'}).then(async r=>{if(r.ok&&active)setData(await r.json());else if(active&&[401,403].includes(r.status))location.assign('/account');}).catch(()=>{});return()=>{active=false;};},[]);
  useEffect(()=>{document.title=data.brand.productName;},[data.brand.productName]);

@@ -92,11 +92,23 @@ export async function listTenders(){
  const rows=await query('SELECT t.*,u.name AS owner_name FROM tenders t LEFT JOIN users u ON u.id=t.owner_user_id AND u.organisation_id=t.organisation_id WHERE t.organisation_id=? ORDER BY (t.stage IN (\'awarded\',\'lost\')),t.due_date IS NULL,t.due_date,t.created_at DESC LIMIT 300',[actor().organisationId]);
  return Promise.all(rows.map(async t=>present(t,await stats(t),t.owner_name)));
 }
+/** What would stop an award right now (the award seam enforces the same rules). */
+async function awardBlockers(t:Row){
+ if(['awarded','lost'].includes(t.stage))return [];
+ const out:string[]=[];
+ if(!['submitted','clarification'].includes(t.stage))out.push('Record the submission first.');
+ if(!t.estimate_id){out.push('Link an estimate to this tender.');return out;}
+ const rev=await one("SELECT approved_at FROM estimate_revisions WHERE organisation_id=? AND estimate_id=? AND status='approved' ORDER BY revision_number DESC LIMIT 1",[actor().organisationId,t.estimate_id]);
+ if(!rev){out.push('Approve an estimate revision.');return out;}
+ const repriced=await query("SELECT reference FROM tender_clarifications WHERE organisation_id=? AND tender_id=? AND COALESCE(price_impact,0)<>0 AND updated_at>?",[actor().organisationId,t.id,rev.approved_at]);
+ if(repriced.length)out.push(`Clarification${repriced.length>1?'s':''} ${repriced.map(r=>r.reference).join(', ')} changed the price after approval: revise and approve the estimate.`);
+ return out;
+}
 export async function getTender(id:string){
  const t=await loadTender(id);
  const [s,owner,bid]=await Promise.all([stats(t),t.owner_user_id?one('SELECT name FROM users WHERE organisation_id=? AND id=?',[actor().organisationId,t.owner_user_id]):null,one('SELECT * FROM tender_bid_reviews WHERE organisation_id=? AND tender_id=?',[actor().organisationId,id])]);
  if(bid)delete bid.organisation_id;
- return {tender:present(t,s,owner?.name),bidReview:bid};
+ return {tender:{...present(t,s,owner?.name),awardBlockers:await awardBlockers(t)} as Row,bidReview:bid};
 }
 
 export type TenderInput={title?:string;clientName?:string|null;reference?:string|null;dueDate?:string|null;estimatedValue?:number|null;ownerUserId?:string|null;location?:string|null;scopeSummary?:string|null};

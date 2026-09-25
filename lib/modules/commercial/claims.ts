@@ -11,6 +11,7 @@ import {fail} from '@/lib/platform/http';
 import {seamEnabled} from '@/lib/platform/entitlements';
 import {query,one,exec,tx,nowIso,uuid,round2,type Row} from '@/lib/platform/sql';
 import {claimLine,gst,retention,retentionHeld,type RetentionTerms} from '@/lib/platform/finance';
+import {renderDocument,organisationBranding} from '@/lib/platform/pdf';
 
 const actor=()=>actorContext.getStore()!;
 const r2=round2;
@@ -186,3 +187,28 @@ export async function invoiceAction(invoiceId:string,action:'issue'|'void'|'paym
 
 /** Seam guard: variations flow into claims only when commercial is fully entitled. */
 export async function assertCommercialWritable(){if(!await seamEnabled(actor().organisationId,'commercial'))fail(403,'Commercial is read-only for your organisation.');}
+
+/** Tax invoice PDF from the stored invoice and its certified claim (amounts are never recalculated here). */
+export async function invoicePdf(invoiceId:string){
+ const a=actor();
+ const i=await one('SELECT * FROM client_invoices WHERE organisation_id=? AND id=?',[a.organisationId,invoiceId]);
+ if(!i)fail(404,'Invoice not found.');
+ const p=await one('SELECT name,project_number,client_name,contract_number,site_address FROM jobs WHERE organisation_id=? AND id=?',[a.organisationId,i!.project_id]);
+ const c=i!.claim_id?await one('SELECT * FROM progress_claims WHERE organisation_id=? AND id=?',[a.organisationId,i!.claim_id]):null;
+ const brand=await organisationBranding(a.organisationId),aud=(n:unknown)=>`$${Number(n||0).toLocaleString('en-AU',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+ const certifiedGross=c?Number(c.certified_amount??c.gross_amount):Number(i!.amount_ex_gst);
+ const rows:string[][]=c?[
+  [`Progress claim ${c.number} (${c.period})${c.certified_amount!=null?', as certified':''}`,aud(certifiedGross)],
+  ...(Number(c.certified_retention??c.retention_withheld)?[['Less retention withheld',`-${aud(c.certified_retention??c.retention_withheld)}`]]:[]),
+  ...(Number(c.retention_released)?[[`Retention released${c.retention_release_reason?` (${c.retention_release_reason})`:''}`,aud(c.retention_released)]]:[]),
+ ]:[['Contract works',aud(i!.amount_ex_gst)]];
+ rows.push(['Amount excluding GST',aud(i!.amount_ex_gst)],['GST (10%)',aud(i!.gst)],['Total including GST',aud(i!.total)]);
+ if(Number(i!.paid_amount))rows.push(['Paid to date',`-${aud(i!.paid_amount)}`],['Balance due',aud(Number(i!.total)-Number(i!.paid_amount))]);
+ const bytes=await renderDocument({company:brand,title:'Tax invoice',number:i!.invoice_number,revision:null,status:stateLabel('invoice',i!.status),approval:null,date:i!.invoice_date,
+  control:`${brand.legalName||brand.name}${brand.abn?` · ABN ${brand.abn}`:''} · Amounts in AUD`,
+  blocks:[
+   {rows:[['Invoice number',i!.invoice_number],['Invoice date',i!.invoice_date],['Due date',i!.due_date||'—'],['Bill to',p?.client_name||'—'],['Project',[p?.project_number,p?.name].filter(Boolean).join(' ')||'—'],['Contract',p?.contract_number||'—'],['Supplier',`${brand.legalName||brand.name}${brand.abn?` (ABN ${brand.abn})`:''}`]]},
+   {heading:'Details',table:{columns:['Description','Amount'],widths:[395,120],align:['left','right'],rows}},
+  ]});
+ return new Response(Buffer.from(bytes),{headers:{'Content-Type':'application/pdf','Content-Disposition':`attachment; filename="${String(i!.invoice_number).replace(/[^A-Za-z0-9_-]/g,'_')}.pdf"`,'Cache-Control':'private, no-store'}});
+}

@@ -280,7 +280,7 @@ export const organisations=mysqlTable('organisations',{
  id:varchar('id',{length:191}).primaryKey(),
  name:longtext('name').notNull(),
  createdAt:longtext('created_at').notNull(),
-},t=>[]);
+});
 
 export const plant=mysqlTable('plant',{
  id:varchar('id',{length:191}).primaryKey(),

@@ -21,7 +21,8 @@
     "data:attach-admin": "node --env-file-if-exists=.env scripts/attach-admin.mjs",
     "test:mysql": "node --env-file-if-exists=.env scripts/test-mysql.mjs",
     "test:fresh": "node --env-file-if-exists=.env scripts/test-fresh-start.mjs",
-    "test:v1": "node --env-file-if-exists=.env scripts/test-v1-journey.mjs"
+    "test:v1": "node --env-file-if-exists=.env scripts/test-v1-journey.mjs",
+    "test:backfill": "node --env-file-if-exists=.env scripts/test-resource-backfill.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

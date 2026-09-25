@@ -1,6 +1,7 @@
 'use client';
 import {FieldPreparation} from '@/components/field-preparation';
 import {useEffect,useRef,useState} from 'react';
+import Image from 'next/image';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
 import {Textarea} from '@/components/ui/textarea';
@@ -23,7 +24,7 @@ const sections:Record<string,Spec[]>={
 };
 function Signature({label,value,onChange}:{label:string;value:string;onChange:(v:string)=>void}){
  const canvas=useRef<HTMLCanvasElement>(null),drawing=useRef(false),moved=useRef(false);
- return <div className="space-y-2"><p className="font-medium">{label}</p>{value?<><img src={value} alt={label} className="h-28 w-full rounded border bg-white object-contain"/><Button type="button" variant="outline" onClick={()=>onChange('')}>Clear signature</Button></>:<canvas ref={canvas} width={600} height={200} aria-label={label} className="h-32 w-full touch-none rounded border-2 border-slate-300 bg-white" onPointerDown={e=>{e.currentTarget.setPointerCapture(e.pointerId);drawing.current=true;moved.current=false;const c=canvas.current!,r=c.getBoundingClientRect(),ctx=c.getContext('2d')!;ctx.beginPath();ctx.moveTo((e.clientX-r.left)*600/r.width,(e.clientY-r.top)*200/r.height);}} onPointerMove={e=>{if(!drawing.current)return;moved.current=true;const c=canvas.current!,r=c.getBoundingClientRect(),ctx=c.getContext('2d')!;ctx.lineWidth=3;ctx.lineCap='round';ctx.lineTo((e.clientX-r.left)*600/r.width,(e.clientY-r.top)*200/r.height);ctx.stroke();}} onPointerUp={()=>{drawing.current=false;if(moved.current)onChange(canvas.current!.toDataURL('image/png'));}} onPointerCancel={()=>{drawing.current=false;}}/>}</div>;
+ return <div className="space-y-2"><p className="font-medium">{label}</p>{value?<><Image src={value} alt={label} width={600} height={112} unoptimized className="h-28 w-full rounded border bg-white object-contain"/><Button type="button" variant="outline" onClick={()=>onChange('')}>Clear signature</Button></>:<canvas ref={canvas} width={600} height={200} aria-label={label} className="h-32 w-full touch-none rounded border-2 border-slate-300 bg-white" onPointerDown={e=>{e.currentTarget.setPointerCapture(e.pointerId);drawing.current=true;moved.current=false;const c=canvas.current!,r=c.getBoundingClientRect(),ctx=c.getContext('2d')!;ctx.beginPath();ctx.moveTo((e.clientX-r.left)*600/r.width,(e.clientY-r.top)*200/r.height);}} onPointerMove={e=>{if(!drawing.current)return;moved.current=true;const c=canvas.current!,r=c.getBoundingClientRect(),ctx=c.getContext('2d')!;ctx.lineWidth=3;ctx.lineCap='round';ctx.lineTo((e.clientX-r.left)*600/r.width,(e.clientY-r.top)*200/r.height);ctx.stroke();}} onPointerUp={()=>{drawing.current=false;if(moved.current)onChange(canvas.current!.toDataURL('image/png'));}} onPointerCancel={()=>{drawing.current=false;}}/>}</div>;
 }
 type ApiResult={error?:string;requirements?:string[];shifts:DeliveryRecord[];jobs:DeliveryRecord[];user:User;record:FieldRecord|null;history:History[];records:{shift_id:string;status:string}[]};
 async function api(url:string,body?:unknown){const res=await fetch(url,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:undefined);const data=await res.json() as ApiResult;if(!res.ok)throw new Error([data.error,...(data.requirements||[])].join('\n'));return data;}

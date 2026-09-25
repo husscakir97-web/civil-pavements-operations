@@ -2,7 +2,7 @@
 // Offline field capture: IndexedDB queue + read cache + local drafts.
 // Nothing is removed from the queue until the server accepts it or the user
 // discards it. Cached reads come only from field-safe endpoints (no rates).
-import {createContext,useCallback,useContext,useEffect,useRef,useState,type ReactNode} from 'react';
+import {createContext,useCallback,useContext,useEffect,useRef,useState,useSyncExternalStore,type ReactNode} from 'react';
 import {CloudOff,RefreshCw,Trash2,Wifi} from 'lucide-react';
 import {syncQueue,recoverInterrupted,newItem,type QueueItem,type QueueStore,type SendResult,type SyncOutcome} from '@/lib/v1/offline-sync';
 import {useSession,Btn,Pill,dateText} from './kit';
@@ -41,10 +41,9 @@ async function send(item:QueueItem):Promise<SendResult>{
  finally{clearTimeout(timer);}
 }
 
+const subscribeOnline=(cb:()=>void)=>{window.addEventListener('online',cb);window.addEventListener('offline',cb);return()=>{window.removeEventListener('online',cb);window.removeEventListener('offline',cb);};};
 export function useOnline(){
- const [online,setOnline]=useState(true);
- useEffect(()=>{const update=()=>setOnline(navigator.onLine);update();window.addEventListener('online',update);window.addEventListener('offline',update);return()=>{window.removeEventListener('online',update);window.removeEventListener('offline',update);};},[]);
- return online;
+ return useSyncExternalStore(subscribeOnline,()=>navigator.onLine,()=>true);
 }
 
 type Offline={online:boolean;items:QueueItem[];lastSync:string|null;lastOutcomes:SyncOutcome[];enqueue:(input:Pick<QueueItem,'id'|'kind'|'label'|'url'|'body'>)=>Promise<void>;sync:(opts?:{force?:boolean;only?:string})=>Promise<SyncOutcome[]>;discard:(id:string)=>Promise<void>;available:boolean};
@@ -65,12 +64,13 @@ export function OfflineProvider({children}:{children:ReactNode}){
   finally{syncing.current=false;await reload();}
  },[userId,reload]);
  useEffect(()=>{if(!userId)return;let active=true;void (async()=>{try{await recoverInterrupted(queueStore);}catch{if(active)setAvailable(false);}if(active)await sync();})();return()=>{active=false;};},[userId,sync]);
- useEffect(()=>{if(online)void sync();},[online,sync]);
+ // Sync when the connection returns, when the app comes back to the foreground, and every 30 s.
  useEffect(()=>{
   const tick=setInterval(()=>{if(navigator.onLine)void sync();},30_000);
   const visible=()=>{if(document.visibilityState==='visible'&&navigator.onLine)void sync();};
-  document.addEventListener('visibilitychange',visible);
-  return()=>{clearInterval(tick);document.removeEventListener('visibilitychange',visible);};
+  const reconnected=()=>{void sync();};
+  document.addEventListener('visibilitychange',visible);window.addEventListener('online',reconnected);
+  return()=>{clearInterval(tick);document.removeEventListener('visibilitychange',visible);window.removeEventListener('online',reconnected);};
  },[sync]);
  const enqueue=useCallback(async(input:Pick<QueueItem,'id'|'kind'|'label'|'url'|'body'>)=>{await queueStore.put(newItem({...input,userId}));await reload();},[userId,reload]);
  const discard=useCallback(async(id:string)=>{await queueStore.remove(id);await reload();},[reload]);

@@ -18,7 +18,6 @@ export async function homeFeed(){
  const mine:HomeItem[]=[],attention:HomeItem[]=[],todayItems:HomeItem[]=[];
  const count=async(sql:string,params:unknown[])=>Number((await one<{n:number}>(sql,params))?.n||0);
  const tasks:Promise<void>[]=[];
- const add=(list:HomeItem[],item:HomeItem|null)=>{if(item)list.push(item);};
 
  if(on('pipeline','pipeline.view'))tasks.push((async()=>{
   const owned=await query("SELECT id,title,stage,due_date FROM tenders WHERE organisation_id=? AND owner_user_id=? AND stage NOT IN ('awarded','lost') ORDER BY due_date IS NULL,due_date LIMIT 5",[org,a.userId]);

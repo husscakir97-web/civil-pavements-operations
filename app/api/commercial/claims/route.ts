@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import {api,body,fail} from '@/lib/platform/http';
-import {listClaims,createClaim,deleteDraftClaim,transitionClaim,certifyClaim,createInvoice,invoiceAction} from '@/lib/modules/commercial/claims';
+import {invoicePdf,listClaims,createClaim,deleteDraftClaim,transitionClaim,certifyClaim,createInvoice,invoiceAction} from '@/lib/modules/commercial/claims';
 export const dynamic='force-dynamic';
 const day=z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const action=z.discriminatedUnion('action',[
@@ -11,7 +11,7 @@ const action=z.discriminatedUnion('action',[
  z.object({action:z.literal('invoice'),claimId:z.string(),invoiceNumber:z.string().max(60),invoiceDate:day,dueDate:day.nullable().optional(),gstPct:z.coerce.number().min(0).max(30).optional()}),
  z.object({action:z.literal('invoice-action'),invoiceId:z.string(),invoiceAction:z.enum(['issue','void','payment']),amount:z.coerce.number().optional(),date:day.optional()}),
 ]);
-export const GET=api({permission:'read',module:'commercial',capability:'commercial.view'},async({params})=>listClaims(String(params.get('projectId')||'')));
+export const GET=api({permission:'read',module:'commercial',capability:'commercial.view'},async({params})=>params.get('invoiceId')?invoicePdf(String(params.get('invoiceId'))):listClaims(String(params.get('projectId')||'')));
 export const POST=api({permission:'write',module:'commercial'},async({request})=>{
  const b=await body(request,action);
  switch(b.action){

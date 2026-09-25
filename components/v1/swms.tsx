@@ -2,7 +2,7 @@
 import {useState} from 'react';
 import {Download,FileSignature,Plus,Trash2} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
-import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,dateText,Pill} from './kit';
+import {api,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,dateText,Pill} from './kit';
 import {AiAssist} from './ai';
 import {useCachedApi,useOffline,requestId,isNetworkFailure} from './offline';
 import {allowedTransitions} from '@/lib/platform/workflow';
@@ -10,7 +10,7 @@ import {HIGH_RISK_WORK,PPE_OPTIONS,type SwmsContent} from '@/lib/v1/swms-content
 
 type SwmsRow={id:string;projectId:string;projectName:string;reference:string;title:string;activity:string;status:string;currentRevisionNumber:number;issuedRevisionId:string|null;acknowledgements:number;acknowledgedByMe:boolean};
 type Revision={id:string;revision_number:number;status:string;origin:string;change_reason:string|null;approved_at:string|null;issued_at:string|null;updated_at:string;content:SwmsContent};
-type Detail={swms:SwmsRow&{currentRevisionId:string};revisions:Revision[];acknowledgements:Array<{worker_name:string;acknowledged_at:string}>};
+type Detail={gaps?:string[];swms:SwmsRow&{currentRevisionId:string};revisions:Revision[];acknowledgements:Array<{worker_name:string;acknowledged_at:string}>};
 
 export function SwmsPanel({projectId,shiftId,onChanged}:{projectId?:string;shiftId?:string;onChanged?:()=>void}){
  const {can,role}=useSession();
@@ -75,7 +75,8 @@ function SwmsDetail({id,shiftId,onChanged}:{id:string;shiftId?:string;onChanged:
     void run(async()=>{try{return await api('/api/hseq/swms',{method:'POST',body});}catch(e){if(offline&&isNetworkFailure(e)){await queue();return null;}throw e;}},r=>{if(r)done();});
    }}><FileSignature aria-hidden className="size-4"/>I have read and understood this SWMS</Btn>}
   </div>
-  {transitions.length>0&&!editing&&<div className="grid gap-2 rounded-lg border bg-slate-50 p-3"><textarea className={`${field} min-h-14`} placeholder="Note (recorded in the audit trail)" value={note} onChange={e=>setNote(e.target.value)}/><div className="flex flex-wrap gap-2">{transitions.map(t=><Btn key={t.to} variant="secondary" busy={busy} onClick={()=>void act({action:'transition',to:t.to,note:note||undefined})}>{t.label}</Btn>)}</div></div>}
+  {transitions.length>0&&!editing&&Boolean(d.gaps?.length)&&<div role="status" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-medium">Complete these before review and approval:</p><ul className="list-disc pl-5">{d.gaps!.map(g=><li key={g}>{g}</li>)}</ul></div>}
+  {transitions.length>0&&!editing&&<div className="grid gap-2 rounded-lg border bg-slate-50 p-3"><textarea className={`${field} min-h-14`} placeholder="Note (recorded in the audit trail)" value={note} onChange={e=>setNote(e.target.value)}/><div className="flex flex-wrap gap-2">{transitions.map(t=><Btn key={t.to} variant="secondary" busy={busy} disabled={['review','approved'].includes(t.to)&&Boolean(d.gaps?.length)} onClick={()=>void act({action:'transition',to:t.to,note:note||undefined})}>{t.label}</Btn>)}</div></div>}
   {role!=='field'&&shown.status==='draft'&&!editing&&<AiAssist feature="swms.assist" title="Suggest hazards and controls" description="Proposes hazards and controls for each work step using the hierarchy of controls. Accepted suggestions are added to this draft only; review, approval and issue remain with people." entityType="swms" entityId={id} runBody={{action:'swms-assist',swmsId:id}} onApplied={done}/>}
   <ErrorState error={actionError}/>
   {queued&&<p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Your acknowledgement is saved on this device and will be sent when you are back online. If the SWMS is revised before then, you will be asked to read the new revision.</p>}

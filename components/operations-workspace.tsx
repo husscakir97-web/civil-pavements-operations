@@ -3,10 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
-  BarChart3,
   BriefcaseBusiness,
   CalendarDays,
-  ClipboardCheck,
   ClipboardList,
   DollarSign,
   Edit3,
@@ -194,7 +192,6 @@ const resourceConfigs: Record<string, WorkspaceConfig> = {
   subcontractors: { apiModule: "resources", title: "Subcontractors", description: "Maintain specialist subcontractors and their commercial details.", icon: Users, statuses: ["Active", "Preferred", "On hold", "Inactive"], fields: [{ key: "trade", label: "Trade / service", placeholder: "Specialty" }, { key: "contact", label: "Contact", placeholder: "Contact person" }, { key: "rate", label: "Working rate", type: "number", placeholder: "0" }, { key: "insuranceExpiry", label: "Insurance expiry", type: "date" }] , emptyTitle: "No subcontractors", emptyDescription: "Add external delivery partners so their costs and compliance are visible." },
 };
 
-const reportModules = ["opportunities", "jobs", "planning", "field", "commercial", "qa"] as const;
 resourceConfigs.workers.fields.push({ key: 'competencies', label: 'Competencies / licences' }, { key: 'competencyExpiry', label: 'Earliest competency expiry', type: 'date' });
 resourceConfigs.plant.fields.push({ key: 'payload', label: 'Truck payload (t)', type: 'number' });
 resourceConfigs.plant.statuses.push('Out of service', 'Unavailable');

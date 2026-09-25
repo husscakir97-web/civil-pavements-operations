@@ -11,7 +11,7 @@ require('./test-services.cjs').prepare(sql);const db = {prepare(query){ let valu
 
 const cache={};
 function load(file){file=path.resolve(file);const external=require('./test-services.cjs').mock(file,db,sql,typeof bucket==='undefined'?undefined:bucket);if(external)return external;if(cache[file])return cache[file].exports;const loadedModule={exports:{}};cache[file]=loadedModule;const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;new Function('require','module','exports',code)(name=>name.startsWith('@/')?load(name.slice(2)+'.ts'):name.startsWith('./')?load(path.resolve(path.dirname(file),name)+'.ts'):name.startsWith('.')?load(path.resolve(path.dirname(file),name)+'.ts'):require(name),loadedModule,loadedModule.exports);return loadedModule.exports;}
-const estimate=load('app/api/estimates/route.ts'), award=load('app/api/estimates/award/route.ts'), approval=load('app/api/estimates/approval/route.ts'), delivery=load('app/api/delivery/route.ts'), calc=load('lib/estimate-calculations.ts'), planning=load('lib/planning.ts');
+const estimate=load('app/api/estimates/route.ts'), award=load('app/api/estimates/award/route.ts'), approval=load('app/api/estimates/approval/route.ts'), delivery=load('app/api/delivery/route.ts'), calc=load('lib/estimate-calculations.ts');
 const request=body=>new Request('https://test.invalid/api',{method:'POST',headers:{'Content-Type':'application/json','x-test-user-id':'test-owner','x-test-user-email':'admin@example.invalid'},body:JSON.stringify(body)});
 
 const field=load('app/api/field/route.ts'), fns=load('lib/field.ts');

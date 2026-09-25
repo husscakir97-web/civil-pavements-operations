@@ -1,5 +1,5 @@
 import {withActor} from '@/lib/platform/route';
-import { currentOrganisationId as ORG, cleanText, requireBindings, type DocketInput } from "@/lib/dockets-db";
+import { currentOrganisationId as ORG, cleanText, requireBindings } from "@/lib/dockets-db";
 export const dynamic = "force-dynamic";
 const jsonError = (message:string,status=400)=>Response.json({error:message},{status});
 async function handlePOST(req:Request){

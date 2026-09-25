@@ -33,6 +33,30 @@ export function claimLine(contractValue:number,previousClaimed:number,thisClaim:
  if(contractValue>=0&&thisClaim>remaining+0.005)throw new Error(`This claim exceeds the remaining value (${remaining.toFixed(2)}).`);
  return {contractValue:r(contractValue),previousClaimed:r(previousClaimed),thisClaim:r(thisClaim),claimedToDate:r(previousClaimed+thisClaim),remaining:r(remaining-thisClaim)};
 }
+/**
+ * Retention on a progress claim (all amounts ex-GST).
+ * withheld = gross × pct, limited so cumulative held retention never exceeds the cap;
+ * a release returns previously held retention and can never exceed what is held.
+ * net = gross − withheld + released. Negative adjustments withhold nothing.
+ */
+export type RetentionTerms={enabled:boolean;pct:number;cap:number|null};
+export function retention(terms:RetentionTerms,gross:number,heldBefore:number,release=0){
+ if(release<0)throw new Error('A retention release cannot be negative.');
+ if(release>r(heldBefore)+0.005)throw new Error(`The release exceeds retention held (${r(heldBefore).toFixed(2)}).`);
+ let withheld=0;
+ if(terms.enabled&&terms.pct>0&&gross>0){
+  withheld=r(gross*terms.pct/100);
+  if(terms.cap!=null)withheld=r(Math.min(withheld,Math.max(0,terms.cap-heldBefore)));
+ }
+ const released=r(release);
+ return {gross:r(gross),withheld,released,net:r(gross-withheld+released),heldAfter:r(heldBefore+withheld-released)};
+}
+/** Retention held on a set of claims: certified retention where certified, otherwise the claimed retention, less releases. */
+export function retentionHeld(claims:Array<{retentionWithheld:number;certifiedRetention:number|null;retentionReleased:number}>){
+ const withheld=r(claims.reduce((s,c)=>s+(c.certifiedRetention??c.retentionWithheld),0));
+ const released=r(claims.reduce((s,c)=>s+c.retentionReleased,0));
+ return {withheld,released,held:r(withheld-released)};
+}
 export const gst=(amountExGst:number,ratePct=10)=>{const g=r(amountExGst*ratePct/100);return {amountExGst:r(amountExGst),gst:g,total:r(amountExGst+g)};};
 
 /** Deterministic readiness: percentage of mandatory requirements satisfied. */

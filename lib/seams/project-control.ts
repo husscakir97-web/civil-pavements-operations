@@ -8,7 +8,7 @@ import {can} from '@/lib/platform/permissions';
 import {getEntitlements,usable} from '@/lib/platform/entitlements';
 import {fail} from '@/lib/platform/http';
 import {query,one,round2,type Row} from '@/lib/platform/sql';
-import {forecast,type Forecast} from '@/lib/platform/finance';
+import {forecast,type Forecast,retentionHeld} from '@/lib/platform/finance';
 import {plannedCost,type DeliveryRecord} from '@/lib/planning';
 import {resourceHours,type FieldData} from '@/lib/field';
 import {safeJson} from '@/lib/estimates-db';
@@ -31,7 +31,7 @@ export async function projectFinancials(projectId:string){
   query("SELECT id,name,status,metadata FROM shifts WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.jobId'))=?",[org,projectId]),
   query("SELECT f.shift_id,f.status,f.data FROM field_records f JOIN shifts s ON s.id=f.shift_id AND s.organisation_id=f.organisation_id WHERE f.organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.jobId'))=? AND f.status='Submitted'",[org,projectId]),
   query("SELECT DISTINCT JSON_UNQUOTE(JSON_EXTRACT(links,'$.shiftId')) AS shift_id FROM dockets WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(links,'$.jobId'))=? AND status IN ('approved','included_claim','invoiced')",[org,projectId]),
-  query("SELECT status,gross_amount,certified_amount FROM progress_claims WHERE organisation_id=? AND project_id=?",[org,projectId]),
+  query("SELECT status,gross_amount,certified_amount,retention_withheld,certified_retention,retention_released FROM progress_claims WHERE organisation_id=? AND project_id=?",[org,projectId]),
   query("SELECT status,amount_ex_gst,paid_amount,total FROM client_invoices WHERE organisation_id=? AND project_id=?",[org,projectId]),
  ]);
  const sum=(rows:Row[],f:(r:Row)=>number)=>rows.reduce((n,r)=>n+f(r),0);
@@ -48,7 +48,9 @@ export async function projectFinancials(projectId:string){
  const liveInvoices=invoices.filter(i=>i.status!=='void'&&i.status!=='draft');
  const f=forecast({originalContract,approvedVariations:sum(approved,v=>Number(v.approved_value??v.value)),pendingVariations:sum(variations.filter(v=>['draft','submitted'].includes(v.status)),v=>Number(v.value)),originalBudget,approvedVariationCost:sum(approved,v=>Number(v.cost)),actual:Object.values(actualByCat).reduce((n,v)=>n+v,0),committed,accrued,claimed,certified,invoiced:sum(liveInvoices,i=>Number(i.amount_ex_gst)),paid:sum(liveInvoices,i=>Number(i.total)>0?Number(i.paid_amount)*Number(i.amount_ex_gst)/Number(i.total):0)});
  const budgetByCat=baseline?{labour:Number(baseline.budget_labour),plant:Number(baseline.budget_plant),material:Number(baseline.budget_material),subcontract:Number(baseline.budget_subcontract),other:Number(baseline.budget_other)+Number(baseline.budget_indirect)}:null;
- return {forecast:f,hasBaseline:Boolean(baseline),budgetByCategory:budgetByCat,actualByCategory:actualByCat};
+ // Retention on claims the client has received (submitted onwards); drafts hold nothing yet.
+ const retention=retentionHeld(claims.filter(c=>['submitted','certified','invoiced','paid'].includes(c.status)).map(c=>({retentionWithheld:Number(c.retention_withheld||0),certifiedRetention:c.certified_retention==null?null:Number(c.certified_retention),retentionReleased:Number(c.retention_released||0)})));
+ return {forecast:f,retention,hasBaseline:Boolean(baseline),budgetByCategory:budgetByCat,actualByCategory:actualByCat};
 }
 
 /** Learn: deterministic estimate vs actual where reliable data exists. Nulls mean "not available". */

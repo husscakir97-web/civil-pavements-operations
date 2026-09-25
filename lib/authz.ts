@@ -1,13 +1,13 @@
 import { getAuth } from '@/lib/platform/auth';
 import { actorContext } from '@/lib/platform/context';
 import type { Database } from '@/lib/platform/database';
-import { can, isKnownRole, type Capability } from '@/lib/platform/permissions';
+import { can, isKnownRole, roleAllows, type Capability } from '@/lib/platform/permissions';
 import type { Entitlements } from '@/lib/platform/modules';
 export type Actor={userId:string;email:string;organisationId:string;role:string;name?:string;entitlements?:Entitlements};
 // Read is office-only by default. Field-readable routes must explicitly opt in
 // and return an operational projection, never arbitrary business metadata.
 export type Permission='read'|'write'|'approve'|'admin'|'field'|'field-read';
-export async function requireActor(request:Request,db:Database,permission:Permission='read'):Promise<Actor>{
+export async function requireActor(request:Request,db:Database,permission:Permission='read',module:string='core'):Promise<Actor>{
  const cached=actorContext.getStore();
  let actor=cached;
  if(!actor){
@@ -17,8 +17,7 @@ export async function requireActor(request:Request,db:Database,permission:Permis
   if(!row||!row.active||!isKnownRole(row.role))throw Object.assign(new Error('No active organisation membership'),{status:403});
   actor={userId:session.user.id,email:session.user.email,organisationId:row.organisation_id,role:row.role,name:row.name};
  }
- const allowed=actor.role==='admin'||actor.role==='office'&&permission!=='admin'||actor.role==='field'&&['field','field-read'].includes(permission);
- if(!allowed)throw Object.assign(new Error('Unauthorised'),{status:403});
+ if(!roleAllows(actor.role,permission,module))throw Object.assign(new Error('Unauthorised'),{status:403});
  return actor;
 }
 /** Explicit capability check for critical actions (approve, award, rates, claims...). */

@@ -11,7 +11,7 @@ export function withActor(handler:(request:Request)=>Promise<Response>,permissio
    const origin=request.headers.get('origin');
    if(origin&&origin!==new URL(process.env.BETTER_AUTH_URL!).origin)return Response.json({error:'Invalid origin'},{status:403});
   }
-  const actor=await requireActor(request,database,permission);
+  const actor=await requireActor(request,database,permission,module);
   return await actorContext.run(actor,async()=>{
    if(module!=='core')await requireModule(module,!['GET','HEAD','OPTIONS'].includes(request.method));
    return handler(request);

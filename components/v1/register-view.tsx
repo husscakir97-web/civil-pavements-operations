@@ -13,7 +13,7 @@ let peopleCache:Promise<Array<{id:string;name:string;role:string}>>|null=null;
 export function usePeople(){
  const [people,setPeople]=useState<Array<{id:string;name:string;role:string}>>([]);
  const {role}=useSession();
- useEffect(()=>{if(role==='field'||role==='read-only')return;peopleCache??=api<{people:Array<{id:string;name:string;role:string}>}>('/api/platform/people').then(r=>r.people).catch(()=>{peopleCache=null;return [];});let live=true;peopleCache.then(p=>{if(live)setPeople(p);});return()=>{live=false;};},[role]);
+ useEffect(()=>{if(['field','read-only','read_only'].includes(role))return;peopleCache??=api<{people:Array<{id:string;name:string;role:string}>}>('/api/platform/people').then(r=>r.people).catch(()=>{peopleCache=null;return [];});let live=true;peopleCache.then(p=>{if(live)setPeople(p);});return()=>{live=false;};},[role]);
  return people;
 }
 const CONTEXT:Record<string,string>={library:'library',requirements:'requirement',returnables:'returnable',clarifications:'clarification',itp_items:'itp',incidents:'incident',ncrs:'ncr',actions:'action',readiness:'checklist',closeout:'checklist',variations:'variation'};

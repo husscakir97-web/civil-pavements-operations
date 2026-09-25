@@ -5,6 +5,7 @@ import {actorContext} from './context';
 import {bucket} from './storage';
 import {audit} from './audit';
 import {fail} from './http';
+import {can} from './permissions';
 import {query,one,exec,tx,nowIso,uuid,type Row} from './sql';
 
 export const MAX_DOCUMENT_BYTES=40*1024*1024;
@@ -28,8 +29,12 @@ export async function storeDocument(file:File,meta:{contextType:DocumentContext;
  return tx(async conn=>{
   let version=1;
   if(meta.supersedesId){
-   const prev=await one('SELECT id,version,context_type,context_id FROM documents WHERE organisation_id=? AND id=? FOR UPDATE',[actor.organisationId,meta.supersedesId],conn);
-   if(!prev)fail(404,'Document to replace not found.');
+   const prev=await one('SELECT id,version,status,visibility,uploaded_by,context_type,context_id FROM documents WHERE organisation_id=? AND id=? FOR UPDATE',[actor.organisationId,meta.supersedesId],conn);
+   if(!prev||(actor.role==='field'&&prev.visibility!=='field'))fail(404,'Document to replace not found.');
+   // Only the original uploader or a document approver may publish a new version.
+   if(prev!.uploaded_by!==actor.userId&&!can(actor.role,'document.approve'))fail(403,'Only the person who uploaded this document or a document approver can replace it.');
+   if(prev!.status!=='current')fail(409,'This document has already been replaced. Upload against the current version.');
+   if(prev!.context_type!==meta.contextType||(prev!.context_id||null)!==(meta.contextId||null))fail(409,'A new version must stay attached to the same record.');
    version=Number(prev!.version)+1;
    await exec("UPDATE documents SET status='superseded',updated_at=? WHERE organisation_id=? AND id=?",[now,actor.organisationId,prev!.id],conn);
   }

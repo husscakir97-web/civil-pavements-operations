@@ -30,7 +30,9 @@ const loaders = {
   search: () => import("@/components/v1/search"),
   field: () => import("@/components/v1/field"),
   fieldRecords: () => import("@/components/field-workspace"),
+  resources: () => import("@/components/v1/resources"),
 };
+const otherResources = ["crews", "suppliers", "subcontractors"];
 const HomeV1 = dynamic(() => loaders.home().then(m => m.HomeV1), { loading });
 const OpportunitiesView = dynamic(() => loaders.pipeline().then(m => m.OpportunitiesView), { loading });
 const TendersView = dynamic(() => loaders.pipeline().then(m => m.TendersView), { loading });
@@ -46,6 +48,7 @@ const Onboarding = dynamic(() => loaders.company().then(m => m.Onboarding), { lo
 const PreparationWorkspace = dynamic(() => loaders.preparation().then(m => m.PreparationWorkspace), { loading });
 const SearchV1 = dynamic(() => loaders.search().then(m => m.SearchV1), { loading });
 const FieldToday = dynamic(() => loaders.field().then(m => m.FieldToday), { loading });
+const ResourcesArea = dynamic(() => loaders.resources().then(m => m.ResourcesArea), { loading });
 const FieldWorkspace = dynamic(() => loaders.fieldRecords().then(m => m.FieldWorkspace), { loading });
 
 type Area = { key: string; label: string; icon: LucideIcon; module?: string; capability?: Capability; subs?: Array<{ key: string; module?: string; capability?: Capability }>; preload: () => Promise<unknown> };
@@ -147,11 +150,11 @@ function WorkspaceShell() {
   else if (k === "Home") content = <HomeV1 />;
   else if (k === "Pipeline") content = sub === "Tenders" ? <TendersView /> : sub === "Estimates" ? <EstimatesQuotes key={route.id || "all"} initialEstimateId={route.id} /> : <OpportunitiesView />;
   else if (k === "Projects") content = <ProjectsView />;
-  else if (k === "Operations") content = sub === "Dockets" ? <DocketDashboard /> : sub === "Resources" ? <OperationsPage key="resources" module="Resources" onNavigate={legacyNavigate} /> : <OperationsPage key="schedule" module="Planning" onNavigate={legacyNavigate} />;
+  else if (k === "Operations") content = sub === "Dockets" ? <DocketDashboard /> : sub === "Resources" ? <ResourcesArea key="resources" other={<OperationsPage module="Resources" initialResource="crews" resourceTypes={otherResources} onNavigate={legacyNavigate} />} /> : <OperationsPage key="schedule" module="Planning" onNavigate={legacyNavigate} />;
   else if (k === "Commercial") content = <CommercialArea />;
   else if (k === "IMS & HSEQ") content = <HseqArea />;
   else if (k === "Reports") content = <ReportsV1 />;
-  else if (k === "Admin") content = sub === "People" ? <OperationsPage key="people" module="Resources" initialResource="workers" onNavigate={legacyNavigate} /> : sub === "Plant" ? <OperationsPage key="plant" module="Resources" initialResource="plant" onNavigate={legacyNavigate} /> : sub === "Company Library" ? <LibraryArea /> : <AdminArea sub={sub || "Company"} onNavigate={() => {}} />;
+  else if (k === "Admin") content = sub === "People" ? <ResourcesArea key="people" initial="workers" /> : sub === "Plant" ? <ResourcesArea key="plant" initial="plant" /> : sub === "Company Library" ? <LibraryArea /> : <AdminArea sub={sub || "Company"} onNavigate={() => {}} />;
 
   const mobile = areas.filter(a => !["Admin", "Reports"].includes(a.key)).slice(0, 4);
   return <div className="app-shell min-h-screen bg-[#f6f7f9] text-slate-900">

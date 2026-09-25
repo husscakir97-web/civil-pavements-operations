@@ -220,7 +220,7 @@ function fieldLabel(config: FieldConfig) {
   return <Label className="mb-1.5 block text-sm font-medium text-slate-700">{config.label}</Label>;
 }
 
-function OperationsWorkspace({ module, onNavigate, initialResource = "workers" }: { module: NavLabel; onNavigate: (label: NavLabel) => void; initialResource?: string }) {
+function OperationsWorkspace({ module, onNavigate, initialResource = "workers", resourceTypes }: { module: NavLabel; onNavigate: (label: NavLabel) => void; initialResource?: string; resourceTypes?: string[] }) {
   const [resourceType, setResourceType] = useState(initialResource);
   const config = module === "Resources" ? resourceConfigs[resourceType] : configs[module];
   const [records, setRecords] = useState<RecordRow[]>([]);
@@ -232,7 +232,7 @@ function OperationsWorkspace({ module, onNavigate, initialResource = "workers" }
   const [tenderOpportunity, setTenderOpportunity] = useState<RecordRow | null>(null);
   const recordFormRef = useRef<HTMLFormElement>(null);
 
-  const resourceOptions = Object.entries(resourceConfigs).map(([value, valueConfig]) => ({ value, label: valueConfig.title }));
+  const resourceOptions = Object.entries(resourceConfigs).filter(([value]) => !resourceTypes || resourceTypes.includes(value)).map(([value, valueConfig]) => ({ value, label: valueConfig.title }));
   const visibleRecords = useMemo(() => {
     const query = filter.trim().toLowerCase();
     if (!query) return records;
@@ -337,9 +337,9 @@ function SettingsWorkspace({ onNavigate }: { onNavigate: (label: NavLabel) => vo
   return <div className="space-y-5"><div><p className="text-sm font-medium text-slate-500">Organisation controls</p><h2 className="mt-1 text-2xl font-bold tracking-tight text-slate-950">Settings</h2><p className="mt-1 text-sm text-slate-500">Set the commercial defaults used across the operating system.</p></div><WorkspaceBrandSettings/><section className="max-w-2xl rounded-xl border bg-white p-5 shadow-sm"><div className="flex items-start gap-3"><span className="flex size-9 items-center justify-center rounded-lg bg-orange-50 text-primary"><Settings className="size-5" /></span><div><h3 className="font-semibold">{brand.companyName}</h3><p className="mt-1 text-sm text-slate-500">Company rate library</p></div></div>{library ? <div className="mt-5 grid gap-4 sm:grid-cols-2"><div><Label className="mb-1.5 block text-sm font-medium text-slate-700">Rate library name</Label><Input value={library.name} onChange={(event) => setLibrary((previous) => previous ? { ...previous, name: event.target.value } : previous)} /></div><div><Label className="mb-1.5 block text-sm font-medium text-slate-700">Target margin (%)</Label><Input type="number" min="0" step="0.1" value={library.targetMarginPct} onChange={(event) => setLibrary((previous) => previous ? { ...previous, targetMarginPct: Number(event.target.value) || 0 } : previous)} /></div><div><Label className="mb-1.5 block text-sm font-medium text-slate-700">GST (%)</Label><Input type="number" min="0" step="0.1" value={library.gstPct} onChange={(event) => setLibrary((previous) => previous ? { ...previous, gstPct: Number(event.target.value) || 0 } : previous)} /></div><div className="flex items-end"><Button onClick={save} disabled={saving}>{saving ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />} Save defaults</Button></div></div> : <div className="mt-5 text-sm text-slate-500">No rate library has been created yet.</div>}<div className="mt-5 border-t pt-4"><Button variant="outline" onClick={() => onNavigate("Estimates & Quotes")}><FileCheck2 className="size-4" /> Open estimator and detailed rate library</Button></div></section></div>;
 }
 
-export function OperationsPage({ module, onNavigate, initialResource }: { module: NavLabel; onNavigate: (label: NavLabel) => void; initialResource?: string }) {
+export function OperationsPage({ module, onNavigate, initialResource, resourceTypes }: { module: NavLabel; onNavigate: (label: NavLabel) => void; initialResource?: string; resourceTypes?: string[] }) {
   if (module === 'Jobs' || module === 'Planning') return <JobsPlanning page={module} />;
   if (module === "Reports") return <ReportsWorkspace />;
   if (module === "Settings") return <SettingsWorkspace onNavigate={onNavigate} />;
-  return <OperationsWorkspace module={module} onNavigate={onNavigate} initialResource={initialResource} />;
+  return <OperationsWorkspace module={module} onNavigate={onNavigate} initialResource={initialResource} resourceTypes={resourceTypes} />;
 }

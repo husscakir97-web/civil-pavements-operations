@@ -9,7 +9,8 @@ import {useNav} from './nav';
 import type {Forecast} from '@/lib/platform/finance';
 
 type Line={lineType:string;sourceId:string|null;description:string;contractValue:number;previousClaimed:number;remaining:number};
-type Claim={id:string;number:number;period:string;status:string;grossAmount:number;certifiedAmount:number|null;variance:number|null;submittedAt:string|null;certifiedAt:string|null;lines:Array<Line&{id:string;thisClaim:number;claimedToDate:number}>};
+type Retention={enabled:boolean;pct:number;cap:number|null;withheld:number;released:number;held:number};
+type Claim={id:string;number:number;period:string;status:string;grossAmount:number;retentionWithheld:number;retentionReleased:number;retentionReleaseReason:string|null;netAmount:number;gstOnNet:number;certifiedRetention:number|null;certifiedNet:number|null;certifiedAmount:number|null;variance:number|null;submittedAt:string|null;certifiedAt:string|null;lines:Array<Line&{id:string;thisClaim:number;claimedToDate:number}>};
 type Invoice={id:string;claimId:string|null;invoiceNumber:string;invoiceDate:string;dueDate:string|null;amountExGst:number;gst:number;total:number;status:string;paidAmount:number;outstanding:number};
 
 export function ForecastSummary({f,budget,actual}:{f:Forecast;budget?:Record<string,number>|null;actual?:Record<string,number>}){
@@ -50,15 +51,19 @@ export function EstimateVsActualView({eva}:{eva:EvA}){
 
 function ClaimsPanel({projectId,closed,onChanged}:{projectId:string;closed:boolean;onChanged:()=>void}){
  const {can,role}=useSession();
- const {data,error,loading,refresh}=useApi<{claims:Claim[];invoices:Invoice[];claimable:Line[]}>(`/api/commercial/claims?projectId=${projectId}`);
+ const {data,error,loading,refresh}=useApi<{claims:Claim[];invoices:Invoice[];claimable:Line[];retention:Retention}>(`/api/commercial/claims?projectId=${projectId}`);
  const [building,setBuilding]=useState(false);const {busy,error:actionError,run}=useAction();
  const done=()=>{refresh();onChanged();};
  const post=(body:Record<string,unknown>)=>run(()=>api('/api/commercial/claims',{method:'POST',body}),done);
- return <Section title="Progress claims and invoices" description="Claim contract works, approved variations and approved dockets. A docket can only be claimed once." actions={!closed&&can('claim.edit')&&<Btn onClick={()=>setBuilding(true)} disabled={!data?.claimable.length}><Plus aria-hidden className="size-4"/>New claim</Btn>}>
+ return <Section title="Progress claims and invoices" description="Claim contract works, approved variations and approved dockets. A docket can only be claimed once." actions={!closed&&can('claim.edit')&&<Btn onClick={()=>setBuilding(true)} disabled={!data?.claimable.length&&!(data?.retention.held)} title={!data?.claimable.length&&!(data?.retention.held)?'Nothing is claimable yet: approve variations or dockets, or record a baseline.':undefined}><Plus aria-hidden className="size-4"/>New claim</Btn>}>
   <ErrorState error={error||actionError} onRetry={refresh}/>
+  {data&&<p className="mb-3 rounded-lg bg-slate-50 p-3 text-sm">{data.retention.enabled?<>Retention {data.retention.pct}%{data.retention.cap!=null?<> capped at {money(data.retention.cap,true)}</>:null} · withheld to date {money(data.retention.withheld,true)} · released {money(data.retention.released,true)} · <strong>held {money(data.retention.held,true)}</strong></>:<>Retention is not enabled for this project. Turn it on in Setup before the first claim if the contract withholds retention.{data.retention.held>0&&<> Retention held from earlier claims: <strong>{money(data.retention.held,true)}</strong>.</>}</>}</p>}
   {loading&&!data?<Loading/>:!data?.claims.length?<EmptyState title="No progress claims have been prepared for this project." detail={data?.claimable.length?`${data.claimable.length} line(s) are ready to claim.`:'Approve variations or dockets, or record a baseline, to create claimable lines.'}/>:
    <ul className="grid gap-3">{data.claims.map(c=>{const inv=data.invoices.find(i=>i.claimId===c.id);const moves=allowedTransitions('claim',c.status,role);return <li key={c.id} className="rounded-lg border p-3">
-    <div className="flex flex-wrap items-center gap-2"><strong>Claim {c.number}</strong><span className="text-sm text-slate-500">{c.period}</span><StatusBadge machine="claim" state={c.status}/><span className="ml-auto text-sm">This claim {money(c.grossAmount,true)}{c.certifiedAmount!=null&&<> · certified {money(c.certifiedAmount,true)} (variance {money(c.variance,true)})</>}</span></div>
+    <div className="flex flex-wrap items-center gap-2"><strong>Claim {c.number}</strong><span className="text-sm text-slate-500">{c.period}</span><StatusBadge machine="claim" state={c.status}/></div>
+    <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-6"><div><dt className="text-xs text-slate-500">Gross</dt><dd>{money(c.grossAmount,true)}</dd></div><div><dt className="text-xs text-slate-500">Retention</dt><dd>−{money(c.retentionWithheld,true)}</dd></div><div><dt className="text-xs text-slate-500">Release</dt><dd>{c.retentionReleased?`+${money(c.retentionReleased,true)}`:'—'}</dd></div><div><dt className="text-xs text-slate-500">Net (ex GST)</dt><dd className="font-semibold">{money(c.netAmount,true)}</dd></div><div><dt className="text-xs text-slate-500">GST</dt><dd>{money(c.gstOnNet,true)}</dd></div><div><dt className="text-xs text-slate-500">Net incl. GST</dt><dd>{money(c.netAmount+c.gstOnNet,true)}</dd></div>
+     {c.certifiedAmount!=null&&<><div><dt className="text-xs text-slate-500">Certified gross</dt><dd>{money(c.certifiedAmount,true)}</dd></div><div><dt className="text-xs text-slate-500">Certified retention</dt><dd>−{money(c.certifiedRetention,true)}</dd></div><div><dt className="text-xs text-slate-500">Certified net</dt><dd className="font-semibold">{money(c.certifiedNet,true)}</dd></div><div className="col-span-2 sm:col-span-3"><dt className="text-xs text-slate-500">Variance to claimed gross</dt><dd>{money(c.variance,true)}</dd></div></>}</dl>
+    {c.retentionReleaseReason&&<p className="mt-1 text-xs text-slate-500">Retention release: {c.retentionReleaseReason}</p>}
     <table className="mt-2 w-full text-xs"><thead className="text-left text-slate-500"><tr><th className="py-1">Line</th><th>Value</th><th>Previous</th><th>This claim</th><th>To date</th><th>Remaining</th></tr></thead><tbody>{c.lines.map(l=><tr key={l.id}><td className="py-1 pr-2">{l.description}</td><td>{money(l.contractValue,true)}</td><td>{money(l.previousClaimed,true)}</td><td>{money(l.thisClaim,true)}</td><td>{money(l.claimedToDate,true)}</td><td>{money(l.contractValue-l.claimedToDate,true)}</td></tr>)}</tbody></table>
     <div className="mt-2 flex flex-wrap gap-2">
      {moves.map(t=><Btn key={t.to} variant="secondary" busy={busy} onClick={()=>void post({action:'transition',claimId:c.id,to:t.to})}>{t.label}</Btn>)}
@@ -71,23 +76,27 @@ function ClaimsPanel({projectId,closed,onChanged}:{projectId:string;closed:boole
      {can('invoice.manage')&&['issued','part_paid'].includes(inv.status)&&<Btn variant="secondary" busy={busy} onClick={()=>{const v=prompt('Payment received (incl. GST)',String(inv.outstanding));if(v)void post({action:'invoice-action',invoiceId:inv.id,invoiceAction:'payment',amount:Number(v),date:new Date().toISOString().slice(0,10)});}}>Record payment</Btn>}
     </div>}
    </li>;})}</ul>}
-  <Sheet open={building} onOpenChange={setBuilding}><SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-2xl"><SheetTitle className="border-b px-5 py-4 text-lg font-semibold">New progress claim</SheetTitle><SheetDescription className="sr-only">Build a claim</SheetDescription>{building&&data&&<ClaimBuilder projectId={projectId} lines={data.claimable} onDone={()=>{setBuilding(false);done();}}/>}</SheetContent></Sheet>
+  <Sheet open={building} onOpenChange={setBuilding}><SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-2xl"><SheetTitle className="border-b px-5 py-4 text-lg font-semibold">New progress claim</SheetTitle><SheetDescription className="sr-only">Build a claim</SheetDescription>{building&&data&&<ClaimBuilder projectId={projectId} lines={data.claimable} retention={data.retention} onDone={()=>{setBuilding(false);done();}}/>}</SheetContent></Sheet>
  </Section>;
 }
 
-function ClaimBuilder({projectId,lines,onDone}:{projectId:string;lines:Line[];onDone:()=>void}){
+function ClaimBuilder({projectId,lines,retention,onDone}:{projectId:string;lines:Line[];retention:Retention;onDone:()=>void}){
  const {busy,error,run}=useAction();
+ const [release,setRelease]=useState(''),[reason,setReason]=useState('');
  const [period,setPeriod]=useState(new Date().toISOString().slice(0,7));
  const [amounts,setAmounts]=useState<Record<string,string>>({});
  const key=(l:Line)=>`${l.lineType}:${l.sourceId}`;
  const total=lines.reduce((n,l)=>n+(Number(amounts[key(l)])||0),0);
- return <form className="grid gap-4 p-5" onSubmit={e=>{e.preventDefault();void run(()=>api('/api/commercial/claims',{method:'POST',body:{action:'create',projectId,period,lines:lines.filter(l=>Number(amounts[key(l)])).map(l=>({lineType:l.lineType,sourceId:l.sourceId,thisClaim:Number(amounts[key(l)])}))}}),onDone);}}>
+ return <form className="grid gap-4 p-5" onSubmit={e=>{e.preventDefault();void run(()=>api('/api/commercial/claims',{method:'POST',body:{action:'create',projectId,period,lines:lines.filter(l=>Number(amounts[key(l)])).map(l=>({lineType:l.lineType,sourceId:l.sourceId,thisClaim:Number(amounts[key(l)])})),retentionRelease:Number(release)?{amount:Number(release),reason}:null}}),onDone);}}>
   <Field label="Claim period"><input className={field} type="month" value={period} onChange={e=>setPeriod(e.target.value)}/></Field>
   <ul className="grid gap-2">{lines.map(l=><li key={key(l)} className="grid items-center gap-2 rounded-lg border p-3 text-sm sm:grid-cols-[1fr_9rem]"><div><p className="font-medium">{l.description}</p><p className="text-xs text-slate-500">Value {money(l.contractValue,true)} · previously claimed {money(l.previousClaimed,true)} · remaining {money(l.remaining,true)}</p></div>
    {l.lineType==='docket'?<label className="flex items-center gap-2"><input type="checkbox" className="size-5" checked={Boolean(amounts[key(l)])} onChange={e=>setAmounts(a=>({...a,[key(l)]:e.target.checked?String(l.contractValue):''}))}/>Claim in full</label>:<input aria-label={`Amount for ${l.description}`} className={field} type="number" step="0.01" max={l.remaining} value={amounts[key(l)]||''} onChange={e=>setAmounts(a=>({...a,[key(l)]:e.target.value}))}/>}</li>)}</ul>
-  <p className="text-sm">This claim: <strong>{money(total,true)}</strong> (ex GST)</p>
+  {retention.held>0&&<fieldset className="grid gap-2 rounded-lg border p-3 sm:grid-cols-2"><legend className="px-1 text-sm font-medium">Release retention (held {money(retention.held,true)})</legend>
+   <Field label="Amount to release (ex GST)"><input className={field} type="number" min={0} step="0.01" max={retention.held} value={release} onChange={e=>setRelease(e.target.value)}/></Field>
+   <Field label="Reason" required={Boolean(Number(release))}><input className={field} placeholder="Practical completion, end of defects period…" value={reason} onChange={e=>setReason(e.target.value)}/></Field></fieldset>}
+  <p className="text-sm">This claim: <strong>{money(total,true)}</strong> gross (ex GST){retention.enabled&&total>0?<> · retention is calculated when the claim is saved at {retention.pct}%{retention.cap!=null?<>, capped at {money(retention.cap,true)} in total</>:null}</>:null}</p>
   <ErrorState error={error}/>
-  <Btn className="justify-self-start" busy={busy} disabled={!total} type="submit">Create draft claim</Btn>
+  <Btn className="justify-self-start" busy={busy} disabled={!total&&!Number(release)} type="submit">Create draft claim</Btn>
  </form>;
 }
 

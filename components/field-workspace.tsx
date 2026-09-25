@@ -9,7 +9,7 @@ import {Checkbox} from '@/components/ui/checkbox';
 import {initialField,incomplete,fieldMetrics,hours,resourceHours,type FieldData,type FieldRecord,type Row} from '@/lib/field';
 import { OperationsPage } from '@/components/operations-workspace';
 import type {DeliveryRecord} from '@/lib/planning';
-type User={role:string;id:string;email:string;canSubmit:boolean;canAmend:boolean};
+type User={role:string;id:string;email:string;priced?:boolean;canSubmit:boolean;canAmend:boolean};
 type History={revision:number;action:string;reason:string;actor:string;snapshot:string;created_at:string};
 type Spec=[string,string,string?];
 const sections:Record<string,Spec[]>={
@@ -47,7 +47,7 @@ export function FieldWorkspace(){
  }
  function change(next:FieldData){setDraft(next);current.current.draft=next;current.current.version++;setDirty(true);if(selected)keep(next,current.current.record,selected);setMessage('Changes saved on this device');if(timer.current)clearTimeout(timer.current);if(!amending&&!conflict)timer.current=setTimeout(()=>{void save();},1200);}
  function patch(key:keyof FieldData,value:unknown){const next={...current.current.draft!,[key]:value};if(!['clientSignature','supervisorSignature','clientName','supervisorName','clientDeclinedReason'].includes(key)){next.clientSignature='';next.supervisorSignature='';}change(next);}
- const financial=user?.role!=='field';
+ const financial=Boolean(user?.priced);
  const locked=record?.status==='Submitted'&&!amending;
  const plan=record?.plan||selected,job=record?.job||jobs.find(j=>j.id===selected?.metadata.jobId);
  const metrics=draft&&plan&&job?fieldMetrics(draft,plan,job):null;

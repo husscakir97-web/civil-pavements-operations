@@ -10,13 +10,13 @@ import {audit} from '@/lib/platform/audit';
 import {fail} from '@/lib/platform/http';
 import {seamEnabled} from '@/lib/platform/entitlements';
 import {query,one,exec,tx,nowIso,uuid,round2,type Row} from '@/lib/platform/sql';
-import {claimLine,gst} from '@/lib/platform/finance';
+import {claimLine,gst,retention,retentionHeld,type RetentionTerms} from '@/lib/platform/finance';
 
 const actor=()=>actorContext.getStore()!;
 const r2=round2;
 
 async function project(projectId:string,conn?:PoolConnection,forWrite=false){
- const p=await one('SELECT id,name,stage,contract_value,metadata FROM jobs WHERE organisation_id=? AND id=?',[actor().organisationId,projectId],conn);
+ const p=await one('SELECT id,name,stage,contract_value,metadata,retention_enabled,retention_pct,retention_cap_amount FROM jobs WHERE organisation_id=? AND id=?',[actor().organisationId,projectId],conn);
  if(!p)fail(404,'Project not found.');
  if(forWrite&&p!.stage==='closed')fail(409,'This project is closed. Reopen it before claiming.');
  return p!;
@@ -40,12 +40,25 @@ export async function claimable(projectId:string,conn?:PoolConnection){
  return lines;
 }
 
+const terms=(p:Row):RetentionTerms=>({enabled:Boolean(Number(p.retention_enabled)),pct:Number(p.retention_pct||0),cap:p.retention_cap_amount==null?null:Number(p.retention_cap_amount)});
+/** Retention held on the project's claims numbered before `beforeNumber` (all claims when null). */
+async function heldExcluding(projectId:string,beforeNumber:number|null,conn?:PoolConnection){
+ const rows=await query('SELECT retention_withheld,certified_retention,retention_released FROM progress_claims WHERE organisation_id=? AND project_id=?'+(beforeNumber!=null?' AND number<?':''),[actor().organisationId,projectId,...(beforeNumber!=null?[beforeNumber]:[])],conn);
+ return retentionHeld(rows.map(c=>({retentionWithheld:Number(c.retention_withheld),certifiedRetention:c.certified_retention==null?null:Number(c.certified_retention),retentionReleased:Number(c.retention_released)})));
+}
+export async function retentionSummary(projectId:string,conn?:PoolConnection){
+ const p=await project(projectId,conn);
+ return {...terms(p),...await heldExcluding(projectId,null,conn)};
+}
+
 export type ClaimLineInput={lineType:'contract'|'variation'|'docket'|'other';sourceId?:string|null;description?:string;thisClaim:number};
-export async function createClaim(projectId:string,input:{period:string;claimDate?:string|null;notes?:string|null;lines:ClaimLineInput[]}){
+export async function createClaim(projectId:string,input:{period:string;claimDate?:string|null;notes?:string|null;lines:ClaimLineInput[];retentionRelease?:{amount:number;reason:string}|null}){
  const a=actor();if(!can(a.role,'claim.edit'))fail(403,'You are not authorised to prepare claims.');
  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.period))fail(400,'Choose a claim period (YYYY-MM).');
  const lines=input.lines.filter(l=>Number(l.thisClaim)!==0);
- if(!lines.length)fail(422,'Add at least one claim line with a value.');
+ const release=r2(input.retentionRelease?.amount||0);
+ if(release&&!input.retentionRelease?.reason?.trim())fail(422,'Give the reason for releasing retention (for example practical completion).');
+ if(!lines.length&&!release)fail(422,'Add at least one claim line with a value, or a retention release.');
  return tx(async conn=>{
   const p=await project(projectId,conn,true);
   await exec('SELECT id FROM jobs WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,projectId],conn);
@@ -63,12 +76,14 @@ export async function createClaim(projectId:string,input:{period:string;claimDat
   }
   const n=await one<{n:number}>('SELECT COALESCE(MAX(number),0)+1 AS n FROM progress_claims WHERE organisation_id=? AND project_id=?',[a.organisationId,projectId],conn);
   const gross=r2(rows.reduce((s,r)=>s+Number(r.this_claim),0));
-  await exec("INSERT INTO progress_claims (id,organisation_id,project_id,number,period,claim_date,status,gross_amount,notes,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,'draft',?,?,1,?,?,?)",[id,a.organisationId,projectId,Number(n?.n||1),input.period,input.claimDate||now.slice(0,10),gross,input.notes||null,a.userId,now,now],conn);
+  const held=await heldExcluding(projectId,null,conn);
+  let ret;try{ret=retention(terms(p),gross,held.held,release);}catch(e){fail(422,(e as Error).message);}
+  await exec("INSERT INTO progress_claims (id,organisation_id,project_id,number,period,claim_date,status,gross_amount,retention_withheld,retention_released,retention_release_reason,net_amount,notes,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,'draft',?,?,?,?,?,?,1,?,?,?)",[id,a.organisationId,projectId,Number(n?.n||1),input.period,input.claimDate||now.slice(0,10),gross,ret!.withheld,ret!.released,release?input.retentionRelease!.reason.trim().slice(0,1000):null,ret!.net,input.notes||null,a.userId,now,now],conn);
   for(const r of rows)await exec('INSERT INTO claim_lines (id,organisation_id,claim_id,project_id,line_type,source_id,exclusive_key,description,contract_value,previous_claimed,this_claim,claimed_to_date,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',[uuid(),a.organisationId,id,projectId,r.line_type,r.source_id,r.exclusive_key,String(r.description).slice(0,500),r.contract_value,r.previous_claimed,r.this_claim,r.claimed_to_date,now],conn);
   const docketIds=rows.filter(r=>r.line_type==='docket').map(r=>r.source_id);
   if(docketIds.length)await exec("UPDATE dockets SET status='included_claim',updated_at=? WHERE organisation_id=? AND id IN (?) AND status='approved'",[now,a.organisationId,docketIds],conn);
-  await audit({event:'claim.created',entityType:'claim',entityId:id,projectId,summary:`Claim ${n?.n} (${input.period}) prepared: ${gross.toFixed(2)} for ${p.name}`,after:{gross,lines:rows.length}},conn);
-  return {claimId:id,number:Number(n?.n||1),grossAmount:gross};
+  await audit({event:'claim.created',entityType:'claim',entityId:id,projectId,summary:`Claim ${n?.n} (${input.period}) prepared: gross ${gross.toFixed(2)}, retention ${ret!.withheld.toFixed(2)}${ret!.released?`, release ${ret!.released.toFixed(2)}`:''}, net ${ret!.net.toFixed(2)} for ${p.name}`,after:{gross,lines:rows.length,retention:ret}},conn);
+  return {claimId:id,number:Number(n?.n||1),grossAmount:gross,retentionWithheld:ret!.withheld,retentionReleased:ret!.released,netAmount:ret!.net};
  });
 }
 
@@ -110,9 +125,13 @@ export async function certifyClaim(claimId:string,certifiedAmount:number,certifi
   if(!c)fail(404,'Claim not found.');
   assertTransition('claim',c!.status,'certified',a.role,{system:true});
   if(!(certifiedAmount>=0))fail(422,'Enter the certified amount.');
-  const now=nowIso();
-  await exec("UPDATE progress_claims SET status='certified',certified_amount=?,certified_by=?,certified_at=?,revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?",[r2(certifiedAmount),a.userId,certifiedDate||now,now,a.organisationId,claimId],conn);
-  await audit({event:'claim.certified',entityType:'claim',entityId:claimId,projectId:c!.project_id,summary:`Claim ${c!.number} certified at ${certifiedAmount.toFixed(2)} (claimed ${Number(c!.gross_amount).toFixed(2)}, variance ${(certifiedAmount-Number(c!.gross_amount)).toFixed(2)})`,before:{status:c!.status},after:{status:'certified',certifiedAmount}},conn);
+  const now=nowIso(),p=await project(c!.project_id,conn);
+  // The certified gross is the client's figure; retention on it is recomputed with the
+  // project terms and the retention held on the other claims. The release stays as claimed.
+  const held=await heldExcluding(c!.project_id,Number(c!.number),conn);
+  let ret;try{ret=retention(terms(p),r2(certifiedAmount),held.held,Number(c!.retention_released));}catch(e){fail(422,(e as Error).message);}
+  await exec("UPDATE progress_claims SET status='certified',certified_amount=?,certified_retention=?,certified_net=?,certified_by=?,certified_at=?,revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?",[r2(certifiedAmount),ret!.withheld,ret!.net,a.userId,certifiedDate||now,now,a.organisationId,claimId],conn);
+  await audit({event:'claim.certified',entityType:'claim',entityId:claimId,projectId:c!.project_id,summary:`Claim ${c!.number} certified at ${certifiedAmount.toFixed(2)} gross (claimed ${Number(c!.gross_amount).toFixed(2)}, variance ${(certifiedAmount-Number(c!.gross_amount)).toFixed(2)}); retention ${ret!.withheld.toFixed(2)}, net ${ret!.net.toFixed(2)}`,before:{status:c!.status},after:{status:'certified',certifiedAmount,certifiedRetention:ret!.withheld,certifiedNet:ret!.net}},conn);
   return {status:'certified'};
  });
 }
@@ -122,8 +141,8 @@ export async function listClaims(projectId:string){
  const claims=await query('SELECT * FROM progress_claims WHERE organisation_id=? AND project_id=? ORDER BY number DESC',[org,projectId]);
  const lines=claims.length?await query('SELECT * FROM claim_lines WHERE organisation_id=? AND claim_id IN (?) ORDER BY created_at',[org,claims.map(c=>c.id)]):[];
  const invoices=await query('SELECT * FROM client_invoices WHERE organisation_id=? AND project_id=? ORDER BY invoice_date DESC',[org,projectId]);
- return {claims:claims.map(c=>({id:c.id,number:c.number,period:c.period,claimDate:c.claim_date,status:c.status,statusLabel:stateLabel('claim',c.status),grossAmount:Number(c.gross_amount),certifiedAmount:c.certified_amount==null?null:Number(c.certified_amount),variance:c.certified_amount==null?null:r2(Number(c.certified_amount)-Number(c.gross_amount)),submittedAt:c.submitted_at,certifiedAt:c.certified_at,notes:c.notes,revision:c.revision,lines:lines.filter(l=>l.claim_id===c.id).map(l=>({id:l.id,lineType:l.line_type,sourceId:l.source_id,description:l.description,contractValue:Number(l.contract_value),previousClaimed:Number(l.previous_claimed),thisClaim:Number(l.this_claim),claimedToDate:Number(l.claimed_to_date),remaining:r2(Number(l.contract_value)-Number(l.claimed_to_date))}))})),
-  invoices:invoices.map(presentInvoice),claimable:await claimable(projectId)};
+ return {claims:claims.map(c=>({id:c.id,number:c.number,period:c.period,claimDate:c.claim_date,status:c.status,statusLabel:stateLabel('claim',c.status),grossAmount:Number(c.gross_amount),retentionWithheld:Number(c.retention_withheld),retentionReleased:Number(c.retention_released),retentionReleaseReason:c.retention_release_reason,netAmount:c.net_amount==null?Number(c.gross_amount):Number(c.net_amount),gstOnNet:gst(c.net_amount==null?Number(c.gross_amount):Number(c.net_amount)).gst,certifiedAmount:c.certified_amount==null?null:Number(c.certified_amount),certifiedRetention:c.certified_retention==null?null:Number(c.certified_retention),certifiedNet:c.certified_net==null?null:Number(c.certified_net),variance:c.certified_amount==null?null:r2(Number(c.certified_amount)-Number(c.gross_amount)),submittedAt:c.submitted_at,certifiedAt:c.certified_at,notes:c.notes,revision:c.revision,lines:lines.filter(l=>l.claim_id===c.id).map(l=>({id:l.id,lineType:l.line_type,sourceId:l.source_id,description:l.description,contractValue:Number(l.contract_value),previousClaimed:Number(l.previous_claimed),thisClaim:Number(l.this_claim),claimedToDate:Number(l.claimed_to_date),remaining:r2(Number(l.contract_value)-Number(l.claimed_to_date))}))})),
+  invoices:invoices.map(presentInvoice),claimable:await claimable(projectId),retention:await retentionSummary(projectId)};
 }
 const presentInvoice=(i:Row)=>({id:i.id,projectId:i.project_id,claimId:i.claim_id,invoiceNumber:i.invoice_number,invoiceDate:i.invoice_date,dueDate:i.due_date,amountExGst:Number(i.amount_ex_gst),gst:Number(i.gst),total:Number(i.total),status:i.status,statusLabel:stateLabel('invoice',i.status),paidDate:i.paid_date,paidAmount:Number(i.paid_amount),outstanding:r2(Number(i.total)-Number(i.paid_amount)),revision:i.revision});
 
@@ -134,7 +153,7 @@ export async function createInvoice(claimId:string,input:{invoiceNumber:string;i
   const c=await one('SELECT * FROM progress_claims WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,claimId],conn);
   if(!c)fail(404,'Claim not found.');
   assertTransition('claim',c!.status,'invoiced',a.role,{system:true});
-  const amounts=gst(Number(c!.certified_amount??c!.gross_amount),input.gstPct??10),id=uuid(),now=nowIso();
+  const amounts=gst(Number(c!.certified_net??c!.net_amount??c!.certified_amount??c!.gross_amount),input.gstPct??10),id=uuid(),now=nowIso();
   await exec("INSERT INTO client_invoices (id,organisation_id,project_id,claim_id,invoice_number,invoice_date,due_date,amount_ex_gst,gst,total,status,paid_amount,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'draft',0,1,?,?,?)",[id,a.organisationId,c!.project_id,claimId,input.invoiceNumber.trim().slice(0,60),input.invoiceDate,input.dueDate||null,amounts.amountExGst,amounts.gst,amounts.total,a.userId,now,now],conn);
   await exec("UPDATE progress_claims SET status='invoiced',revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?",[now,a.organisationId,claimId],conn);
   await exec("UPDATE dockets d JOIN claim_lines l ON l.source_id=d.id AND l.organisation_id=d.organisation_id AND l.line_type='docket' SET d.status='invoiced',d.updated_at=? WHERE d.organisation_id=? AND l.claim_id=?",[now,a.organisationId,claimId],conn);

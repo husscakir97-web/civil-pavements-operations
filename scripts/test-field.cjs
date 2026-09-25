@@ -22,6 +22,8 @@ function req(body,email='admin@example.invalid'){return new Request('https://tes
  await approval.POST(request({estimateId:eid,action:'submit'}));await approval.POST(request({estimateId:eid,action:'approve'}));
  res=await award.POST(request({estimateId:eid}));const jobId=(await res.json()).job.id;
  const job=(await (await delivery.GET(new Request('https://test.invalid',{headers:{'x-test-user-id':'test-owner','x-test-user-email':'admin@example.invalid'}}))).json()).jobs[0],baseline=structuredClone(job.metadata.approvedBudget);
+ // V1 rule: the conflict engine blocks planned shifts that assign a resource that does not exist.
+ sql.prepare('INSERT INTO workers (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)').run('w1','roadworx-sydney','Worker','Active','{}',new Date().toISOString());
  let shift={id:'',name:'Field test shift',status:'Planned',metadata:{jobId,date:'2026-10-01',start:'20:00',finish:'04:00',tonnes:100,area:400,assignments:[{resourceId:'w1',category:'workers',name:'Worker',role:'Worker',hours:8,rate:60,payload:0,trips:0}],materialCost:10000}};
  res=await delivery.POST(request({kind:'shifts',record:shift}));assert.equal(res.status,201);shift=(await res.json()).record;
  let draft=fns.initialField(shift);

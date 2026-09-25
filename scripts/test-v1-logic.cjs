@@ -138,6 +138,10 @@ assert.deepEqual(rm.mapWorker({id:'w',name:'Sam',status:'Active',metadata:{compe
  assert.equal(st.m.size,3,'nothing dropped');assert.equal(st.m.get('aaaaaaaaaaaaaaaa-1').status,'failed');
  out=await oq.syncQueue(st,async()=>({ok:true,status:201,body:{}}),'u1',{now:t0});
  assert.deepEqual(out.map(o=>o.id),['bbbbbbbbbbbbbbbb-2'],'backoff defers the failed item; the next due item is sent');
+ await st.put(oq.newItem({id:'eeeeeeeeeeeeeeee-5',userId:'u1',kind:'docket',label:'E',url:'/x',body:{}},new Date('2026-03-01T00:00:02Z')));
+ await oq.syncQueue(st,async()=>({ok:false,status:0,error:'offline'}),'u1',{now:t0,only:'eeeeeeeeeeeeeeee-5'});
+ out=await oq.syncQueue(st,async i=>({ok:true,status:201,body:{id:i.id}}),'u1',{now:t0,reconnected:true,only:'eeeeeeeeeeeeeeee-5'});
+ assert.deepEqual(out.map(o=>o.result),['done'],'reconnecting retries immediately, ignoring backoff');
  out=await oq.syncQueue(st,async i=>i.id.startsWith('a')?{ok:false,status:409,body:{error:'Shift cancelled',code:'SHIFT_CANCELLED'}}:{ok:true,status:201,body:{}},'u1',{now:new Date(t0.getTime()+60_000)});
  const kept=st.m.get('aaaaaaaaaaaaaaaa-1');assert.equal(kept.status,'conflict');assert.equal(kept.code,'SHIFT_CANCELLED');assert.equal(kept.lastError,'Shift cancelled');
  out=await oq.syncQueue(st,async()=>{throw new Error('should not auto-retry a conflict');},'u1',{now:new Date(t0.getTime()+3600_000)});

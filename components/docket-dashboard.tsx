@@ -47,9 +47,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { Toaster } from "@/components/ui/sonner";
 import {loadPdfReader,loadTesseract,type OcrWorker} from '@/lib/document-readers';
 import {PaidAiScan} from '@/components/paid-ai-scan';
+import {useWorkspaceBrand} from '@/components/workspace-brand';
+import {can} from '@/lib/platform/permissions';
 import {
   parseDocket,
   parseDocketPage,
@@ -355,6 +356,8 @@ function EmptyState({ onUpload }: { onUpload: () => void }) {
 }
 
 export function DocketDashboard() {
+  const session = useWorkspaceBrand();
+  const canApprove = can(session.role, 'docket.approve');
   const currentMonth = new Date().toISOString().slice(0, 7);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
   const [records, setRecords] = useState<Docket[]>([]);
@@ -676,12 +679,12 @@ export function DocketDashboard() {
 
   return (
     <div className="min-h-screen">
-      <Toaster position="top-right" richColors />
       {loadError && <p role="alert" className="border-b border-red-200 bg-red-50 px-6 py-4 text-red-800">{loadError}</p>}
       <input
         ref={fileInput}
         className="sr-only"
         type="file"
+        aria-label="Upload docket files"
         accept="image/jpeg,image/png,image/webp,application/pdf"
         multiple
         onChange={(event) => event.target.files && chooseFiles(event.target.files)}
@@ -854,7 +857,7 @@ export function DocketDashboard() {
                       </TableCell>
                       <TableCell>
                         <p className="max-w-40 truncate text-slate-700">{record.crew || "—"}</p>
-                        <p className="mt-0.5 text-xs text-slate-400">{record.vehicle || record.poNumber || "No PO / vehicle"}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">{record.vehicle || record.poNumber || "No PO / vehicle"}</p>
                       </TableCell>
                       <TableCell className="text-right font-semibold text-slate-800">
                         {record.labourHours ? decimal.format(record.labourHours) : "—"}
@@ -921,7 +924,7 @@ export function DocketDashboard() {
                   </div>
                   <span className="text-2xl font-bold text-slate-950">{summary.completion}%</span>
                 </div>
-                <Progress value={summary.completion} className="mt-3 h-2 bg-slate-100 [&_[data-slot=progress-indicator]]:bg-emerald-600" />
+                <Progress aria-label="Month reconciliation completion" value={summary.completion} className="mt-3 h-2 bg-slate-100 [&_[data-slot=progress-indicator]]:bg-emerald-600" />
               </div>
               <div className="divide-y px-4">
                 {[
@@ -976,7 +979,7 @@ export function DocketDashboard() {
                       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
                         <div className="h-full rounded-full bg-slate-700" style={{ width: `${percent}%` }} />
                       </div>
-                      <p className="mt-1 text-xs text-slate-400">
+                      <p className="mt-1 text-xs text-slate-500">
                         {data.count} {data.count === 1 ? "docket" : "dockets"}
                       </p>
                     </div>
@@ -1059,7 +1062,7 @@ export function DocketDashboard() {
                       </span>
                     </div>
                     <div className="mt-2 flex items-center gap-3">
-                      <Progress value={item.progress} className="h-1.5 flex-1 [&_[data-slot=progress-indicator]]:bg-primary" />
+                      <Progress aria-label={`Upload progress for ${item.file.name}`} value={item.progress} className="h-1.5 flex-1 [&_[data-slot=progress-indicator]]:bg-primary" />
                       <span className="w-28 truncate text-right text-xs text-slate-500">
                         {item.message || "Ready to scan"}
                       </span>
@@ -1143,12 +1146,18 @@ export function DocketDashboard() {
                   id="edit-status"
                   className="w-full"
                   value={editing.status}
+                  disabled={["included_claim","invoiced"].includes(editing.status)||(editing.status==="approved"&&!canApprove)}
+                  aria-describedby="edit-status-help"
                   onChange={(event) => setEditing({ ...editing, status: event.target.value as DocketStatus })}
                 >
+                  {["included_claim","invoiced"].includes(editing.status)&&<NativeSelectOption value={editing.status}>{statusLabel(editing.status)}</NativeSelectOption>}
                   <NativeSelectOption value="ready">Ready</NativeSelectOption>
                   <NativeSelectOption value="review">Needs review</NativeSelectOption>
                   <NativeSelectOption value="duplicate">Possible duplicate</NativeSelectOption>
+                  <NativeSelectOption value="rejected">Rejected</NativeSelectOption>
+                  {(canApprove||editing.status==="approved")&&<NativeSelectOption value="approved">Approved (posts the cost to the project)</NativeSelectOption>}
                 </NativeSelect>
+                <p id="edit-status-help" className="text-xs text-slate-500">{["included_claim","invoiced"].includes(editing.status)?"This docket is in a progress claim and is locked.":canApprove?"Approving posts the priced amount to the linked project's actual cost; moving it out of Approved reverses that cost.":"Approval is done by an authorised office user."}</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="edit-confidence">OCR confidence</Label>

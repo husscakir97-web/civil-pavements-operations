@@ -1,115 +1,76 @@
-# Infrastruct V1 completion checklist
+# Infrastruct V1 completion status
 
-Working checklist for the V1 completion run (branch `claude/infrastruct-v1-completion-03x6v8`,
-based on `hostinger-migration` @ `bde45de`). An item is ticked only when it works **and** is
-covered by a test that runs. "Tests" names the suite:
+Branch `claude/infrastruct-v1-completion-03x6v8` (PR #8, base `hostinger-migration` @ `bde45de`).
 
-- **journey**: `npm run test:v1`. Production server, real Better Auth sessions, MySQL 8, S3 fixture (scenarios A–G).
-- **logic**: `scripts/test-v1-logic.cjs`, part of `npm test`.
-- **legacy**: the existing SQLite suites in `npm test`.
-- **mysql**: `npm run test:mysql`.
-- **browser**: the authenticated Playwright walkthrough recorded in the PR description.
+The states used below:
 
-Baseline before this run: lint 0 errors / 18 warnings, typecheck clean, 9 suites pass, build passes,
-test:fresh, db:migrate and test:mysql pass.
+- **COMPLETE**: built, tested by a suite that runs, and exercised in the browser where it has a UI.
+- **COMPLETE — external credential required to activate**: code, gates and tests are done. It stays safely off until the named variables are set.
+- **PARTIAL**: works, with the stated gap.
+- **NOT BUILT**: not built.
 
-## 1. Platform
-- [x] Typed schema for V1 entities (migration `0003_v1_platform.sql`, append-only). *journey*
-- [x] Capability matrix (admin/office/field active; estimator, scheduler, PM, supervisor, accounts, read-only defined), enforced on the server. *logic, journey F*
-- [x] Central entitlement service: route (disabled → 404, read-only → writes 403), navigation (areas hidden), seams (fire only when every participating module is entitled), data (downgrade never deletes). *journey*
-- [x] Beta signups provisioned with a full-access trial. Older organisations are provisioned lazily. *journey A*
-- [x] Typed audit log (`audit_log`) with actor, entity, before/after and project. Admin/project activity views. *journey*
-- [x] Lifecycle state machines with server-side transition validation for opportunity, tender, estimate, project, SWMS, docket, variation, claim, invoice and HSEQ registers. *logic*
-- [x] `DEFAULT_ORGANISATION_ID` removed. It was already an alias for the session organisation and is renamed `currentOrganisationId`.
-- [x] Module-boundary ESLint rule for `lib/modules/*`. *lint*
+The test suites referred to:
 
-## 2. Organisation onboarding
-- [x] Progressive, skippable onboarding covering the requested profile fields. *journey A, browser*
-- [x] ABN format and ATO checksum validation, plus a lookup adapter that is deliberately unconfigured (no fake registry data). *logic, journey A*
-- [x] Organisation display name comes from the profile. No Roadworx defaults for new organisations. *journey A*
+| Suite | What it covers |
+|---|---|
+| **logic** | `scripts/test-v1-logic.cjs` (in `npm test`) |
+| **legacy** | The SQLite suites in `npm test` |
+| **journey** | `npm run test:v1`: production server, MySQL 8, real sessions, scenarios A–H and R |
+| **mysql** | `npm run test:mysql` |
+| **backfill** | `npm run test:backfill` |
+| **dry-run** | `scripts/test-upgrade-dryrun.mjs` (baseline → branch, manual) |
+| **browser** | The UI-driven Playwright QA recorded in the PR |
 
-## 3. Company Library
-- [x] Typed library items (category, title, description, content, file, expiry, owner, status, version). *journey B*
-- [x] Central private document service on R2 with authenticated downloads, type/size limits, versioning and field visibility. *journey B, G*
-- [x] Tender returnables link to library items.
-- [x] Existing preparation responses, templates and plans remain available under Company Library.
+## Schema
 
-## 4. Pipeline / Tender
-- [x] Opportunities (typed columns on the existing table), owner, value, probability, closing date, conversion to tender with lineage, won/lost. *journey B, browser*
-- [x] One authoritative Tender Workspace (Intake, Requirements, Bid review, Estimate, Returnables, Internal approval, Submission, Clarifications, Award), with a persistent header, completion % and a derived next action. *journey B, browser*
-- [x] Existing multi-file tender intake (upload, remove/restore, extraction, retry) preserved inside Intake. *legacy*
-- [x] Requirements register with source, category, mandatory flag, owner, due date, response, evidence and risk flag. Suggestions from extraction stay `suggested` until a person confirms them. *journey B, logic*
-- [x] Bid/no-bid review. The decision is a permissioned human action. *journey B*
-- [x] Submission gate (approved estimate, mandatory requirements and returnables complete, internal approval), with an audited override for approvers. *journey B*
-- [x] Clarifications. A price change after estimate approval blocks award until a new revision is approved.
+Two migrations, both append-only.
 
-## 5. Estimating
-- [x] Existing engine extended with discipline-neutral work items (section, cost code, category, quantity, productivity, hours, rate). The paving engine is optional; legacy estimates keep it. *logic, browser*
-- [x] Approval workflow draft → review → approved → superseded. Approved revisions are immutable and freeze the rate library. Edits create a new draft. *legacy, journey B*
-- [x] Rate libraries per organisation (Admin → Rates, admin only), with rate changes audited.
+- **`0003_v1_platform`**: 28 new typed tables, plus typed columns on `estimates`, `jobs`, `opportunities` and `tender_requirements`.
+- **`0004_v1_resources_retention`**: 10 new typed tables:
+  - `worker_competencies`, `shift_assignments`, `data_migration_issues`, `client_requests`, `app_backfills`;
+  - `ai_usage_ledger`, `ai_suggestions`;
+  - `billing_customers`, `billing_subscriptions`, `billing_events`.
 
-## 6. Award
-- [x] Award → Project seam from the **approved** revision, never the working draft: baseline, cost codes, readiness items, IMS pack, tender requirements and clarifications, full lineage. Idempotent. *legacy, journey B/C*
-- [x] Projects not entitled: the award is recorded and a CSV export is offered.
+  It also adds typed columns to 7 existing tables: `workers`, `plant`, `shifts`, `jobs`, `progress_claims`, `organisation_profiles` and `organisation_invitations`. Every new table has `organisation_id` and an index on it.
 
-## 7. Projects
-- [x] One Project Workspace (Overview, Setup, Delivery, Quality & HSEQ, Commercial, Documents, Closeout), with a persistent header and next action. *browser*
-- [x] Setup: contract details, key dates, team and contacts, cost codes, scope/assumptions/exclusions, immutable baseline (manual baseline for non-tender projects). *journey C*
-- [x] Readiness calculated from checklist evidence, an approved SWMS, the risk register, the IMS pack and scheduled-worker competencies. Blockers shown. *journey C*
+This supersedes the earlier "24 new typed tables" statement: 0003 created 28.
 
-## 8. IMS & HSEQ
-- [x] Risk register with deterministic 5×5 rating (organisation thresholds) and human-approved controls. *journey C, logic*
-- [x] ITPs and inspection points (hold, witness, review). Field can complete non-hold points; hold points need an authorised release.
-- [x] Incidents (field can report), NCRs (verification before close), corrective actions. *journey D*
-- [x] Company IMS documents (existing workspace) preserved. Pack items can be marked not applicable with a recorded reason.
+## Status
 
-## 9. SWMS
-- [x] Questionnaire → deterministic draft → review → approve → issue → revise (new version) → supersede. Approved/issued revisions immutable. Worker acknowledgement (idempotent). PDF export. *journey C/D, browser*
+| Area | State | Implementation | Evidence |
+|---|---|---|---|
+| Platform: auth, capability matrix, entitlements, audit, state machines | COMPLETE | `lib/platform/*` | logic, journey |
+| Nine-role model | COMPLETE | Roles: admin, office, estimator, scheduler, project manager, supervisor, field, accounts, read-only. `roleAllows` gates role and module; money is stripped for roles without `commercial.view` | logic matrix, journey R, browser nav check |
+| Invitations | COMPLETE (email must be enabled to send) | Invite, resend (new token), cancel, duplicate guard, audit. Role change, deactivate and reactivate are handled in Team, with last-admin protection | journey R. The send path is covered by test:mysql SMTP fixture |
+| Onboarding and ABN checksum | COMPLETE | | journey A, browser |
+| ABN register lookup | COMPLETE — external credential required to activate (`ABR_GUID`) | Official ABR JSON service. Flow: checksum → lookup on request → admin confirms → profile saves entity, status, GST date, source and time. Changing the ABN clears the confirmation | logic, journey H (fixture), browser ("not configured") |
+| Company Library and documents | COMPLETE | Supersede is limited to the uploader or a document approver, and only the current version in the same context | journey B, R |
+| Pipeline, tender, estimating, award | COMPLETE | Award blockers are shown before the attempt. A unique `(org, source_estimate_id)` stops duplicate direct awards | journey B/C, legacy |
+| Projects, readiness, closeout | COMPLETE | Visible blocker links. Closed projects refuse legacy job edits | journey, legacy, browser |
+| IMS / SWMS / ITP / HSEQ | COMPLETE | SWMS approval gaps are shown and review/approve are disabled until they're resolved. Branded, paginated SWMS PDF | journey C/D |
+| Typed resources | COMPLETE | Workers with competencies (revoke, never delete) and app-user link. Plant with compliance. Legacy IDs kept; typed columns are the source of truth, with the legacy metadata mirrored | browser, journey R |
+| Legacy resource backfill | COMPLETE | Deterministic shared mapping. Rerunnable, append-only, verified per organisation in one transaction. Issues are flagged, never guessed | backfill, dry-run (41 workers / 12 plant / 25 shifts, 19 issues, legacy rows byte-identical) |
+| Scheduling conflict engine | COMPLETE | Checks double-booking (overnight-aware, drafts tentative), inactive/unavailable resources, missing/expired required competency, expired plant compliance. Blocks Planned/Ready/In Progress; drafts always save | logic, legacy (planning), browser (planner form) |
+| Field Today (mobile) | COMPLETE | Price-free, 375px | journey D, browser |
+| Offline field capture | COMPLETE | IndexedDB queue, cached Today and SWMS, drafts, service worker shell, banner, retry/discard, idempotent sync | logic, journey D sync, browser (offline refresh + resync) |
+| Field sync conflict rules | COMPLETE | Rules for replay, duplicate docket, shift changed / rescheduled / cancelled, and SWMS superseded while offline | journey D |
+| Dockets and docket → cost seam | COMPLETE | Approval is now available in the dashboard UI for authorised roles. Claimed dockets are locked | journey E, browser (dashboard approval) |
+| Commercial: variations, claims, invoices | COMPLETE | Single money store: legacy `/api/commercial` and `commercial_records` writes return 410 | journey E, legacy, mysql |
+| Retention | COMPLETE | Enable flag, percentage and cap. Withheld, released and held. Certified retention and net. Invoice raised on certified net + GST. Releases go on new claims, so history is never rewritten | logic, journey (retention), browser |
+| Tax invoice PDF | COMPLETE | | journey |
+| AI orchestration and features | COMPLETE — external credential required to activate (`AI_ENABLED`, `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, plus the `ai` entitlement and the organisation admin switch) | Five gates and an idempotent ledger. Suggestions only, source-linked. Features: tender requirements, non-price responses, SWMS assist, IMS drafting. The legacy tender analysis no longer runs on a key alone | logic, journey H (fixture provider) |
+| AI tender features end-to-end with real documents | PARTIAL | Guard paths and the orchestration are tested. The requirement and response features are not driven end-to-end with uploaded tender documents in the journey | journey H (guards) |
+| Billing foundation | COMPLETE — external credential required to activate (`BILLING_PROVIDER`, `BILLING_WEBHOOK_SECRET`, plus a provider adapter emitting the normalised signed events) | Signature check, idempotent events, plan → entitlements, payment grace period, cancellation → read-only, operator-only manual path. No prices in code | logic, journey H |
+| Reports, search, home | COMPLETE | | journey |
+| Accessibility | PARTIAL | Contrast tokens raised to WCAG AA, labels added. axe shows no serious/critical findings on the scanned office pages. Screen-reader walkthroughs were not done | browser (axe) |
+| Performance | PARTIAL | Office pages settle in about 0.5 s locally. No load testing | browser timings |
+| Lint | COMPLETE | 0 errors, 0 warnings, no rules disabled | CI |
+| Deployment and rollback | COMPLETE | Migrations and backfill run automatically under the lock. See `docs/RUNBOOK.md` | test:fresh, dry-run |
 
-## 10. Operations
-- [x] Existing scheduler retained (worker/plant clashes, overnight overlap, expired competency, occupancy, readiness gate). Closed projects refuse new shifts. *legacy, journey*
+## Known limitations
 
-## 11. Resources
-- [x] People and plant registers (existing) under Admin → People/Plant and Operations → Resources. Rates hidden from field. *mysql*
-
-## 12. Field
-- [x] Mobile-first Today view: assigned shifts, location, supervisor, activity, instructions, SWMS to acknowledge, incidents, quality records, price-free docket submission. Existing shift record retained. *journey D, browser (375/430px)*
-
-## 13. Dockets
-- [x] Existing engine preserved. Approval requires `docket.approve`. Claimed dockets are locked. Approved dockets cannot be deleted. *journey E*
-- [x] Docket → Cost seam: idempotent (unique source key), reversal on unapprove, closed-project guard. *journey E, logic*
-
-## 14. Commercial
-- [x] One money spine (`lib/platform/finance.ts`): original/current contract, original/current budget, actual/committed/accrued, cost to complete, forecast final cost/revenue/profit/margin, earned revenue, unbilled. *logic, journey E*
-- [x] Variations draft → submitted → approved/rejected. Approval changes the current contract, never the original. *journey E*
-
-## 15. Claims / Invoices
-- [x] Claims from contract, approved variations, approved dockets and other lines. No double claiming (unique key). Line limits enforced. Internal approval → submit → certify (variance) → invoice (GST) → paid. *journey E, logic*
-
-## 16. Reports
-- [x] Pipeline, projects, commercial, operations, dockets, HSEQ and Learn (estimate vs actual), all derived from records and hidden without permission or entitlement. *journey E, G*
-
-## 17. Search
-- [x] Organisation-, permission- and entitlement-aware. Field search excludes commercial records. No raw metadata returned. *journey F/G, legacy*
-
-## 18. Closeout
-- [x] Practical completion → closeout (default checklist) → closed (gated). Closed projects refuse operational records. Reopening requires a reason. *journey*
-
-## 19. Mobile
-- [x] Field flow verified at 375px and 430px. Office project workspace verified at 768px and 375px without horizontal overflow. *browser*
-
-## 20. Security
-- [x] Session auth only (no `oai-*` headers), membership resolved on the server, fail-closed organisation scoping, CSRF origin check, IDOR checks by known IDs, private R2 with authenticated downloads, upload type/size limits, field commercial projections. *mysql, journey F/G*
-
-## 21. Testing
-- [x] Scenarios A–G automated (`npm run test:v1`). Logic suite in `npm test`. Existing suites updated only where V1 intentionally changed behaviour (award requires an approved revision; field search is allowed but filtered).
-
-## 22. Deployment
-- [x] Migration 0003 is applied automatically on start by the existing locked, checksummed runner. No new environment variables.
-- [x] CI runs lint, typecheck, test, build, test:fresh, db:migrate, test:mysql and test:v1.
-
-## Known limitations (V1)
-- Workers, plant, shifts and legacy variations/claims remain JSON-backed entities (existing, working). They were not promoted in this run.
-- The old commercial/pipeline/job-hub components remain in the repository but are no longer in the navigation.
-- ABN registry lookup, subscription billing and AI drafting are architected but not connected (require an ABR GUID, a billing provider and the product owner's AI activation decision).
-- The docket dashboard's own approval screen was not driven by browser QA; approval was exercised through its API (journey E and browser QA).
+- Supervisors use the office shell (read access plus field capture), not the dedicated field shell.
+- Every role sees an Admin area (company profile / library views); admin-only actions stay refused on the server.
+- Legacy `claims` and `claim_items` rows remain readable and are honoured by V1 claims. No migration of old legacy claims into `progress_claims` was attempted.
+- No billing provider adapter (for example Stripe) is included. Providers must post the normalised signed event format.
+- The claims panel's "held" retention figure includes a draft claim's retention; project control counts only claims sent to the client.

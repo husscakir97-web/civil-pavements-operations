@@ -252,8 +252,9 @@ Do not jump ahead. Each phase has an exit test that must pass before the next.
    needs real field data to be trustworthy)*
 
 The owner-directed V1 completion run delivered phases 2–5 at V1 depth
-(docs/V1-COMPLETION.md). Not yet built: offline field capture and retention
-accounting.
+(docs/V1-COMPLETION.md), including offline field capture, retention accounting,
+typed resources with the scheduling conflict engine, and gated AI/ABR/billing adapters
+that stay off until their credentials are configured (docs/RUNBOOK.md).
 
 ---
 

@@ -3,6 +3,7 @@
 // and legacy migration issues. Rates are only shown to commercial roles.
 import {useState,type FormEvent,type ReactNode} from 'react';
 import {api,useApi,useAction,useSession,PageHeader,Section,EmptyState,ErrorState,Loading,Pill,Tabs,Field,Btn,field,money,dateText} from './kit';
+import {usePeople} from './register-view';
 
 type Competency={id:string;competency_type:string;reference:string|null;issued_date:string|null;expiry_date:string|null;state:string;source:string};
 type Worker={id:string;name:string;status:string;first_name:string|null;last_name:string|null;employee_number:string|null;email:string|null;phone:string|null;role_title:string|null;employment_type:string|null;user_id:string|null;hourly_rate?:number|null;location:string|null;active:boolean;revision:number;competencies:Competency[]};
@@ -51,7 +52,8 @@ function Workers(){
 }
 
 function WorkerForm({worker,rates,onClose,onSaved}:{worker:Worker|null;rates:boolean;onClose:()=>void;onSaved:()=>void}){
- const [f,setF]=useState<Record<string,string>>({firstName:worker?.first_name||worker?.name||'',lastName:worker?.last_name||'',employeeNumber:worker?.employee_number||'',email:worker?.email||'',phone:worker?.phone||'',roleTitle:worker?.role_title||'',employmentType:worker?.employment_type||'',location:worker?.location||'',hourlyRate:worker?.hourly_rate==null?'':String(worker.hourly_rate),status:worker?.status&&WORKER_STATUSES.includes(worker.status)?worker.status:'Active'});
+ const people=usePeople();
+ const [f,setF]=useState<Record<string,string>>({userId:worker?.user_id||'',firstName:worker?.first_name||worker?.name||'',lastName:worker?.last_name||'',employeeNumber:worker?.employee_number||'',email:worker?.email||'',phone:worker?.phone||'',roleTitle:worker?.role_title||'',employmentType:worker?.employment_type||'',location:worker?.location||'',hourlyRate:worker?.hourly_rate==null?'':String(worker.hourly_rate),status:worker?.status&&WORKER_STATUSES.includes(worker.status)?worker.status:'Active'});
  const {busy,error,run}=useAction(),set=(k:string)=>(e:{target:{value:string}})=>setF(v=>({...v,[k]:e.target.value}));
  const submit=(e:FormEvent)=>{e.preventDefault();const payload:Record<string,string>={...f};if(!rates)delete payload.hourlyRate;void run(()=>api('/api/operations/resources',{method:'POST',body:{action:'saveWorker',id:worker?.id||null,revision:worker?.revision??null,worker:payload}}),onSaved);};
  return <form onSubmit={submit} className="mb-4 grid gap-3 rounded-lg border bg-slate-50 p-4 sm:grid-cols-3" aria-label={worker?`Edit ${worker.name}`:'New worker'}>
@@ -64,6 +66,7 @@ function WorkerForm({worker,rates,onClose,onSaved}:{worker:Worker|null;rates:boo
   <Field label="Email"><input className={field} type="email" value={f.email} onChange={set('email')}/></Field>
   <Field label="Phone"><input className={field} value={f.phone} onChange={set('phone')}/></Field>
   <Field label="Base / location"><input className={field} value={f.location} onChange={set('location')}/></Field>
+  <Field label="App user" hint="Links the worker to a member so their shifts appear in Field Today."><select className={field} value={f.userId} onChange={set('userId')}><option value="">Not linked</option>{people.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
   {rates&&<Field label="Hourly rate (AUD)"><input className={field} type="number" min={0} step="0.01" value={f.hourlyRate} onChange={set('hourlyRate')}/></Field>}
   {error&&<p role="alert" className="text-sm text-red-700 sm:col-span-3">{error}</p>}
   <div className="flex gap-2 sm:col-span-3"><Btn type="submit" busy={busy}>{worker?'Save worker':'Add worker'}</Btn><Btn type="button" variant="ghost" onClick={onClose}>Cancel</Btn></div>

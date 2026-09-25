@@ -44,13 +44,14 @@ export function newItem(input:Pick<QueueItem,'id'|'userId'|'kind'|'label'|'url'|
 export type SyncOutcome={id:string;kind:QueueItem['kind'];label:string;result:'done'|'retry'|'conflict';body?:unknown;error?:string};
 /**
  * Sends due items for `userId` oldest first. `force` ignores backoff and retries
- * conflicted items (a manual "Retry"). Returns what happened to each attempted item.
+ * conflicted items (a manual "Retry"). `reconnected` ignores backoff for retryable
+ * items only (the connection just came back), never for conflicts.
  */
-export async function syncQueue(store:QueueStore,send:Sender,userId:string,opts:{now?:Date;force?:boolean;only?:string}={}):Promise<SyncOutcome[]>{
+export async function syncQueue(store:QueueStore,send:Sender,userId:string,opts:{now?:Date;force?:boolean;only?:string;reconnected?:boolean}={}):Promise<SyncOutcome[]>{
  const now=opts.now||new Date(),out:SyncOutcome[]=[];
  const items=(await store.list()).filter(i=>i.userId===userId&&(!opts.only||i.id===opts.only)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
  for(const item of items){
-  const due=opts.force||(item.status!=='conflict'&&(!item.nextAttemptAt||item.nextAttemptAt<=now.toISOString()));
+  const due=opts.force||(item.status!=='conflict'&&(opts.reconnected||!item.nextAttemptAt||item.nextAttemptAt<=now.toISOString()));
   if(!due)continue;
   await store.put({...item,status:'syncing'});
   let r:SendResult;

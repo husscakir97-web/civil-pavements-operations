@@ -37,7 +37,7 @@ async function send(item:QueueItem):Promise<SendResult>{
   const body=await r.json().catch(()=>({}));
   if(r.status===401)return {ok:false,status:0,error:'Signed out: sign in again to send'};
   return r.ok?{ok:true,status:r.status,body}:{ok:false,status:r.status,body};
- }catch(e){return {ok:false,status:0,error:abort.signal.aborted?'Timed out':e instanceof Error?e.message:'Network error'};}
+ }catch(e){return {ok:false,status:0,error:!navigator.onLine?'no signal. It will send automatically when you are back online':abort.signal.aborted?'the server did not respond in time; retrying':e instanceof Error?`connection problem (${e.message}); retrying`:'connection problem; retrying'};}
  finally{clearTimeout(timer);}
 }
 
@@ -46,7 +46,7 @@ export function useOnline(){
  return useSyncExternalStore(subscribeOnline,()=>navigator.onLine,()=>true);
 }
 
-type Offline={online:boolean;items:QueueItem[];lastSync:string|null;lastOutcomes:SyncOutcome[];enqueue:(input:Pick<QueueItem,'id'|'kind'|'label'|'url'|'body'>)=>Promise<void>;sync:(opts?:{force?:boolean;only?:string})=>Promise<SyncOutcome[]>;discard:(id:string)=>Promise<void>;available:boolean};
+type Offline={online:boolean;items:QueueItem[];lastSync:string|null;lastOutcomes:SyncOutcome[];enqueue:(input:Pick<QueueItem,'id'|'kind'|'label'|'url'|'body'>)=>Promise<void>;sync:(opts?:{force?:boolean;only?:string;reconnected?:boolean})=>Promise<SyncOutcome[]>;discard:(id:string)=>Promise<void>;available:boolean};
 const Ctx=createContext<Offline|null>(null);
 export const useOffline=()=>useContext(Ctx);
 
@@ -56,7 +56,7 @@ export function OfflineProvider({children}:{children:ReactNode}){
  const [available,setAvailable]=useState(true);
  const syncing=useRef(false);
  const reload=useCallback(async()=>{try{setItems((await queueStore.list()).filter(i=>i.userId===userId));}catch{setAvailable(false);}},[userId]);
- const sync=useCallback(async(opts:{force?:boolean;only?:string}={})=>{
+ const sync=useCallback(async(opts:{force?:boolean;only?:string;reconnected?:boolean}={})=>{
   if(!userId||syncing.current)return [];
   syncing.current=true;
   try{const out=await syncQueue(queueStore,send,userId,opts);if(out.length)setOutcomes(out);if(out.some(o=>o.result==='done'))setLastSync(new Date().toISOString());return out;}
@@ -68,7 +68,7 @@ export function OfflineProvider({children}:{children:ReactNode}){
  useEffect(()=>{
   const tick=setInterval(()=>{if(navigator.onLine)void sync();},30_000);
   const visible=()=>{if(document.visibilityState==='visible'&&navigator.onLine)void sync();};
-  const reconnected=()=>{void sync();};
+  const reconnected=()=>{void sync({reconnected:true});};
   document.addEventListener('visibilitychange',visible);window.addEventListener('online',reconnected);
   return()=>{clearInterval(tick);document.removeEventListener('visibilitychange',visible);window.removeEventListener('online',reconnected);};
  },[sync]);

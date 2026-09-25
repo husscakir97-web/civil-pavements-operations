@@ -6,10 +6,12 @@
 // 4. runs THIS branch's migration runner (0003, 0004 and the resource backfill);
 // 5. verifies no legacy row was changed or removed, typed data and issues were written,
 //    counts reconcile, and a second run is a no-op.
-// (The production server on a migrated database is exercised by test:mysql and test:v1.)
+// 6. when a production build exists (.next/BUILD_ID), boots it on the upgraded database and checks
+//    that the pre-V1 user signs in with their existing password and the pre-V1 job opens as a project.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {existsSync,symlinkSync} from 'node:fs';
+import {hashPassword} from 'better-auth/crypto';
 import {createHash} from 'node:crypto';
 import mysql from 'mysql2/promise';
 import {mysqlOptions,identifier} from './mysql-config.mjs';
@@ -45,9 +47,14 @@ try{
  await row('commercial_records','cr-1','Extra kerb','Draft',{recordType:'variation',jobId:'job-1',submittedValue:4500});
  await q("INSERT INTO claims (id,organisation_id,job_id,claim_period,status,metadata,created_at) VALUES ('cl-1',?,'job-1','2026-08','Draft','{}',?)",[org,now]);
  await q("INSERT INTO claim_items (id,organisation_id,claim_id,docket_id,line_item,amount,created_at) VALUES ('ci-1',?,'cl-1','d-1','',8000,?)",[org,now]);
+ // an existing Better Auth user with a password, as the deployed signup wrote it
+ const legacyPassword='Legacy-user-password-2026',legacyEmail='owner@legacy.example.invalid',authNow=new Date('2026-08-01T00:00:00Z');
+ await q('INSERT INTO auth_user (id,name,email,email_verified,created_at,updated_at) VALUES (?,?,?,?,?,?)',['legacy-user','Legacy Owner',legacyEmail,1,authNow,authNow]);
+ await q('INSERT INTO auth_account (id,account_id,provider_id,user_id,password,created_at,updated_at) VALUES (?,?,?,?,?,?,?)',['legacy-account','legacy-user','credential','legacy-user',await hashPassword(legacyPassword),authNow,authNow]);
+ await q("INSERT INTO users (id,organisation_id,email,name,role,created_at) VALUES ('legacy-user',?,?,?,'admin',?)",[org,legacyEmail,'Legacy Owner',now]);
  // 3. fingerprint every legacy row
- const LEGACY=['organisations','jobs','workers','plant','crews','shifts','dockets','commercial_records','claims','claim_items'];
- const fingerprint=async()=>{const out={};for(const t of LEGACY){const cols=t==='organisations'?'id,name,created_at':t==='dockets'?'id,docket_no,work_date,amount,status,links,created_at':t==='claim_items'?'id,claim_id,docket_id,amount':t==='claims'?'id,job_id,claim_period,status,metadata':'id,name,status,metadata,created_at';const rows=await q(`SELECT ${cols} FROM ${t} ORDER BY id`);out[t]={count:rows.length,sha:createHash('sha256').update(JSON.stringify(rows)).digest('hex')};}return out;};
+ const LEGACY=['auth_user','auth_account','users','organisations','jobs','workers','plant','crews','shifts','dockets','commercial_records','claims','claim_items'];
+ const fingerprint=async()=>{const out={};for(const t of LEGACY){const cols=t==='auth_user'?'id,email,created_at':t==='auth_account'?'id,user_id,password':t==='users'?'id,organisation_id,email,role':t==='organisations'?'id,name,created_at':t==='dockets'?'id,docket_no,work_date,amount,status,links,created_at':t==='claim_items'?'id,claim_id,docket_id,amount':t==='claims'?'id,job_id,claim_period,status,metadata':'id,name,status,metadata,created_at';const rows=await q(`SELECT ${cols} FROM ${t} ORDER BY id`);out[t]={count:rows.length,sha:createHash('sha256').update(JSON.stringify(rows)).digest('hex')};}return out;};
  const before=await fingerprint();
  // 4. this branch
  const upLog=await run(process.cwd(),'scripts/migrate.mjs');
@@ -65,6 +72,22 @@ try{
  assert.match(rerun,/Resource backfill: nothing to migrate/);assert(!/Applied/.test(rerun),'second run applies nothing');
  assert.deepEqual(await fingerprint(),before);
  report.migrations=(await q('SELECT name FROM app_migrations ORDER BY name')).map(r=>r.name);
+ if(existsSync('.next/BUILD_ID')){
+  const PORT=33197,base=`http://127.0.0.1:${PORT}`;
+  const app=spawn(process.execPath,['node_modules/next/dist/bin/next','start','-p',String(PORT),'--hostname','127.0.0.1'],{env:{...process.env,MYSQL_DATABASE:name,EMAIL_ENABLED:'false',BETTER_AUTH_SECRET:'upgrade-dry-run-secret-with-at-least-32-characters',BETTER_AUTH_URL:base},stdio:['ignore','pipe','pipe']});
+  let appLog='';app.stdout.on('data',b=>appLog+=b);app.stderr.on('data',b=>appLog+=b);
+  try{
+   for(let i=0;i<60;i++){try{await fetch(base+'/login');break;}catch{await new Promise(r=>setTimeout(r,500));}}
+   const signin=await fetch(base+'/api/auth/sign-in/email',{method:'POST',headers:{'Content-Type':'application/json',Origin:base},body:JSON.stringify({email:legacyEmail,password:legacyPassword})});
+   assert.equal(signin.status,200,'existing user signs in with the pre-V1 password: '+await signin.clone().text());
+   const cookie=signin.headers.getSetCookie().map(c=>c.split(';')[0]).join('; ');
+   const project=await fetch(base+'/api/projects/workspace?id=job-1',{headers:{cookie}});
+   const body=await project.json();
+   assert.equal(project.status,200,'existing job opens as a project: '+JSON.stringify(body).slice(0,300));
+   assert.equal(body.project?.name??body.name,'Main St resurfacing');
+   report.server={signIn:signin.status,projectOpen:project.status,project:body.project?.name??body.name};
+  }catch(e){console.error(appLog.slice(-4000));throw e;}finally{app.kill();}
+ }else report.server='skipped: no production build (.next/BUILD_ID)';
  console.log('Upgrade dry run passed');
  console.log(JSON.stringify(report,null,1));
  void baseLog;

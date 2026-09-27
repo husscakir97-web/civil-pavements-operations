@@ -2,6 +2,7 @@
 // Typed resource registers: workers with competencies, plant with compliance,
 // and legacy migration issues. Rates are only shown to commercial roles.
 import {useState,type FormEvent,type ReactNode} from 'react';
+import {AlertTriangle,CheckCircle2,Download,FileSpreadsheet,Upload} from 'lucide-react';
 import {api,useApi,useAction,useSession,PageHeader,Section,EmptyState,ErrorState,Loading,Pill,Tabs,Field,Btn,field,money,dateText,ReasonDialog} from './kit';
 import {usePeople} from './register-view';
 
@@ -29,6 +30,39 @@ export function ResourcesArea({initial='workers',other}:{initial?:ResourceTab;ot
  </div>;
 }
 
+type ImportKind='workers'|'plant';
+type ImportPreview={fileName:string;unmappedHeaders:string[];summary:{total:number;create:number;update:number;skip:number;error:number};rows:Array<{rowNumber:number;label:string;action:'create'|'update'|'skip'|'error';matchLabel:string|null;errors:string[];warnings:string[]}>};
+type ImportResult={summary:{total:number;created:number;updated:number;skipped:number;failed:number};results:Array<{rowNumber:number;label:string;status:string;error?:string}>};
+
+function ResourceImporter({kind,onImported}:{kind:ImportKind;onImported:()=>void}){
+ const [open,setOpen]=useState(false),[file,setFile]=useState<File|null>(null),[preview,setPreview]=useState<ImportPreview|null>(null),[result,setResult]=useState<ImportResult|null>(null),[updateExisting,setUpdateExisting]=useState(true);
+ const {busy,error,run}=useAction(),label=kind==='workers'?'employees':'fleet & plant';
+ const send=(mode:'preview'|'apply')=>{if(!file)return Promise.reject(new Error('Choose an .xlsx or .csv spreadsheet.'));const form=new FormData();form.set('kind',kind);form.set('mode',mode);form.set('updateExisting',String(updateExisting));form.set('file',file);return api<ImportPreview|ImportResult>('/api/operations/resource-import',{method:'POST',body:form});};
+ const check=()=>void run(()=>send('preview') as Promise<ImportPreview>,r=>{setPreview(r);setResult(null);});
+ const apply=()=>void run(()=>send('apply') as Promise<ImportResult>,r=>{setResult(r);setPreview(null);onImported();});
+ const issues=()=>{if(!preview)return;const rows=preview.rows.filter(r=>r.errors.length||r.warnings.length);const esc=(v:string)=>'"'+v.replaceAll('"','""')+'"';const csv=['Row,Record,Action,Issues',...rows.map(r=>[r.rowNumber,r.label,r.action,[...r.errors,...r.warnings].join(' | ')].map(v=>esc(String(v))).join(','))].join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`infrastruct-${kind}-import-issues.csv`;a.click();URL.revokeObjectURL(a.href);};
+ const close=()=>{setOpen(false);setFile(null);setPreview(null);setResult(null);};
+ if(!open)return <Btn variant="secondary" onClick={()=>setOpen(true)}><Upload aria-hidden className="size-4"/>Import spreadsheet</Btn>;
+ return <div className="w-full rounded-2xl border border-orange-200 bg-orange-50/40 p-4 sm:min-w-[680px]">
+  <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold">Bulk import {label}</p><p className="mt-0.5 text-xs text-slate-500">Use our template or upload your existing spreadsheet. Nothing changes until you confirm the preview.</p></div><Btn variant="ghost" onClick={close}>Close</Btn></div>
+  <div className="mt-4 grid gap-3 sm:grid-cols-[auto_1fr] sm:items-end">
+   <a className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50" href={`/api/operations/resource-import?kind=${kind}&template=1`}><Download aria-hidden className="size-4"/>Download template</a>
+   <label className="grid gap-1 text-sm"><span className="font-medium text-slate-700">Spreadsheet</span><input type="file" accept=".xlsx,.csv" className={field} onChange={e=>{setFile(e.target.files?.[0]||null);setPreview(null);setResult(null);}}/></label>
+  </div>
+  <label className="mt-3 flex items-start gap-2 text-sm text-slate-700"><input type="checkbox" className="mt-0.5 size-4" checked={updateExisting} onChange={e=>{setUpdateExisting(e.target.checked);setPreview(null);}}/><span><strong>Update matching existing records</strong><span className="block text-xs text-slate-500">{kind==='workers'?'Matches by employee number, email, then exact name.':'Matches by plant number, registration, then exact name.'} Blank cells keep the current value.</span></span></label>
+  <div className="mt-3 flex flex-wrap gap-2"><Btn busy={busy} disabled={!file} onClick={check}><FileSpreadsheet aria-hidden className="size-4"/>Preview import</Btn>{preview&&preview.summary.error>0&&<Btn variant="secondary" onClick={issues}>Download issues CSV</Btn>}</div>
+  {error&&<div className="mt-3"><ErrorState error={error}/></div>}
+  {preview&&<div className="mt-4 grid gap-3">
+   <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">{[['Rows',preview.summary.total,'neutral'],['Create',preview.summary.create,'success'],['Update',preview.summary.update,'info'],['Skip',preview.summary.skip,'neutral'],['Errors',preview.summary.error,preview.summary.error?'danger':'success']].map(([l,v,t])=><div key={String(l)} className="rounded-xl border bg-white p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{l}</p><p className={`mt-1 text-xl font-semibold ${t==='danger'?'text-red-700':t==='success'?'text-emerald-700':t==='info'?'text-sky-700':'text-slate-900'}`}>{v}</p></div>)}</div>
+   {preview.unmappedHeaders.length>0&&<div className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0"/><span>Ignored columns: {preview.unmappedHeaders.join(', ')}. Rename these headings to a template heading if you want them imported.</span></div>}
+   <div className="max-h-80 overflow-auto rounded-xl border bg-white"><table className="w-full text-left text-xs"><thead className="sticky top-0 bg-slate-50"><tr><th className="p-2">Row</th><th className="p-2">Record</th><th className="p-2">Action</th><th className="p-2">Checks</th></tr></thead><tbody className="divide-y">{preview.rows.slice(0,100).map(r=><tr key={r.rowNumber}><td className="p-2 text-slate-500">{r.rowNumber}</td><td className="p-2 font-medium">{r.label||'Unnamed'}{r.matchLabel&&<span className="block text-[10px] font-normal text-slate-500">Matches {r.matchLabel}</span>}</td><td className="p-2"><Pill tone={r.action==='error'?'danger':r.action==='create'?'success':r.action==='update'?'info':'neutral'}>{r.action}</Pill></td><td className="p-2">{r.errors.length?<span className="text-red-700">{r.errors.join(' ')}</span>:r.warnings.length?<span className="text-amber-800">{r.warnings.join(' ')}</span>:<span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 className="size-3.5"/>Ready</span>}</td></tr>)}</tbody></table></div>
+   {preview.rows.length>100&&<p className="text-xs text-slate-500">Showing the first 100 of {preview.rows.length} rows.</p>}
+   <div className="flex flex-wrap items-center gap-2"><Btn busy={busy} disabled={preview.summary.create+preview.summary.update===0} onClick={apply}>Import {preview.summary.create+preview.summary.update} valid rows</Btn>{preview.summary.error>0&&<span className="text-xs text-slate-500">{preview.summary.error} invalid row{preview.summary.error===1?'':'s'} will be skipped.</span>}</div>
+  </div>}
+  {result&&<div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4"><p className="font-semibold text-emerald-900">Import complete</p><p className="mt-1 text-sm text-emerald-800">{result.summary.created} created · {result.summary.updated} updated · {result.summary.skipped} skipped · {result.summary.failed} failed</p>{result.summary.failed>0&&<ul className="mt-2 text-xs text-red-700">{result.results.filter(r=>r.status==='failed').slice(0,20).map(r=><li key={r.rowNumber}>Row {r.rowNumber}: {r.label} — {r.error}</li>)}</ul>}</div>}
+ </div>;
+}
+
 function Workers(){
  const s=useSession(),{data,error,loading,refresh}=useApi<{workers:Worker[]}>('/api/operations/resources?kind=workers');
  const [editing,setEditing]=useState<Worker|'new'|null>(null),[filter,setFilter]=useState('');
@@ -36,7 +70,7 @@ function Workers(){
  if(loading&&!data)return <Loading/>;
  if(error&&!data)return <ErrorState error={error} onRetry={refresh}/>;
  const list=(data?.workers||[]).filter(w=>!filter||`${w.name} ${w.role_title||''} ${w.competencies.map(c=>c.competency_type).join(' ')}`.toLowerCase().includes(filter.toLowerCase()));
- return <Section title="Workers" description="Required competencies on a shift are checked against these records before it can be planned." actions={canEdit&&<Btn onClick={()=>setEditing('new')}>Add worker</Btn>}>
+ return <Section title="Workers" description="Required competencies on a shift are checked against these records before it can be planned." actions={canEdit&&<div className="flex flex-wrap gap-2"><ResourceImporter kind="workers" onImported={refresh}/><Btn onClick={()=>setEditing('new')}>Add worker</Btn></div>}>
   {editing&&<WorkerForm worker={editing==='new'?null:editing} rates={rates} onClose={()=>setEditing(null)} onSaved={()=>{setEditing(null);refresh();}}/>}
   <label className="mb-3 block max-w-sm text-sm"><span className="sr-only">Filter workers</span><input className={field} placeholder="Filter by name, role or competency" value={filter} onChange={e=>setFilter(e.target.value)}/></label>
   {!list.length?<EmptyState title={filter?'No workers match this filter':'No workers yet'} detail={filter?undefined:'Add the people you schedule so competencies and double-booking can be checked.'}/>:
@@ -103,7 +137,7 @@ function PlantList(){
  if(loading&&!data)return <Loading/>;
  if(error&&!data)return <ErrorState error={error} onRetry={refresh}/>;
  const list=data?.plant||[];
- return <Section title="Plant & equipment" description="Plant with expired registration or compliance cannot be planned onto a shift." actions={canEdit&&<Btn onClick={()=>setEditing('new')}>Add plant</Btn>}>
+ return <Section title="Plant & equipment" description="Plant with expired registration or compliance cannot be planned onto a shift." actions={canEdit&&<div className="flex flex-wrap gap-2"><ResourceImporter kind="plant" onImported={refresh}/><Btn onClick={()=>setEditing('new')}>Add plant</Btn></div>}>
   {editing&&<PlantForm plant={editing==='new'?null:editing} rates={rates} onClose={()=>setEditing(null)} onSaved={()=>{setEditing(null);refresh();}}/>}
   {!list.length?<EmptyState title="No plant yet" detail="Add plant and equipment so the scheduler can check availability and compliance."/>:
   <ul className="divide-y rounded-lg border">{list.map(p=><li key={p.id} className="flex flex-wrap items-start justify-between gap-2 p-3">

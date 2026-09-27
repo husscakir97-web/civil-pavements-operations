@@ -183,6 +183,8 @@ try{
  const employeeCsv=`Payroll ID,Full Name,Mobile,Trade,Employment Type,Depot,Status,Hourly Rate\n${employeeNo},Jordan Import,0412 345 678,Labourer,employee,Sydney,Active,72.50\nBAD-${suffix},Broken Rate,0400 000 001,Labourer,employee,Sydney,Active,not-a-rate`;
  let importPreview=await json(await importCsv('workers','preview',employeeCsv),200,'employee import preview');
  assert.equal(importPreview.summary.total,2);assert.equal(importPreview.summary.create,1);assert.equal(importPreview.summary.error,1,'bad rows are surfaced before import');
+ const duplicateIdentityCsv=`Payroll ID,Email,Full Name,Status\nDUP-A-${suffix},same-${suffix}@example.invalid,Duplicate One,Active\nDUP-B-${suffix},same-${suffix}@example.invalid,Duplicate Two,Active`;
+ const duplicatePreview=await json(await importCsv('workers','preview',duplicateIdentityCsv),200,'duplicate employee identity preview');assert.equal(duplicatePreview.summary.error,1,'same email across different spreadsheet rows is flagged before import');
  let importApplied=await json(await importCsv('workers','apply',employeeCsv),200,'employee import apply');
  assert.equal(importApplied.summary.created,1);assert.equal(importApplied.summary.skipped,1,'invalid row is skipped while valid row imports');
  let [[bulkWorker]]=await db.execute('SELECT id,name,employee_number,phone,role_title,hourly_rate,location FROM workers WHERE organisation_id=? AND employee_number=?',[memberA.organisation_id,employeeNo]);

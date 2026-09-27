@@ -92,8 +92,8 @@ const STEP_ICON:Record<StepState,string>={done:'border-emerald-300 bg-emerald-50
 /** One process, not nine tabs: each step shows done / current / needs attention. */
 function TenderStepper({t,active,onChange}:{t:Tender;active:TabKey;onChange:(k:TabKey)=>void}){
  const steps=tenderSteps(t);
- return <nav aria-label="Tender steps" className="mb-5 overflow-x-auto pb-1 pt-0.5 pl-0.5"><ol className="flex min-w-max items-center gap-1.5">{steps.map((st,i)=><li key={st.key} className="flex items-center gap-1">
-  <button aria-current={active===st.key?'step':undefined} onClick={()=>onChange(st.key)} className={`flex min-h-10 items-center gap-1.5 rounded-full border px-2.5 text-sm transition-colors ${STEP_ICON[st.state]} ${active===st.key?'outline outline-2 outline-offset-1 outline-[#172633]':''}`}>
+ return <nav aria-label="Tender steps" className="relative mb-5 overflow-x-auto pb-1 pt-0.5 pl-0.5"><ol className="flex min-w-max items-center gap-1.5">{steps.map((st,i)=><li key={st.key} className="flex items-center gap-1">
+  <button aria-current={active===st.key?'step':undefined} onClick={()=>onChange(st.key)} className={`relative flex min-h-10 items-center gap-1.5 rounded-full border px-2.5 text-sm transition-colors ${STEP_ICON[st.state]} ${active===st.key?'outline outline-2 outline-offset-1 outline-[#172633]':''}`}>
    <span aria-hidden className="text-xs">{st.state==='done'?'✓':st.state==='attention'?'!':st.state==='current'?'●':i+1}</span>
    <span className={active===st.key?'font-semibold':''}>{st.label}</span>
    {st.count?<span className="rounded-full bg-white/80 px-1.5 text-xs font-semibold">{st.count}</span>:null}

@@ -96,7 +96,7 @@ function ProjectWorkspace({id,tab,area,onBack}:{id:string;tab?:string;area:'Prep
   <div className="hidden sm:block"><Tabs label="Project workspace" tabs={tabs} active={active} onChange={k=>navigate(area,'Projects',id,k)}/></div>
   {active==='overview'&&<Overview d={d} onTab={k=>navigate(area,'Projects',id,k)} goTarget={goTarget}/>}
   {active==='setup'&&<Setup d={d} onChanged={refresh} goTarget={goTarget} focus={checklistFocus} setFocus={setChecklistFocus}/>}
-  {active==='delivery'&&<Delivery projectId={id}/>}
+  {active==='delivery'&&<Delivery projectId={id} area={area}/>}
   {active==='quality'&&<Quality projectId={id} closed={closed} onChanged={refresh}/>}
   {active==='commercial'&&<ProjectCommercial projectId={id} closed={closed} onChanged={refresh}/>}
   {active==='documents'&&<Documents projectId={id} closed={closed}/>}
@@ -213,7 +213,7 @@ function BaselineForm({projectId,onDone}:{projectId:string;onDone:()=>void}){
  </form>;
 }
 
-function Delivery({projectId}:{projectId:string}){
+function Delivery({projectId,area}:{projectId:string;area:'Prepare Work'|'Deliver Work'}){
  const {navigate}=useNav();const {can,module}=useSession();
  const {data,error,loading,refresh}=useApi<{shifts:Array<{id:string;name:string;status:string;metadata:Record<string,string>}>;dockets:Array<{id:string;name:string;status:string;work_date:string}>}>(`/api/job-hub?jobId=${projectId}`);
  const today=new Date().toLocaleDateString('en-CA',{timeZone:'Australia/Sydney'});
@@ -228,7 +228,7 @@ function Delivery({projectId}:{projectId:string}){
     {past.length>0&&<details className="mt-3"><summary className="cursor-pointer text-sm text-slate-600">Earlier shifts ({past.length})</summary><ul className="divide-y text-sm">{past.map(shiftRow)}</ul></details>}</>}
   </Section>
   <Section title="Dockets" description={toReview.length?`${toReview.length} waiting for review`:undefined} actions={can('docket.approve')&&<Btn variant="secondary" onClick={()=>navigate('Operations','Dockets')}>{toReview.length?'Review dockets':'Open dockets'}</Btn>}>
-   {!data?.dockets.length?<EmptyState title="No dockets have been submitted for this project."/>:<ul className="divide-y text-sm">{[...toReview,...data.dockets.filter(d=>!toReview.includes(d))].map(d=><li key={d.id} className="flex items-center justify-between gap-2 py-2"><span>{d.name}<span className="block text-xs text-slate-500">{dateText(d.work_date)}</span></span><span className="flex items-center gap-2">{d.status==='approved'&&can('claim.edit')&&module('commercial')&&<Btn variant="secondary" className="min-h-9 py-1" onClick={()=>{presetClaimLine(projectId,'docket',d.id);navigate('Projects',undefined,projectId,'commercial');}}>Add to claim</Btn>}<Pill tone={d.status==='approved'?'success':['included_claim','invoiced'].includes(d.status)?'info':'warning'}>{d.status==='included_claim'?'Claimed':humanStatus(d.status)}</Pill></span></li>)}</ul>}
+   {!data?.dockets.length?<EmptyState title="No dockets have been submitted for this project."/>:<ul className="divide-y text-sm">{[...toReview,...data.dockets.filter(d=>!toReview.includes(d))].map(d=><li key={d.id} className="flex items-center justify-between gap-2 py-2"><span>{d.name}<span className="block text-xs text-slate-500">{dateText(d.work_date)}</span></span><span className="flex items-center gap-2">{d.status==='approved'&&can('claim.edit')&&module('commercial')&&<Btn variant="secondary" className="min-h-9 py-1" onClick={()=>{presetClaimLine(projectId,'docket',d.id);navigate(area,'Projects',projectId,'commercial');}}>Add to claim</Btn>}<Pill tone={d.status==='approved'?'success':['included_claim','invoiced'].includes(d.status)?'info':'warning'}>{d.status==='included_claim'?'Claimed':humanStatus(d.status)}</Pill></span></li>)}</ul>}
   </Section>
  </div>;
 }

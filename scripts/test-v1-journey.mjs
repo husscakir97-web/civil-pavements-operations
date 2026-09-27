@@ -179,7 +179,7 @@ try{
  // Bulk spreadsheet migration: preview first, valid rows import while invalid rows are skipped, and reruns update stable matches.
  step='D resource spreadsheet import';
  const importCsv=async(kind,mode,csv,cookie=A.cookie,updateExisting=true)=>{const form=new FormData();form.set('kind',kind);form.set('mode',mode);form.set('updateExisting',String(updateExisting));form.set('file',new File([csv],`bulk-${kind}.csv`,{type:'text/csv'}));return call('/api/operations/resource-import','POST',form,cookie);};
- const employeeNo=`EMP-BULK-${suffix}`,employeeEmail=`bulk-${suffix}@example.invalid`;
+ const employeeNo=`EMP-BULK-${suffix}`;
  const employeeCsv=`Payroll ID,Full Name,Mobile,Trade,Employment Type,Depot,Status,Hourly Rate\n${employeeNo},Jordan Import,0412 345 678,Labourer,employee,Sydney,Active,72.50\nBAD-${suffix},Broken Rate,0400 000 001,Labourer,employee,Sydney,Active,not-a-rate`;
  let importPreview=await json(await importCsv('workers','preview',employeeCsv),200,'employee import preview');
  assert.equal(importPreview.summary.total,2);assert.equal(importPreview.summary.create,1);assert.equal(importPreview.summary.error,1,'bad rows are surfaced before import');

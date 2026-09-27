@@ -53,10 +53,10 @@ const FieldToday = dynamic(() => loaders.field().then(m => m.FieldToday), { load
 const ResourcesArea = dynamic(() => loaders.resources().then(m => m.ResourcesArea), { loading });
 const FieldWorkspace = dynamic(() => loaders.fieldRecords().then(m => m.FieldWorkspace), { loading });
 
-type Area = { key: string; label: string; icon: LucideIcon; module?: string; capability?: Capability; subs?: Array<{ key: string; module?: string; capability?: Capability; anyOf?: Capability[] }>; preload: () => Promise<unknown> };
+type Area = { key: string; label: string; icon: LucideIcon; module?: string; capability?: Capability; defaultSub?: string; subs?: Array<{ key: string; module?: string; capability?: Capability; anyOf?: Capability[] }>; preload: () => Promise<unknown> };
 const AREAS: Area[] = [
   { key: "Home", label: "Home", icon: Home, preload: loaders.home },
-  { key: "Pipeline", label: "Pipeline", icon: BriefcaseBusiness, module: "pipeline", capability: "pipeline.view", subs: [{ key: "Opportunities" }, { key: "Tenders" }, { key: "Estimates", module: "estimating" }], preload: loaders.pipeline },
+  { key: "Pipeline", label: "Pipeline", icon: BriefcaseBusiness, module: "pipeline", capability: "pipeline.view", defaultSub: "Tenders", subs: [{ key: "Opportunities" }, { key: "Tenders" }, { key: "Estimates", module: "estimating" }], preload: loaders.pipeline },
   { key: "Projects", label: "Projects", icon: HardHat, module: "projects", capability: "project.view", preload: loaders.projects },
   { key: "Operations", label: "Operations", icon: Workflow, module: "operations", capability: "schedule.view", subs: [{ key: "Schedule" }, { key: "Resources" }, { key: "Dockets", module: "dockets", capability: "docket.approve" }], preload: loaders.operations },
   { key: "Commercial", label: "Commercial", icon: DollarSign, module: "commercial", capability: "commercial.view", preload: loaders.commercial },
@@ -126,7 +126,8 @@ function WorkspaceShell() {
   const areas = AREAS.filter(a => allowed(a) && (!a.subs || a.subs.some(allowed)));
   const area = areas.find(a => a.key === route.area) ?? (route.area === "Search" ? null : areas[0]);
   const subs = area?.subs?.filter(allowed) ?? [];
-  const sub = subs.find(s => s.key === route.sub)?.key ?? subs[0]?.key;
+  // Areas open on the section where day-to-day work happens (Pipeline → Tenders).
+  const sub = subs.find(s => s.key === route.sub)?.key ?? subs.find(s => s.key === area?.defaultSub)?.key ?? subs[0]?.key;
 
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); navigate("Search"); } };

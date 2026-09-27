@@ -60,6 +60,23 @@ assert.deepEqual(navDef.adminSubsFor('read_only'),[],'read-only: no admin area')
 assert.deepEqual(navDef.adminSubsFor('field'),[]);assert.deepEqual(navDef.adminSubsFor('supervisor'),[]);
 assert(!navDef.adminSubsFor('office').some(k=>['Team & Permissions','Integrations','Settings','Company'].includes(k)),'office has no organisation administration');
 assert.deepEqual(navDef.FIELD_SHELL_ROLES,['field','supervisor']);
+// Tender lifecycle presentation: step states and next-action targets mirror the tender stage and stats.
+{const tf=load('lib/v1/tender-flow.ts');
+ const base={stage:'pricing',approvalStatus:'not_requested',submittedAt:null,estimateId:'e1',projectId:null,checks:[{key:'estimate',ok:true},{key:'requirements',ok:false},{key:'returnables',ok:false},{key:'approval',ok:false}],stats:{documents:1,requirements:3,suggested:0,mandatoryOpen:2,returnables:1,returnablesMandatoryOpen:1,clarificationsOpen:0,estimateState:'approved',bidDecision:'bid',approvedRevisionNumber:1}};
+ const by=t=>Object.fromEntries(tf.tenderSteps(t).map(s=>[s.key,s.state]));
+ assert.equal(tf.nextStep(base),'requirements','open mandatory requirements come next once the estimate is approved');
+ assert.deepEqual(by(base),{intake:'done',requirements:'attention',bid:'done',estimate:'done',returnables:'attention',approval:'todo',submission:'todo',clarifications:'todo',award:'todo'});
+ assert.equal(tf.tenderSteps(base).find(s=>s.key==='requirements').count,2);
+ assert.equal(tf.nextStep({...base,stats:{...base.stats,approvedRevisionNumber:null,estimateState:'draft'}}),'estimate');
+ assert.equal(tf.nextStep({...base,stats:{...base.stats,suggested:1}}),'requirements','suggestions must be confirmed first');
+ assert.equal(tf.nextStep({...base,stats:{...base.stats,mandatoryOpen:0,returnablesMandatoryOpen:0}}),'approval');
+ assert.equal(tf.nextStep({...base,stage:'approval',approvalStatus:'approved',checks:base.checks.map(c=>({...c,ok:true}))}),'submission');
+ assert.equal(tf.nextStep({...base,stage:'draft',stats:{...base.stats,documents:0,requirements:0}}),'intake');
+ assert.equal(tf.nextStep({...base,stage:'submitted',submittedAt:'x',stats:{...base.stats,clarificationsOpen:1}}),'clarifications');
+ assert.equal(tf.nextStep({...base,stage:'awarded',projectId:'p1'}),'project');
+ assert.equal(by({...base,stage:'draft',stats:{...base.stats,bidDecision:'pending',mandatoryOpen:2}}).requirements,'todo','requirements are not flagged before pricing');
+ assert(Object.values(by({...base,stage:'lost'})).every(s=>['done','closed'].includes(s)),'a lost tender has no current or attention steps');
+ assert.deepEqual(tf.TENDER_PHASES.flatMap(p=>p.stages).sort(),['approval','awarded','clarification','draft','lost','pricing','reviewing','submitted'],'every tender stage belongs to exactly one phase');}
 for(const r of navDef.FIELD_SHELL_ROLES)assert.equal(perm.can(r,'commercial.view'),false,r+' shell never carries money');
 assert.equal(perm.can('read_only','project.edit'),false);assert(perm.capabilitiesFor('read_only').every(c=>c.endsWith('.view')),'read-only holds view capabilities only');
 

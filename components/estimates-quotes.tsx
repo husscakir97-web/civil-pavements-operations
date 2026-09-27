@@ -147,7 +147,9 @@ function newId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
-export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId}:{opportunityId?:string;opportunityName?:string;initialEstimateId?:string}={}) {
+// `embedded`: shown inside the tender workspace, which owns the page header, the approval
+// panel and the estimate register, so those parts are omitted here.
+export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId,embedded=false,onSaved}:{opportunityId?:string;opportunityName?:string;initialEstimateId?:string;embedded?:boolean;onSaved?:()=>void}={}) {
   const {brand} = useWorkspaceBrand();
   const [estimates, setEstimates] = useState<EstimateRecord[]>([]);
   const [form, setForm] = useState<EstimateData>(() => makeDefaultEstimate());
@@ -286,6 +288,7 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
       const id = payload.estimate?.id ?? selectedId;
       toast.success(selectedId ? `Revision saved as ${status}.` : "Estimate created as Draft.");
       await refresh(id);
+      onSaved?.();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "The estimate could not be saved.");
     } finally {
@@ -391,13 +394,13 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
 
   return (
     <div className="estimate-page space-y-5">
-      <div className="no-print flex flex-wrap items-end justify-between gap-4">
+      {!embedded&&<div className="no-print flex flex-wrap items-end justify-between gap-4">
         <div><p className="text-sm font-medium text-slate-500">Commercial control</p><h2 className="mt-1 text-2xl font-bold tracking-tight text-slate-950">Estimates &amp; Quotes</h2><p className="mt-1 text-sm text-slate-500">Build a priced baseline from quantities, resources and organisation rates.</p></div>
         <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => setShowRates((value) => !value)}><LibraryBig className="size-4" /> Rate library</Button><Button onClick={startNew}><Plus className="size-4" /> New estimate</Button></div>
-      </div>
+      </div>}
 
-      <div className="no-print grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="space-y-4">
+      <div className={`no-print grid gap-4 ${embedded?'':'xl:grid-cols-[280px_minmax(0,1fr)]'}`}>
+        <aside className={embedded?'hidden':'space-y-4'}>
           <div className="rounded-xl border bg-white p-3 shadow-sm">
             <div className="flex items-center justify-between px-2 pb-2"><p className="text-sm font-semibold text-slate-900">Estimate register</p><span className="text-xs text-slate-500">{estimates.length}</span></div>
             <Input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search estimates…" className="mb-2 h-9" />
@@ -412,7 +415,7 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
 
         <div className="min-w-0 space-y-5">
           <section className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
-            <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><h3 className="text-lg font-semibold text-slate-950">{form.name || form.projectName || "New estimate"}</h3><StatusBadge status={currentStatus} /></div><p className="mt-1 text-sm text-slate-500">{selectedId ? `Estimate ID ${selectedId.slice(0, 8)} · Rev ${revisions[0]?.metadata?.revisionNumber ?? 1}` : "Unsaved estimate · complete the inputs and save a draft"}</p></div><div className="no-print flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={applyLibraryRates}><RefreshCw className="size-3.5" /> Apply rates</Button><Button variant="outline" size="sm" onClick={exportEstimate}><Download className="size-3.5" /> Export</Button><Button variant="outline" size="sm" onClick={() => window.print()}><Printer className="size-3.5" /> Print quote</Button></div></div>
+            <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><h3 className="text-lg font-semibold text-slate-950">{form.name || form.projectName || "New estimate"}</h3><StatusBadge status={currentStatus} /></div><p className="mt-1 text-sm text-slate-500">{selectedId ? `Estimate ID ${selectedId.slice(0, 8)} · Rev ${revisions[0]?.metadata?.revisionNumber ?? 1}` : "Unsaved estimate · complete the inputs and save a draft"}</p></div><div className="no-print flex flex-wrap gap-2">{embedded&&<Button variant="outline" size="sm" onClick={() => setShowRates((value) => !value)}><LibraryBig className="size-4" /> Rate library</Button>}<Button variant="outline" size="sm" onClick={applyLibraryRates}><RefreshCw className="size-3.5" /> Apply rates</Button><Button variant="outline" size="sm" onClick={exportEstimate}><Download className="size-3.5" /> Export</Button><Button variant="outline" size="sm" onClick={() => window.print()}><Printer className="size-3.5" /> Print quote</Button></div></div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Field label="Estimate name" className="lg:col-span-2"><Input value={form.name} onChange={(event) => setField("name", event.target.value)} placeholder="e.g. Kings Highway resurfacing" /></Field>
               <Field label="Status"><NativeSelect value={currentStatus} onChange={(event) => setCurrentStatus(event.target.value as EstimateStatus)} disabled={currentStatus === "Awarded"}><NativeSelectOption value="Draft">Draft</NativeSelectOption><NativeSelectOption value="Internal Review">Internal Review</NativeSelectOption><NativeSelectOption value="Submitted">Submitted</NativeSelectOption><NativeSelectOption value="Revised">Revised</NativeSelectOption><NativeSelectOption value="Lost">Lost</NativeSelectOption><NativeSelectOption value="Cancelled">Cancelled</NativeSelectOption></NativeSelect></Field>
@@ -420,7 +423,7 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
             </div>
           </section>
 
-          <div className="sticky top-16 z-10 space-y-3 rounded-xl border bg-white/95 p-3 shadow-sm backdrop-blur no-print">
+          <div className={`${embedded?'':'sticky top-16 z-10 '}space-y-3 rounded-xl border bg-white/95 p-3 shadow-sm backdrop-blur no-print`}>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
               <Metric label="Direct cost" value={<Money value={totals.directCost}/>} />
               <Metric label="Total cost" value={<Money value={totals.totalCost}/>} />
@@ -431,7 +434,7 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
               <Metric label="$/m²" value={<Money value={totals.sellRatePerM2} exact/>} />
               <Metric label="Shifts" value={totals.estimatedShifts} />
             </div>
-            <nav aria-label="Estimate sections" className="flex gap-2 overflow-x-auto">{estimateSteps.map(step=><Button key={step} size="sm" className="shrink-0" variant={estimateStep===step?"default":"outline"} onClick={()=>setEstimateStep(step)}>{step}</Button>)}</nav>
+            <nav aria-label="Estimate sections" className="flex gap-2 overflow-x-auto">{estimateSteps.filter(step=>!(embedded&&step==="Review & Approval")).map(step=><Button key={step} size="sm" className="shrink-0" variant={estimateStep===step?"default":"outline"} onClick={()=>setEstimateStep(step)}>{step}</Button>)}</nav>
           </div>
 
           <Section className={estimateStep==="Scope & Quantities"?"":"hidden"} icon={FileText} title="Client, project & scope" description="Link the estimate to the opportunity and describe the work being priced.">

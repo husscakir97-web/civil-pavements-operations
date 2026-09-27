@@ -17,7 +17,9 @@ export async function api<T=Record<string,unknown>>(url:string,init?:{method?:st
  if(!r.ok){
   if(r.status===401&&typeof window!=='undefined')window.location.assign('/login');
   const issues=Array.isArray(data.issues)?data.issues.map((i:{path?:string;message?:string})=>i.message).filter(Boolean).join(' '):'';
-  const extra=Array.isArray(data.checks)?data.checks.map((c:{detail?:string;label?:string})=>c.detail||c.label).join(' '):Array.isArray(data.blockers)?data.blockers.join(' · '):Array.isArray(data.gaps)?data.gaps.join(' '):'';
+  // Scheduling conflicts arrive as structured objects: show the blocking ones in plain words.
+  const conflicts=Array.isArray(data.conflicts)?data.conflicts.filter((c:{severity?:string})=>c.severity==='block').map((c:{message?:string})=>c.message).filter(Boolean).join(' '):'';
+  const extra=conflicts||(Array.isArray(data.checks)?data.checks.map((c:{detail?:string;label?:string})=>c.detail||c.label).join(' '):Array.isArray(data.blockers)?data.blockers.join(' · '):Array.isArray(data.gaps)?data.gaps.join(' '):'');
   throw new ApiError([data.error||(r.status===403?'You are not authorised for this action.':r.status===404?'Not found.':'The request failed. Please retry.'),issues,extra].filter(Boolean).join(' '),r.status,data);
  }
  return data as T;
@@ -57,6 +59,8 @@ export function StatusBadge({machine,state,label}:{machine?:MachineKey;state:str
  const tone=machine?stateTone(machine,state):'neutral';
  return <span className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${toneClass[tone]}`}>{label||(machine?stateLabel(machine,state):state)}</span>;
 }
+/** Human label for a stored status the workflow machines don't cover (e.g. legacy dockets): internal_approval → Internal approval. */
+export function humanStatus(value:unknown){const s=String(value??'').trim();if(!s)return '';const t=s.replace(/[_-]+/g,' ').replace(/\s+/g,' ').toLowerCase();return t.charAt(0).toUpperCase()+t.slice(1);}
 export function Pill({tone='neutral',children}:{tone?:Tone;children:ReactNode}){return <span className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${toneClass[tone]}`}>{children}</span>;}
 
 export function Crumbs({items}:{items:Array<{label:string;onClick?:()=>void}>}){
@@ -90,9 +94,9 @@ export function Stat({label,value,hint,tone}:{label:string;value:ReactNode;hint?
  const c=tone==='good'?'text-emerald-700':tone==='warn'?'text-amber-700':tone==='bad'?'text-red-700':'text-slate-900';
  return <div className="rounded-lg border bg-white p-3"><p className="text-xs text-slate-500">{label}</p><p className={`mt-1 text-lg font-semibold ${c}`}>{value}</p>{hint&&<p className="mt-0.5 text-xs text-slate-500">{hint}</p>}</div>;
 }
-export function NextAction({text,onClick}:{text:string|null|undefined;onClick?:()=>void}){
+export function NextAction({text,onClick,actionLabel='Go'}:{text:string|null|undefined;onClick?:()=>void;actionLabel?:string}){
  if(!text)return null;
- return <div className="flex flex-wrap items-center gap-2 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-900"><span className="text-xs font-semibold uppercase tracking-wide text-orange-700">Next action</span><span className="min-w-0 flex-1">{text}</span>{onClick&&<button className="text-xs font-medium underline" onClick={onClick}>Go</button>}</div>;
+ return <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-950"><span className="text-xs font-semibold uppercase tracking-wide text-orange-800">Next action</span><span className="min-w-0 flex-1 font-medium">{text}</span>{onClick&&<button className="inline-flex min-h-9 items-center gap-1 rounded-md bg-[#172633] px-3 text-xs font-semibold text-white hover:bg-[#263c4c]" onClick={onClick}>{actionLabel}<ChevronRight aria-hidden className="size-3.5"/></button>}</div>;
 }
 export function Progress({value,label}:{value:number|null|undefined;label?:string}){
  if(value==null)return <span className="text-xs text-slate-500">{label?`${label}: `:''}Not available</span>;

@@ -57,7 +57,9 @@ function Input({f,value,onChange,disabled,people,relationOptions,documentContext
  }
 }
 
-export function RegisterView({register,parentId=null,all=false,title,description,createDefaults,rowActions,onChanged,filter,hideCreate,projectId}:{register:RegisterKey;parentId?:string|null;all?:boolean;title?:string;description?:string;createDefaults?:Rec|Record<string,unknown>;rowActions?:(r:Rec,refresh:()=>void)=>ReactNode;onChanged?:()=>void;filter?:(r:Rec)=>boolean;hideCreate?:boolean;projectId?:string|null}){
+/** `focus` shows the records that need action first (e.g. incomplete mandatory requirements), with "All" one tap away. */
+export type RegisterFocus={label:string;test:(r:Rec)=>boolean;empty?:string};
+export function RegisterView({register,parentId=null,all=false,title,description,createDefaults,rowActions,onChanged,filter,hideCreate,projectId,focus}:{register:RegisterKey;parentId?:string|null;all?:boolean;title?:string;description?:string;createDefaults?:Rec|Record<string,unknown>;rowActions?:(r:Rec,refresh:()=>void)=>ReactNode;onChanged?:()=>void;filter?:(r:Rec)=>boolean;hideCreate?:boolean;projectId?:string|null;focus?:RegisterFocus}){
  const def=REGISTERS[register] as RegisterDef;
  const session=useSession(),people=usePeople();
  const url=`/api/registers/${register}${parentId?`?parentId=${encodeURIComponent(parentId)}`:all?'?all=1':''}`;
@@ -66,14 +68,20 @@ export function RegisterView({register,parentId=null,all=false,title,description
  const relations=useMemo(()=>[...new Set(def.fields.filter(f=>f.type==='relation').map(f=>f.relation!))],[def]);
  const [relationOptions,setRelationOptions]=useState<Record<string,Rec[]>>({});
  useEffect(()=>{if(!open||!relations.length)return;let live=true;void Promise.all(relations.map(async r=>{const target=REGISTERS[r as RegisterKey] as RegisterDef;const q=target.scope==='org'?'':`?parentId=${encodeURIComponent(parentId||'')}`;try{return [r,(await api<{records:Rec[]}>(`/api/registers/${r}${q}`)).records] as const;}catch{return [r,[]] as const;}})).then(entries=>{if(live)setRelationOptions(Object.fromEntries(entries));});return()=>{live=false;};},[open,relations,parentId]);
- const records=(data?.records||[]).filter(r=>!filter||filter(r));
+ const scoped=(data?.records||[]).filter(r=>!filter||filter(r));
+ const focused=focus?scoped.filter(focus.test):[];
+ const [view,setView]=useState<'focus'|'all'|null>(null);
+ // Default to the attention list when something needs attention; the choice sticks once made.
+ const showing=focus?(view??(focused.length?'focus':'all')):'all';
+ const records=showing==='focus'?focused:scoped;
  const listFields=def.fields.filter(f=>f.list&&(!f.commercial||session.can('commercial.view')));
  const canCreate=!hideCreate&&session.can(def.create||def.edit)&&session.writable(def.module)&&(def.scope==='org'||def.scope==='optional-project'||Boolean(parentId));
  const changed=()=>{refresh();onChanged?.();};
  const docCtx=(rec:Rec|null)=>({contextType:CONTEXT[register]||'organisation',contextId:rec?.id??null,projectId:projectId??(def.scope==='project'||def.scope==='optional-project'?parentId:null)});
  return <Section title={title||def.label} description={description} actions={canCreate&&<Btn onClick={()=>setOpen('new')}><Plus aria-hidden className="size-4"/>{def.createLabel}</Btn>}>
   <ErrorState error={error} onRetry={refresh}/>
-  {loading&&!data?<Loading/>:!records.length&&!error?<EmptyState title={def.empty} action={canCreate?<Btn variant="secondary" onClick={()=>setOpen('new')}><Plus aria-hidden className="size-4"/>{def.createLabel}</Btn>:undefined}/>:<>
+  {focus&&data&&scoped.length>0&&<div role="group" aria-label={`${def.label} view`} className="mb-3 flex flex-wrap gap-2">{([['focus',`${focus.label} (${focused.length})`],['all',`All (${scoped.length})`]] as const).map(([k,label])=><button key={k} aria-pressed={showing===k} onClick={()=>setView(k)} className={`min-h-9 rounded-full border px-3 text-sm ${showing===k?'border-[#172633] bg-[#172633] text-white':'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{label}</button>)}</div>}
+  {showing==='focus'&&!focused.length&&data?<EmptyState title={focus!.empty||`Nothing needs attention. ${scoped.length} recorded.`}/>:loading&&!data?<Loading/>:!records.length&&!error?<EmptyState title={def.empty} action={canCreate?<Btn variant="secondary" onClick={()=>setOpen('new')}><Plus aria-hidden className="size-4"/>{def.createLabel}</Btn>:undefined}/>:<>
    <div className="hidden overflow-x-auto md:block"><table className="w-full text-left text-sm"><thead className="text-xs text-slate-500"><tr>{all&&<th className="py-2 pr-3 font-medium">Project</th>}{listFields.map(f=><th key={f.key} className="py-2 pr-3 font-medium">{f.label}</th>)}{def.machine&&<th className="py-2 pr-3 font-medium">Status</th>}{rowActions&&<th/>}</tr></thead>
     <tbody className="divide-y">{records.map(r=><tr key={r.id} tabIndex={0} className="cursor-pointer hover:bg-slate-50 focus:bg-slate-50 focus:outline-none" onClick={()=>setOpen(r)} onKeyDown={e=>{if(e.key==='Enter')setOpen(r);}}>{all&&<td className="py-2.5 pr-3 text-slate-600">{String(r.project_name||'Company')}</td>}{listFields.map(f=><td key={f.key} className="max-w-xs py-2.5 pr-3 align-top">{display(f,r[f.key],people)}</td>)}{def.machine&&<td className="py-2.5 pr-3"><StatusBadge machine={def.machine} state={String(r[def.stateColumn||'status'])}/></td>}{rowActions&&<td className="py-2.5 text-right" onClick={e=>e.stopPropagation()}>{rowActions(r,changed)}</td>}</tr>)}</tbody></table></div>
    <ul className="grid gap-2 md:hidden">{records.map(r=><li key={r.id}><button className="w-full rounded-lg border bg-white p-3 text-left" onClick={()=>setOpen(r)}><div className="flex items-start justify-between gap-2"><span className="font-medium">{String(r[def.titleField]||'Untitled').slice(0,120)}</span>{def.machine&&<StatusBadge machine={def.machine} state={String(r[def.stateColumn||'status'])}/>}</div><div className="mt-1 grid gap-0.5 text-xs text-slate-500">{all&&<span>{String(r.project_name||'Company')}</span>}{listFields.filter(f=>f.key!==def.titleField).slice(0,3).map(f=><span key={f.key}>{f.label}: {display(f,r[f.key],people)}</span>)}</div></button>{rowActions&&<div className="mt-1">{rowActions(r,changed)}</div>}</li>)}</ul>

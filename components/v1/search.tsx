@@ -1,7 +1,7 @@
 'use client';
 import {useEffect,useState} from 'react';
 import {ArrowRight,Search as SearchIcon} from 'lucide-react';
-import {api,ErrorState,PageHeader,field,Pill} from './kit';
+import {api,ErrorState,PageHeader,field,Pill,humanStatus} from './kit';
 import {useNav} from './nav';
 
 type Result={id:string;name:string;type:string;status:string;detail:string;area:string;projectId:string|null};
@@ -28,6 +28,6 @@ export function SearchV1(){
   <label className="relative block"><span className="sr-only">Search</span><SearchIcon aria-hidden className="absolute left-3 top-3.5 size-4 text-slate-400"/><input id="workspace-search" autoFocus className={`${field} pl-9`} placeholder="Type at least two characters" value={q} onChange={e=>setQ(e.target.value)}/></label>
   <ErrorState error={error}/>
   {busy&&<p role="status" className="text-sm text-slate-500">Searching…</p>}
-  {shown&&(shown.length?<ul className="surface divide-y">{shown.map(r=><li key={`${r.type}-${r.id}`}><button onClick={()=>open(r)} className="flex w-full items-center gap-3 p-3 text-left hover:bg-slate-50"><Pill>{r.type}</Pill><span className="min-w-0 flex-1"><span className="block truncate font-medium">{r.name}</span><span className="block truncate text-xs text-slate-500">{[r.detail,r.status].filter(Boolean).join(' · ')}</span></span><ArrowRight aria-hidden className="size-4 text-slate-400"/></button></li>)}</ul>:<p className="text-sm text-slate-500">No matching records you can access.</p>)}
+  {shown&&(shown.length?<ul className="surface divide-y">{shown.map(r=><li key={`${r.type}-${r.id}`}><button onClick={()=>open(r)} className="flex w-full items-center gap-3 p-3 text-left hover:bg-slate-50"><Pill>{r.type}</Pill><span className="min-w-0 flex-1"><span className="block truncate font-medium">{r.name}</span><span className="block truncate text-xs text-slate-500">{[r.detail,humanStatus(r.status)].filter(Boolean).join(' · ')}</span></span><ArrowRight aria-hidden className="size-4 text-slate-400"/></button></li>)}</ul>:<p className="text-sm text-slate-500">No matching records you can access.</p>)}
  </div>;
 }

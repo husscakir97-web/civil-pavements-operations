@@ -25,14 +25,16 @@ export function ProjectsView(){
 function ProjectRegister(){
  const {data,error,loading,refresh}=useApi<{projects:Project[]}>('/api/projects');
  const {navigate}=useNav();const {can}=useSession();const [creating,setCreating]=useState(false);
- const [show,setShow]=useState<'active'|'closed'>('active');
- const all=data?.projects||[],closedCount=all.filter(p=>p.stage==='closed').length;
- const list=all.filter(p=>show==='closed'?p.stage==='closed':p.stage!=='closed');
+ const [show,setShow]=useState<'active'|'setup'|'ready'|'delivery'|'closeout'|'closed'>('active');
+ const all=data?.projects||[];
+ const matches=(p:Project,k:typeof show)=>k==='closed'?p.stage==='closed':k==='setup'?p.stage==='setup':k==='ready'?p.stage==='ready':k==='delivery'?p.stage==='active':k==='closeout'?['practical_completion','closeout'].includes(p.stage):p.stage!=='closed';
+ const list=all.filter(p=>matches(p,show));
+ const filters=([['active','All active'],['setup','Setup'],['ready','Ready'],['delivery','Delivery'],['closeout','Closeout'],['closed','Closed']] as const).map(([key,label])=>({key,label,count:all.filter(p=>matches(p,key)).length}));
  return <div className="grid gap-4">
   <PageHeader title="Projects" subtitle="Every awarded or manually created project, with readiness and the next action." actions={can('project.edit')&&<Btn variant="secondary" onClick={()=>setCreating(true)}><Plus aria-hidden className="size-4"/>New project without tender</Btn>}/>
   <ErrorState error={error} onRetry={refresh}/>
-  {all.length>0&&<div role="group" aria-label="Project view" className="flex flex-wrap gap-2">{([['active',`Active (${all.length-closedCount})`],['closed',`Closed (${closedCount})`]] as const).map(([k,label])=><button key={k} aria-pressed={show===k} onClick={()=>setShow(k)} className={`min-h-9 rounded-full border px-3 text-sm ${show===k?'border-[#172633] bg-[#172633] text-white':'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{label}</button>)}</div>}
-  {loading&&!data?<Loading/>:!all.length?<EmptyState title="No projects yet." detail="Projects are created automatically when a tender or estimate is awarded, preserving the approved baseline."/>:!list.length?<EmptyState title={show==='closed'?'No projects have been closed yet.':'No active projects.'}/>:
+  {all.length>0&&<div role="group" aria-label="Project workflow stage" className="flex flex-wrap gap-2">{filters.map(x=><button key={x.key} aria-pressed={show===x.key} onClick={()=>setShow(x.key)} className={`min-h-9 rounded-full border px-3 text-sm ${show===x.key?'border-[#172633] bg-[#172633] text-white':'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{x.label} ({x.count})</button>)}</div>}
+  {loading&&!data?<Loading/>:!all.length?<EmptyState title="No projects yet." detail="Projects are created automatically when a tender or estimate is awarded, preserving the approved baseline."/>:!list.length?<EmptyState title={`No projects are in ${filters.find(x=>x.key===show)?.label.toLowerCase()}.`}/>:
    <section className="surface overflow-hidden"><ul className="divide-y">{list.map(p=><li key={p.id}><button onClick={()=>navigate('Projects',undefined,p.id)} className="grid w-full gap-2 p-4 text-left hover:bg-slate-50 md:grid-cols-[minmax(0,2fr)_1fr_1fr_1fr] md:items-center">
     <span className="min-w-0"><span className="block font-medium">{p.name}</span><span className="block text-xs text-slate-500">{[p.projectNumber,p.clientName,p.projectManagerName].filter(Boolean).join(' · ')||'Client not recorded'}</span></span>
     <span><StatusBadge machine="project" state={p.stage}/></span>

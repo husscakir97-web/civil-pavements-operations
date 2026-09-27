@@ -12,7 +12,7 @@ import { useSession, Tabs } from "@/components/v1/kit";
 import { NavContext, parseRoute, routeHash, useNav, type Route } from "@/components/v1/nav";
 import { OfflineProvider } from "@/components/v1/offline";
 import { ADMIN_SUBS, FIELD_SHELL_ROLES } from "@/lib/v1/navigation";
-import { resolveEngineRoute, type EngineKey } from "@/lib/v1/engines";
+import { resolveEngineRoute } from "@/lib/v1/engines";
 import type { Capability } from "@/lib/platform/permissions";
 
 const loading = () => <div role="status" className="workspace-placeholder"><span className="sr-only">Loading workspace…</span><div className="h-7 w-52 rounded bg-slate-200/70"/><div className="mt-3 h-4 w-72 max-w-full rounded bg-slate-200/50"/><div className="mt-8 grid gap-4 sm:grid-cols-3">{[0,1,2].map(i=><div key={i} className="h-28 rounded-xl border bg-white"/>)}</div><div className="mt-5 h-64 rounded-xl border bg-white"/></div>;

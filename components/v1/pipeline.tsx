@@ -91,14 +91,19 @@ type TabKey=TenderStepKey;
 const STEP_ICON:Record<StepState,string>={done:'border-emerald-300 bg-emerald-50 text-emerald-800',current:'border-orange-400 bg-orange-50 text-orange-900',attention:'border-amber-400 bg-amber-50 text-amber-900',todo:'border-slate-200 bg-white text-slate-600',closed:'border-slate-200 bg-slate-50 text-slate-400'};
 /** One process, not nine tabs: each step shows done / current / needs attention. */
 function TenderStepper({t,active,onChange}:{t:Tender;active:TabKey;onChange:(k:TabKey)=>void}){
- const steps=tenderSteps(t);
- return <nav aria-label="Tender steps" className="relative mb-5 overflow-x-auto pb-1 pt-0.5 pl-0.5"><ol className="flex min-w-max items-center gap-1.5">{steps.map((st,i)=><li key={st.key} className="flex items-center gap-1">
-  <button aria-current={active===st.key?'step':undefined} onClick={()=>onChange(st.key)} className={`relative flex min-h-10 items-center gap-1.5 rounded-full border px-2.5 text-sm transition-colors ${STEP_ICON[st.state]} ${active===st.key?'outline outline-2 outline-offset-1 outline-[#172633]':''}`}>
-   <span aria-hidden className="text-xs">{st.state==='done'?'✓':st.state==='attention'?'!':st.state==='current'?'●':i+1}</span>
-   <span className={active===st.key?'font-semibold':''}>{st.label}</span>
-   {st.count?<span className="rounded-full bg-white/80 px-1.5 text-xs font-semibold">{st.count}</span>:null}
-   <span className="sr-only">{st.state==='done'?' (complete)':st.state==='attention'?' (needs attention)':st.state==='current'?' (next)':''}</span>
-  </button></li>)}</ol></nav>;
+ const steps=tenderSteps(t),current=steps.find(s=>s.key===active);
+ const optionLabel=(st:(typeof steps)[number])=>`${st.label}${st.state==='done'?' · Complete':st.state==='attention'?' · Needs attention':st.state==='current'?' · Next':''}${st.count?` · ${st.count}`:''}`;
+ return <>
+  {/* Phones use the same compact current-section pattern as Projects: no nine-step swipe hunt. */}
+  <label className="mb-5 grid gap-1 text-sm sm:hidden"><span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tender step{current?` · ${current.label}`:''}</span><select aria-label="Tender step" className={`${field} font-semibold`} value={active} onChange={e=>onChange(e.target.value as TabKey)}>{steps.map(st=><option key={st.key} value={st.key}>{optionLabel(st)}</option>)}</select></label>
+  <nav aria-label="Tender steps" className="relative mb-5 hidden overflow-x-auto pb-1 pt-0.5 pl-0.5 sm:block"><ol className="flex min-w-max items-center gap-1.5">{steps.map((st,i)=><li key={st.key} className="flex items-center gap-1">
+   <button aria-current={active===st.key?'step':undefined} onClick={()=>onChange(st.key)} className={`relative flex min-h-10 items-center gap-1.5 rounded-full border px-2.5 text-sm transition-colors ${STEP_ICON[st.state]} ${active===st.key?'outline outline-2 outline-offset-1 outline-[#172633]':''}`}>
+    <span aria-hidden className="text-xs">{st.state==='done'?'✓':st.state==='attention'?'!':st.state==='current'?'●':i+1}</span>
+    <span className={active===st.key?'font-semibold':''}>{st.label}</span>
+    {st.count?<span className="rounded-full bg-white/80 px-1.5 text-xs font-semibold">{st.count}</span>:null}
+    <span className="sr-only">{st.state==='done'?' (complete)':st.state==='attention'?' (needs attention)':st.state==='current'?' (next)':''}</span>
+   </button></li>)}</ol></nav>
+ </>;
 }
 
 function TenderWorkspace({id,tab,onBack}:{id:string;tab?:string;onBack:()=>void}){

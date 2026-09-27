@@ -77,6 +77,22 @@ assert.deepEqual(navDef.FIELD_SHELL_ROLES,['field','supervisor']);
  assert.equal(by({...base,stage:'draft',stats:{...base.stats,bidDecision:'pending',mandatoryOpen:2}}).requirements,'todo','requirements are not flagged before pricing');
  assert(Object.values(by({...base,stage:'lost'})).every(s=>['done','closed'].includes(s)),'a lost tender has no current or attention steps');
  assert.deepEqual(tf.TENDER_PHASES.flatMap(p=>p.stages).sort(),['approval','awarded','clarification','draft','lost','pricing','reviewing','submitted'],'every tender stage belongs to exactly one phase');}
+// Project setup presentation: readiness categories become a checklist whose buttons lead to where each gap is fixed.
+{const ps=load('lib/v1/project-setup.ts');
+ const item=(category,title,ok,source='checklist',mandatory=true)=>({category,title,ok,source,mandatory});
+ const cats=[{category:'contract',items:[item('contract','Contract executed',true),item('contract','Approved baseline recorded',false,'derived')]},{category:'SWMS',items:[item('SWMS','SWMS approved for planned high-risk work',false,'derived')]},{category:'permits',items:[item('permits','Road occupancy permit',false)]},{category:'plant',items:[item('plant','Plant inspected',true)]}];
+ const areas=ps.setupAreas(cats,{complete:false,missing:['Contract number']});
+ assert.deepEqual(areas.map(a=>[a.label,a.status]),[['Contract details','attention'],['Contract','attention'],['SWMS','not_started'],['Permits & approvals','not_started'],['Plant','complete']]);
+ assert.deepEqual(areas.find(a=>a.key==='contract').target,{kind:'anchor',anchor:'setup-baseline'},'a missing baseline opens the baseline section');
+ assert.deepEqual(areas.find(a=>a.key==='SWMS').target,{kind:'tab',tab:'quality'},'SWMS gaps open Quality & HSEQ');
+ assert.deepEqual(areas.find(a=>a.key==='permits').target,{kind:'checklist',category:'permits'},'checklist gaps open the checklist filtered to their category');
+ assert.equal(ps.fixFor(item('project plans','Project IMS pack approved',false,'derived')).target.area,'IMS & HSEQ');
+ assert.equal(ps.fixFor(item('competencies','Scheduled workers hold current competencies',false,'derived')).target.sub,'Resources');
+ assert.deepEqual(ps.nextActionTarget('setup','Approve SWMS before mobilisation'),{kind:'tab',tab:'quality'});
+ assert.deepEqual(ps.nextActionTarget('setup','Complete 3 readiness requirements'),{kind:'tab',tab:'setup'});
+ assert.deepEqual(ps.nextActionTarget('active','Record the client decision on 1 submitted variation'),{kind:'tab',tab:'commercial'});
+ assert.deepEqual(ps.nextActionTarget('closeout','Final claim'),{kind:'tab',tab:'closeout'});
+ assert.equal(ps.nextActionTarget('closed',null),null);}
 for(const r of navDef.FIELD_SHELL_ROLES)assert.equal(perm.can(r,'commercial.view'),false,r+' shell never carries money');
 assert.equal(perm.can('read_only','project.edit'),false);assert(perm.capabilitiesFor('read_only').every(c=>c.endsWith('.view')),'read-only holds view capabilities only');
 

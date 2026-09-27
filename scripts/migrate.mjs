@@ -42,5 +42,8 @@ try{
   }
   await db.execute('INSERT INTO app_migrations(name,sha256) VALUES (?,?)',[name,checksum]);console.log('Applied',name);
  }
+ // Typed-column backfills run after the schema is ready, under the same lock.
+ const {backfillResources}=await import('./backfill-resources.mjs');
+ await backfillResources(db);
  console.log('Database migrations ready');
 }finally{await db.execute('SELECT RELEASE_LOCK(?)',[lockName]).catch(()=>{});await db.end();}

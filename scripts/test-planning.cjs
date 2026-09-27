@@ -10,12 +10,20 @@ for(const f of fs.readdirSync('drizzle').filter(f=>f.endsWith('.sql')).sort())sq
 require('./test-services.cjs').prepare(sql);const db = {prepare(query){ let values=[]; const stmt={bind(...v){values=v;return stmt;},async first(){return sql.prepare(query).get(...values)||null;},async all(){return {results:sql.prepare(query).all(...values)};},async run(){const r=sql.prepare(query).run(...values);return {success:true,meta:{changes:Number(r.changes)}};}};return stmt;},async batch(statements){sql.exec('BEGIN');try{const result=[];for(const s of statements) result.push(await s.run());sql.exec('COMMIT');return result;}catch(e){sql.exec('ROLLBACK');throw e;}}};
 const cache={};
 function load(file){file=path.resolve(file);const external=require('./test-services.cjs').mock(file,db,sql,typeof bucket==='undefined'?undefined:bucket);if(external)return external;if(cache[file])return cache[file].exports;const loadedModule={exports:{}};cache[file]=loadedModule;const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;new Function('require','module','exports',code)(name=>name.startsWith('@/')?load(name.slice(2)+'.ts'):name.startsWith('.')?load(path.resolve(path.dirname(file),name)+'.ts'):require(name),loadedModule,loadedModule.exports);return loadedModule.exports;}
-const estimate=load('app/api/estimates/route.ts'), award=load('app/api/estimates/award/route.ts'), delivery=load('app/api/delivery/route.ts'), calc=load('lib/estimate-calculations.ts'), planning=load('lib/planning.ts');
+const estimate=load('app/api/estimates/route.ts'), award=load('app/api/estimates/award/route.ts'), approval=load('app/api/estimates/approval/route.ts'), delivery=load('app/api/delivery/route.ts'), calc=load('lib/estimate-calculations.ts'), planning=load('lib/planning.ts');
 const request=body=>new Request('https://test.invalid/api',{method:'POST',headers:{'Content-Type':'application/json','x-test-user-id':'test-owner','x-test-user-email':'admin@example.invalid'},body:JSON.stringify(body)});
 (async()=>{
  const data={...calc.makeDefaultEstimate(),clientName:'Test client',projectName:'Test job',site:'Test site'};
  let response=await estimate.POST(request({data,status:'Draft'}));assert.equal(response.status,201);const id=(await response.json()).estimate.id;
- response=await award.POST(request({estimateId:id}));assert.equal(response.status,201);const jobId=(await response.json()).job.id;
+ // V1: award requires an approved, immutable estimate revision.
+ response=await award.POST(request({estimateId:id}));assert.equal(response.status,422,'Draft estimates cannot be awarded');
+ response=await approval.POST(request({estimateId:id,action:'submit'}));assert.equal(response.status,200,await response.clone().text());
+ response=await estimate.PUT(new Request('https://test.invalid/api',{method:'PUT',headers:{'Content-Type':'application/json','x-test-user-id':'test-owner','x-test-user-email':'admin@example.invalid'},body:JSON.stringify({id,data:{...data,areaM2:2000}})}));assert.equal(response.status,409,'Estimates in review are locked');
+ response=await approval.POST(request({estimateId:id,action:'approve'}));assert.equal(response.status,200,await response.clone().text());
+ const approvedSell=(await (await approval.GET(new Request('https://test.invalid/api?estimateId='+id,{headers:{'x-test-user-id':'test-owner','x-test-user-email':'admin@example.invalid'}}))).json()).revisions[0].sellPrice;
+ response=await estimate.PUT(new Request('https://test.invalid/api',{method:'PUT',headers:{'Content-Type':'application/json','x-test-user-id':'test-owner','x-test-user-email':'admin@example.invalid'},body:JSON.stringify({id,data:{...data,areaM2:3000}})}));assert.equal(response.status,200,'Editing after approval starts a new draft');
+ response=await award.POST(request({estimateId:id}));assert.equal(response.status,201,await response.clone().text());const awarded=await response.json();const jobId=awarded.job.id;
+ assert.equal(awarded.job.approvedBudget.sellRate,approvedSell,'Award uses the frozen approved revision, not the later working draft');
  let payload=await (await delivery.GET(new Request('https://test.invalid',{headers:{'x-test-user-id':'test-owner','x-test-user-email':'admin@example.invalid'}}))).json();const job=payload.jobs.find(j=>j.id===jobId);const baseline=structuredClone(job.metadata.approvedBudget);
  response=await delivery.POST(request({kind:'jobs',record:{...job,metadata:{...job.metadata,approvedBudget:{totalCost:1},po:'PO1',siteContact:'Contact',permit:'Permit',tmp:'TMP',tgs:'TGS',occupancyStart:'19:00',occupancyFinish:'06:00'}}}));assert.equal(response.status,200);assert.deepEqual((await response.json()).record.metadata.approvedBudget,baseline);
  const worker={id:'worker-test',name:'Test worker',status:'Active',metadata:{competencyExpiry:'2027-12-31'}};
@@ -38,5 +46,34 @@ const request=body=>new Request('https://test.invalid/api',{method:'POST',header
  response=await delivery.POST(request({kind:'shifts',record:{...shift,status:'Ready',metadata:{...shift.metadata,checks:Object.fromEntries(planning.CHECKS.map(c=>[c,true]))}}}));assert.equal(response.status,200);
  response=await award.POST(request({estimateId:id}));assert.equal((await response.json()).alreadyAwarded,true);
  assert.equal((await (await delivery.GET(new Request('https://test.invalid',{headers:{'x-test-user-id':'test-owner','x-test-user-email':'admin@example.invalid'}}))).json()).jobs.length,1);
- console.log('PASS: estimate → award → job → shift → assigned resource → reload; protected baseline; overnight overlap; expired competency; occupancy; readiness gate; repeat award.');
+ // 0004: deterministic conflict engine + typed dual-write.
+ const typed=sql.prepare('SELECT project_id,shift_date,start_time,finish_time,legacy_synced_at FROM shifts WHERE id=?').get(shift.id);
+ assert.deepEqual([typed.project_id,typed.shift_date,typed.start_time,typed.finish_time],[jobId,'2026-10-01','20:00','04:00']);assert(typed.legacy_synced_at);
+ assert.deepEqual(sql.prepare('SELECT resource_type,resource_id,source FROM shift_assignments WHERE shift_id=?').all(shift.id).map(r=>({...r})),[{resource_type:'worker',resource_id:worker.id,source:'planner'}]);
+ const base={name:'Clash',metadata:{jobId,date:'2026-10-02',start:'02:00',finish:'06:00',assignments:[{resourceId:worker.id,name:worker.name,category:'workers',role:'Worker',hours:4,rate:60}],checks:{}}};
+ response=await delivery.POST(request({kind:'shifts',record:{...base,status:'Planned'}}));assert.equal(response.status,409,'Overnight double-booking blocks a planned shift');
+ let out=await response.json();assert(out.conflicts.some(c=>c.code==='WORKER_DOUBLE_BOOKED'&&c.severity==='block'),JSON.stringify(out));
+ response=await delivery.POST(request({kind:'shifts',record:{...base,status:'Draft'}}));assert.equal(response.status,201,'A draft may be saved with the conflict shown');
+ out=await response.json();assert(out.conflicts.some(c=>c.code==='WORKER_DOUBLE_BOOKED'));const draftId=out.record.id;
+ response=await delivery.POST(request({kind:'shifts',record:{...base,id:'',name:'Non-overlap',status:'Planned',metadata:{...base.metadata,date:'2026-10-05',start:'07:00',finish:'15:00'}}}));assert.equal(response.status,201,'The draft booking is tentative and does not block other shifts');
+ response=await delivery.POST(request({kind:'shifts',record:{...base,status:'Planned',metadata:{...base.metadata,date:'2026-10-09',requiredCompetencies:'Paver ticket'}}}));assert.equal(response.status,409);
+ assert((await response.json()).conflicts.some(c=>c.code==='COMPETENCY_MISSING'));
+ sql.prepare('INSERT INTO worker_competencies (id,organisation_id,worker_id,competency_type,expiry_date,status,source,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').run('comp-1','roadworx-sydney',worker.id,'Paver ticket','2026-10-01','current','manual',1,now,now);
+ sql.prepare('UPDATE workers SET legacy_synced_at=?,active=1 WHERE id=?').run(now,worker.id);
+ response=await delivery.POST(request({kind:'shifts',record:{...base,status:'Planned',metadata:{...base.metadata,date:'2026-10-09',requiredCompetencies:'Paver ticket'}}}));assert.equal(response.status,409);
+ assert((await response.json()).conflicts.some(c=>c.code==='COMPETENCY_EXPIRED'),'A required competency expired before the shift date blocks');
+ sql.prepare("UPDATE worker_competencies SET expiry_date='2027-06-30' WHERE id='comp-1'").run();
+ response=await delivery.POST(request({kind:'shifts',record:{...base,status:'Planned',metadata:{...base.metadata,date:'2026-10-09',requiredCompetencies:'Paver ticket'}}}));assert.equal(response.status,201,'Current required competency passes');
+ sql.prepare('INSERT INTO plant (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)').run('plant-old','roadworx-sydney','Old roller','Available',JSON.stringify({complianceExpiry:'2026-01-01'}),now);
+ const plantShift={...base,status:'Planned',metadata:{...base.metadata,date:'2026-10-12',assignments:[{resourceId:'plant-old',name:'Old roller',category:'plant',hours:8,rate:100}]}};
+ response=await delivery.POST(request({kind:'shifts',record:plantShift}));assert.equal(response.status,409);
+ assert((await response.json()).conflicts.some(c=>c.code==='PLANT_COMPLIANCE_EXPIRED'));
+ sql.prepare("UPDATE workers SET status='Inactive' WHERE id=?").run(worker.id);
+ response=await delivery.POST(request({kind:'shifts',record:{...base,status:'Planned',metadata:{...base.metadata,date:'2026-10-20'}}}));assert.equal(response.status,409);
+ assert((await response.json()).conflicts.some(c=>c.code==='RESOURCE_INACTIVE'));
+ response=await delivery.POST(request({kind:'shifts',record:{...base,id:draftId,status:'Cancelled'}}));assert.equal(response.status,200,'Cancelled shifts are never blocked');
+ sql.prepare("UPDATE jobs SET stage='closed' WHERE id=?").run(jobId);
+ response=await delivery.POST(request({kind:'jobs',record:{...job,metadata:{...job.metadata,po:'PO2'}}}));assert.equal(response.status,409,'Closed projects refuse legacy job edits');
+ sql.prepare("UPDATE jobs SET stage=NULL WHERE id=?").run(jobId);
+ console.log('PASS: estimate → award → job → shift → assigned resource → reload; protected baseline; overnight overlap; expired competency; occupancy; readiness gate; repeat award; award blocked without approval; review lock; approved revision frozen against later edits; conflict engine (double-booking, draft tentative, missing/expired required competency, plant compliance, inactive); typed dual-write; closed-project guard.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

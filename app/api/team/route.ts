@@ -3,6 +3,8 @@ import type {RowDataPacket} from 'mysql2';
 import {withActor} from '@/lib/platform/route';
 import {actorContext} from '@/lib/platform/context';
 import {getPool} from '@/lib/platform/database';
+import {audit} from '@/lib/platform/audit';
+import {ROLES,roleLabel} from '@/lib/platform/permissions';
 
 export const GET=withActor(async()=>{
  const actor=actorContext.getStore()!;
@@ -11,7 +13,7 @@ export const GET=withActor(async()=>{
  return Response.json({members:members.map(m=>({...m,active:Boolean(m.active)})),events:events.map(e=>({...e,metadata:JSON.parse(e.metadata)}))},{headers:{'Cache-Control':'private, no-store'}});
 },'admin');
 
-const state=z.object({role:z.enum(['admin','office','field']),active:z.boolean()}).strict();
+const state=z.object({role:z.enum(ROLES),active:z.boolean()}).strict();
 const update=z.object({userId:z.string().min(1).max(191),expected:state,next:state}).strict();
 export const PATCH=withActor(async request=>{
  const parsed=update.safeParse(await request.json());
@@ -35,6 +37,7 @@ export const PATCH=withActor(async request=>{
   if(next.role!==member.role||next.active!==Boolean(member.active))await db.execute('INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)',[
    crypto.randomUUID(),actor.organisationId,'membership.updated','recorded',JSON.stringify({actorId:actor.userId,actorEmail:actor.email,userId,email:member.email,before:{role:member.role,active:Boolean(member.active)},after:next}),new Date().toISOString()
   ]);
+  if(next.role!==member.role||next.active!==Boolean(member.active))await audit({event:next.active!==Boolean(member.active)?(next.active?'membership.reactivated':'membership.deactivated'):'membership.role_changed',entityType:'user',entityId:userId,summary:`${member.email}: ${roleLabel(member.role)}${member.active?'':' (inactive)'} → ${roleLabel(next.role)}${next.active?'':' (inactive)'}`,before:{role:member.role,active:Boolean(member.active)},after:next},db);
   await db.commit();
   return Response.json({updated:true,selfChanged:userId===actor.userId&&(next.role!=='admin'||!next.active)});
  }catch(e){await db.rollback();throw e;}finally{db.release();}

@@ -13,6 +13,13 @@ export function fieldDelivery(record:DeliveryRecord,kind:'jobs'|'shifts'):Delive
  if(kind==='shifts')metadata.assignments=(Array.isArray(record.metadata.assignments)?record.metadata.assignments:[]).map(r=>pick(r,resourceKeys));
  return {id:record.id,name:record.name,status:record.status,metadata};
 }
+// Office roles without commercial access (scheduler, supervisor, read-only) see the full
+// operational record but never rates, budgets, costs or contract values.
+const moneyKeys=new Set(['rate','hourlyRate','dayRate','cost','amount','value','price','sellRate','contractValue','approvedBudget','estimateSnapshot','materialCost','otherCost','budget','margin','grossMargin','directCost','totalCost','quoteValue','estimatedValue']);
+export function withoutMoney(record:DeliveryRecord):DeliveryRecord{
+ const clean=(v:unknown):unknown=>Array.isArray(v)?v.map(clean):v&&typeof v==='object'?Object.fromEntries(Object.entries(v as Record<string,unknown>).filter(([k])=>!moneyKeys.has(k)).map(([k,x])=>[k,clean(x)])):v;
+ return {...record,metadata:clean(record.metadata) as Record<string,unknown>};
+}
 export function fieldData(data:FieldData):FieldData{
  const out=pick(data,Object.keys(initialField({id:'',name:'',status:'',metadata:{}}))) as FieldData;
  delete (out as Partial<FieldData>).materialCost;delete (out as Partial<FieldData>).otherCost;

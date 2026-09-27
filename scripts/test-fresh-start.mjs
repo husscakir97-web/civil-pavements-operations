@@ -1,6 +1,7 @@
 // Integration test: use an EMPTY, disposable database whose name ends in _test.
 // Runs the production Next server, real Better Auth + MySQL, and local SMTP/S3 fixtures.
 import assert from 'node:assert/strict';
+import {readdir} from 'node:fs/promises';
 import {createServer as httpServer} from 'node:http';
 import {createServer as netServer} from 'node:net';
 import {spawn} from 'node:child_process';
@@ -66,7 +67,7 @@ try{
  await fresh.query("UPDATE app_migration_steps SET complete=FALSE WHERE name='0000_clear_doctor_faustus.sql' AND step IN (0,38,40)");
  await fresh.query('DROP INDEX idx_attachments_org ON attachments'); // Simulate interruption before this index DDL.
  await Promise.all([run('scripts/migrate.mjs'),run('scripts/migrate.mjs')]);
- assert.equal((await fresh.query('SELECT COUNT(*) AS n FROM app_migrations'))[0][0].n,3);
+ assert.equal((await fresh.query('SELECT COUNT(*) AS n FROM app_migrations'))[0][0].n,(await readdir('migrations/mysql')).filter(f=>f.endsWith('.sql')).length);
  assert.equal((await fresh.query('SELECT COUNT(*) AS n FROM dockets'))[0][0].n,6);
  // An interrupted ADD COLUMN is recoverable without changing existing access.
  await fresh.query("DELETE FROM app_migrations WHERE name='0002_team_access.sql'");

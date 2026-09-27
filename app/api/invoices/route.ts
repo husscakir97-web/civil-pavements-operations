@@ -10,7 +10,7 @@ async function handleGET(request:Request){try{
  const id=new URL(request.url).searchParams.get('file');
  if(id){const row=await db.prepare("SELECT metadata FROM attachments WHERE organisation_id=? AND id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.kind'))='invoice'").bind(actor.organisationId,id).first<{metadata:string}>();if(!row)return Response.json({error:'Invoice not found'},{status:404});const meta=JSON.parse(row.metadata);const object=await bucket.get(meta.key);if(!object)return Response.json({error:'Original unavailable'},{status:404});const headers=new Headers();object.writeHttpMetadata(headers);headers.set('Cache-Control','private, no-store');headers.set('X-Content-Type-Options','nosniff');return new Response(object.body,{headers});}
  const rows=await db.prepare("SELECT id,name,status,metadata,created_at FROM attachments WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.kind'))='invoice' ORDER BY created_at DESC LIMIT 200").bind(actor.organisationId).all<{id:string;name:string;status:string;metadata:string}>();
- return Response.json({invoices:rows.results.map(r=>{const {key,...metadata}=JSON.parse(r.metadata);return {...r,metadata};})});
+ return Response.json({invoices:rows.results.map(r=>{const metadata=JSON.parse(r.metadata);delete metadata.key;return {...r,metadata};})});
  }catch(e){return authError(e);}}
 async function handlePOST(request:Request){try{
  const {db,bucket}=requireBindings(),actor=await requireActor(request,db,'write'),form=await request.formData(),file=form.get('file');
@@ -38,8 +38,8 @@ async function handlePUT(request:Request){try{
  return Response.json({saved:true});
  }catch(e){if(e instanceof z.ZodError)return Response.json({error:'Invalid invoice fields'},{status:400});return authError(e);}}
 
-export const GET=withActor(handleGET,'read');
+export const GET=withActor(handleGET,'read','commercial');
 
-export const POST=withActor(handlePOST,'write');
+export const POST=withActor(handlePOST,'write','commercial');
 
-export const PUT=withActor(handlePUT,'write');
+export const PUT=withActor(handlePUT,'write','commercial');

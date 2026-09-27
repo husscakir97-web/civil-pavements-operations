@@ -65,15 +65,15 @@ const req=(method='GET',body)=>new Request('https://test.invalid/api/invoices',{
  assert.equal(sql.prepare('SELECT count(*) AS n FROM job_ims_items WHERE job_id=?').get('ims-job').n,15,'Pack initialization must be idempotent');
  const commercial=load('app/api/commercial/route.ts');
  assert.equal((await commercial.GET(new Request('https://test.invalid'))).status,401);
- assert.equal((await commercial.POST(req('POST',{action:'variation',jobId:'ims-job',description:'Extra work',submittedValue:450}))).status,201);
+ // Intended V1 rule: legacy commercial writes are retired (single money store in the typed commercial tables).
+ assert.equal((await commercial.POST(req('POST',{action:'variation',jobId:'ims-job',description:'Extra work',submittedValue:450}))).status,410);
  const docketTime=new Date().toISOString();
  sql.prepare('INSERT INTO dockets (id,docket_no,work_date,organisation_id,amount,status,links,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)').run('claim-docket','CLAIM-1','2026-09-12','roadworx-sydney',100,'approved',JSON.stringify({jobId:'ims-job'}),docketTime,docketTime);
- assert.equal((await commercial.POST(req('POST',{action:'claim',jobId:'ims-job',claimPeriod:'2026-09',docketIds:['claim-docket']}))).status,200);
- assert.notEqual((await commercial.POST(req('POST',{action:'claim',jobId:'ims-job',claimPeriod:'2026-09',docketIds:['claim-docket']}))).status,200);
- assert.equal(sql.prepare('SELECT count(*) AS n FROM claim_items WHERE docket_id=?').get('claim-docket').n,1);
- const commercialData=await (await commercial.GET(req())).json();assert.equal(commercialData.jobs.find(j=>j.id==='ims-job').current.claimed,100);
+ assert.equal((await commercial.POST(req('POST',{action:'claim',jobId:'ims-job',claimPeriod:'2026-09',docketIds:['claim-docket']}))).status,410);
+ assert.equal(sql.prepare('SELECT count(*) AS n FROM claim_items WHERE docket_id=?').get('claim-docket').n,0,'no legacy claim rows are written');
+ const commercialData=await (await commercial.GET(req())).json();assert.equal(commercialData.jobs.find(j=>j.id==='ims-job').current.unbilled,100,'approved docket stays claimable in the V1 claims workflow');
  const hub=load('app/api/job-hub/route.ts');assert.equal((await hub.GET(new Request('https://test.invalid/api/job-hub?jobId=ims-job',{headers}))).status,200);
- console.log('PASS: saved variation, claim preparation, duplicate-claim exclusion, commercial reporting, authenticated Job Hub.');
+ console.log('PASS: legacy variation/claim writes retired (410), approved docket left for V1 claims, commercial reporting, authenticated Job Hub.');
  const originalFetch=global.fetch;let providerCalls=0;
  global.fetch=async()=>{providerCalls++;throw new Error('Unexpected provider call')};
  try{for(let i=0;i<2;i++){assert.equal((await ai.POST(req('POST',{sourceId:saved.id}))).status,409);assert.equal((await legacy.POST(req('POST',{sourceId:saved.id}))).status,409)}}finally{global.fetch=originalFetch}

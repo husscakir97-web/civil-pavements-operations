@@ -1,6 +1,6 @@
 # Product direction
 
-Pavement Operations OS is a white-label subscription product for civil and pavement contractors. Roadworx is an existing customer workspace, not the platform identity. Preserve its records; never copy customer data, rates, people or branding into another customer's defaults.
+Infrastruct is a modular, white-label operating system for civil and infrastructure contractors (civil construction, road maintenance, asphalt, profiling, traffic management, linemarking, earthworks, drainage, utilities, concrete, landscaping, maintenance, plant hire and specialist subcontractors). Doctrine: simple, fast, reliable, scalable. Roadworx is an existing customer workspace, not the platform identity. Preserve its records; never copy customer data, rates, people or branding into another customer's defaults.
 
 ## Document capture
 
@@ -14,9 +14,9 @@ Pavement Operations OS is a white-label subscription product for civil and pavem
 ## White-label and subscription release gates
 
 - Workspace product name, company display name, workspace name and accent colour are configurable and company-scoped.
-- Complete the migration of legacy hardcoded organisation queries and helper functions before enabling multiple customer organisations. Keep the current fail-closed organisation guard until all affected APIs, files, reports and background tasks pass cross-company isolation tests.
-- Replace the current account-specific bootstrap with verified onboarding and membership provisioning; add customer invitations and role enforcement.
-- Add verified subscription checkout/webhooks, plan entitlements, cancellation and payment-failure handling, plus optional AI usage charging.
+- Done on the V1 branch: every query is scoped to the session organisation (two-organisation attack tests pass for reads, updates, deletes, search, reports, documents and exports); signup provisions an organisation, admin membership, beta entitlements and onboarding; invitations and capability enforcement are server-side.
+- The entitlement service (`organisation_entitlements`) is the single switch for modules. Downgrades make data read-only, never deleted.
+- Still required before charging: verified subscription checkout/webhooks, plan-to-entitlement mapping, cancellation and payment-failure handling, plus optional AI usage charging.
 - Add company logos, branded quote/invoice templates and custom-domain support when the corresponding hosting capabilities are confirmed.
 - Subscription amounts and AI retail prices require the product owner's decision. Do not present example estimates as live prices or billing as operational before integration.
 # Release testing requirement
@@ -26,3 +26,11 @@ Run document regression tests, persistence and permission tests, the production
 build, and authenticated browser workflows. Report failures and untested areas
 explicitly. Parser fixtures do not establish real image/handwriting accuracy.
 Do not publish this update until authenticated browser QA can be completed.
+
+## AI doctrine
+
+AI assists; it never approves. AI or extraction output starts as Suggested/Draft with source and confidence; a permissioned person confirms. Financial totals, numbering, ratings and state transitions are deterministic code. Every workflow works without an AI provider.
+
+## Compliance language
+
+Infrastruct helps businesses operate systems aligned with ISO 9001, ISO 45001 and ISO 14001. It does not certify; certification remains with external bodies.

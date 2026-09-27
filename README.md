@@ -1,46 +1,60 @@
-# Civil & Pavements Operations
+# Infrastruct
+
+The operating system for civil and infrastructure contractors:
+**Win work → Prepare work → Resource work → Deliver work → Control money → Learn.**
+Sold as a small core plus independently entitled modules (pipeline, estimating,
+projects, IMS & HSEQ, operations, field, dockets, commercial, reports).
 
 Next.js 16 / React 19 on Node.js 22, MySQL (Drizzle + mysql2), Better Auth sessions,
-and Cloudflare R2 through its S3-compatible API.
+and Cloudflare R2 through its S3-compatible API. Hosted on Hostinger Node.js.
 
-Start with [HOSTINGER-MIGRATION.md](HOSTINGER-MIGRATION.md) for browser-only fresh deployment,
-optional demo content, SMTP/R2 setup, environment variables, and exact hosting settings.
+Start with [HOSTINGER-MIGRATION.md](HOSTINGER-MIGRATION.md) for browser-only deployment,
+and [docs/V1-COMPLETION.md](docs/V1-COMPLETION.md) for what V1 covers and how each item is tested.
 
-Hostinger setup requires no local commands. The following commands are only for developers running a local checkout. Production `npm start` applies migrations automatically before accepting requests.
+## What V1 does
+
+| Area | Workflow |
+| --- | --- |
+| Company | Signup → organisation + admin membership → skippable onboarding (ABN checksum) → company profile → people, plant, rates, Company Library |
+| Win | Opportunity → tender (one workspace: intake, requirements, bid review, estimate, returnables, internal approval, submission, clarifications, award) |
+| Estimate | Discipline-neutral work items (or the paving engine) → review → approve (immutable revision with frozen rates) |
+| Prepare | Award creates the project from the approved revision: immutable baseline, cost codes, readiness requirements, IMS pack, lineage → setup, risk register, SWMS, ITPs → calculated readiness |
+| Deliver | Schedule (clash/competency checks) → field Today → SWMS acknowledgement → shift record → price-free docket → office approval |
+| Money | Approved docket → actual cost (idempotent) → variations → progress claims → certification → invoice (GST) → payment → forecast |
+| Learn | Estimate vs actual by cost category, labour hours, quantity and margin |
+
+Every business route is guarded on the server: the verified session resolves membership
+from MySQL, every query is scoped to that organisation, capabilities
+(`lib/platform/permissions.ts`) decide actions, and the entitlement service decides
+which modules exist. Field users receive allowlisted projections without rates, margins
+or client pricing. Controlled changes are written to `audit_log`.
+
+## Local development
+
+Hostinger setup requires no local commands. For a local checkout:
 
 ```sh
 npm ci
+cp .env.example .env   # supply MySQL, R2 and auth values
 npm run db:migrate
 npm run dev
 ```
 
-Copy `.env.example` to `.env` and supply credentials locally first. Next.js loads
-`.env` automatically; administrative scripts use Node's `--env-file-if-exists`.
-Never commit `.env` or `exports/`.
+Quality gates (all run in CI on Node 22 with MySQL 8):
 
 ```sh
 npm run lint
 npm run typecheck
-npm test
+npm test            # legacy SQLite suites + V1 logic suite
 npm run build
-npm start
+npm run test:fresh  # fresh automatic startup (needs CREATE/DROP DATABASE)
+npm run db:migrate
+npm run test:mysql  # production HTTP integration on a *_test database
+npm run test:v1     # V1 business journey, scenarios A–G (after build)
 ```
 
-The eight existing business suites use isolated SQLite fixtures and external
-service doubles. `npm run test:fresh` checks automatic startup on new disposable databases (the test user needs CREATE/DROP DATABASE privileges). `npm run test:mysql` adds production HTTP tests against an empty
-MySQL/MariaDB database whose name ends in `_test`; run `npm run db:migrate` first.
-It uses real Better Auth, MySQL sessions and SQL, plus local SMTP/S3 fixtures. CI
-runs both suites and a production build on Node 22 with MySQL 8.
+`migrations/mysql/` is applied automatically (locked, checksummed) by `npm start` and
+before builds that have database variables. `drizzle/` is the archived D1 history used
+only by legacy tests and the export tool. Run `npm run db:generate` after schema changes.
 
-`drizzle/` is the unmodified historical D1 migration archive used by export tests.
-Only `migrations/mysql/` is applied to the new database. `npm run db:generate`
-generates MySQL migrations. Business tables retain their IDs and JSON snapshots,
-including historical rates, estimate revisions and field/preparation histories.
-
-Every business HTTP handler has an explicit `withActor` guard. The verified
-session resolves membership from MySQL and supplies organisation context through
-Node AsyncLocalStorage. No client header selects a user, role or organisation.
-Admins administer users/rates/branding; office users operate and approve business
-work; field users read and capture field evidence, without office/admin writes.
-Invitations are emailed, hashed, expiring and single-use. Identity/session tables
-are global; business and invitation data are organisation-scoped.
+Never commit `.env` or `exports/`.

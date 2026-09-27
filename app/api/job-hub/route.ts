@@ -20,4 +20,4 @@ async function handleGET(request:Request){try{
  return Response.json({jobs:jobs.results,job:{...job,metadata:meta},shifts:shifts.results.map(s=>({...s,metadata:safeJson(s.metadata,{})})),dockets:dockets.results,variations:variations.results,claims:claims.results,documents:docs.results,activity:activity.results,blockers});
 }catch(e){return authError(e);}}
 
-export const GET=withActor(handleGET,'read');
+export const GET=withActor(handleGET,'read','projects');

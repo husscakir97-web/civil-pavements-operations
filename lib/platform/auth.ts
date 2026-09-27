@@ -9,7 +9,7 @@ let auth:ReturnType<typeof createAuth>|undefined;
 function createAuth(){
  if(!process.env.BETTER_AUTH_SECRET||process.env.BETTER_AUTH_SECRET.length<32)throw new Error('BETTER_AUTH_SECRET must contain at least 32 random characters');
  if(!process.env.BETTER_AUTH_URL)throw new Error('Missing BETTER_AUTH_URL');
- return betterAuth({appName:'Civil & Pavements Operations',baseURL:process.env.BETTER_AUTH_URL,secret:process.env.BETTER_AUTH_SECRET,
+ return betterAuth({appName:'Infrastruct',baseURL:process.env.BETTER_AUTH_URL,secret:process.env.BETTER_AUTH_SECRET,
  database:drizzleAdapter(drizzle(getPool(),{schema,mode:'default'}),{provider:'mysql',schema}),
  advanced:{database:{generateId:'uuid'}},
  emailAndPassword:{enabled:true,requireEmailVerification:isEmailEnabled(),minPasswordLength:12,revokeSessionsOnPasswordReset:true,sendResetPassword:async({user,url})=>sendEmail(user.email,'Reset your password',`Reset your password: ${url}`)},

@@ -3,7 +3,7 @@ import {useState} from 'react';
 import dynamic from 'next/dynamic';
 import {ArrowRight,Plus,Trophy} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
-import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,Section,PageHeader,NextAction,Progress,Stat,money,dateText} from './kit';
+import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,Section,PageHeader,NextAction,Progress,Stat,money,dateText,humanStatus} from './kit';
 import {AiAssist} from './ai';
 import {RegisterView,usePeople,DocumentInput} from './register-view';
 import {EstimateApprovalPanel} from './estimating';
@@ -83,7 +83,7 @@ function TenderForm({tender,onDone}:{tender?:Tender;onDone:(id?:string)=>void}){
   <Field label="Owner"><select className={field} value={v.ownerUserId} onChange={e=>set('ownerUserId',e.target.value)}><option value="">Unassigned</option>{people.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field><Field label="Location"><input className={field} value={v.location} onChange={e=>set('location',e.target.value)}/></Field></div>
   <Field label="Scope summary"><textarea className={`${field} min-h-24`} value={v.scopeSummary} onChange={e=>set('scopeSummary',e.target.value)}/></Field>
   <ErrorState error={error}/>
-  <div className="flex gap-2"><Btn busy={busy} type="submit">{tender?'Save details':'Create tender'}</Btn><Btn variant="secondary" type="button" onClick={()=>onDone()}>Cancel</Btn></div>
+  <div className="flex gap-2"><Btn busy={busy} type="submit">{tender?'Save':'Create tender'}</Btn><Btn variant="secondary" type="button" onClick={()=>onDone()}>Cancel</Btn></div>
  </form>;
 }
 
@@ -175,7 +175,7 @@ function BidTab({t,review,onChanged}:{t:Tender;review:Record<string,string|null>
  const [reason,setReason]=useState('');
  const editable=['draft','reviewing'].includes(t.stage)&&can('pipeline.edit');
  return <div className="grid gap-4">
-  <Section title="Bid / no-bid review" description="A structured assessment. The decision is made by an authorised person — never by AI." actions={editable&&<Btn busy={busy} onClick={()=>void run(()=>api('/api/tenders/workspace',{method:'POST',body:{action:'bid-review',id:t.id,values:{...Object.fromEntries(Object.entries(v).map(([k,x])=>[k,x||null])),recommendation:v.recommendation||null}}}),onChanged)}>Save review</Btn>}>
+  <Section title="Bid / no-bid review" description="A structured assessment. The decision is made by an authorised person — never by AI." actions={editable&&<Btn busy={busy} onClick={()=>void run(()=>api('/api/tenders/workspace',{method:'POST',body:{action:'bid-review',id:t.id,values:{...Object.fromEntries(Object.entries(v).map(([k,x])=>[k,x||null])),recommendation:v.recommendation||null}}}),onChanged)}>Save</Btn>}>
    <div className="grid gap-4 sm:grid-cols-2">{BID_FIELDS.map(([k,label])=><Field key={k} label={label}><textarea className={`${field} min-h-20`} disabled={!editable} value={v[k]} onChange={e=>setV(s=>({...s,[k]:e.target.value}))}/></Field>)}
     <Field label="Recommendation"><select className={field} disabled={!editable} value={v.recommendation} onChange={e=>setV(s=>({...s,recommendation:e.target.value}))}><option value="">Not yet recommended</option><option value="bid">Bid</option><option value="conditional">Bid with conditions</option><option value="no_bid">No bid</option></select></Field>
     <Field label="Recommendation reasoning"><textarea className={`${field} min-h-20`} disabled={!editable} value={v.recommendation_reason} onChange={e=>setV(s=>({...s,recommendation_reason:e.target.value}))}/></Field></div>
@@ -207,7 +207,7 @@ function ApprovalTab({t,onChanged}:{t:Tender;onChanged:()=>void}){
  return <Section title="Internal tender approval" description="An authorised approver confirms the price, risks and returnables before submission.">
   <Checks t={t}/>
   <div className="mt-4 grid gap-3">
-   <p className="text-sm">Status: <StatusBadge state={t.approvalStatus} label={t.approvalStatus.replace('_',' ')}/>{t.approvedAt&&<span className="ml-2 text-xs text-slate-500">Approved {dateText(t.approvedAt)}</span>}{t.approvalNotes&&<span className="ml-2 text-xs text-slate-500">“{t.approvalNotes}”</span>}</p>
+   <p className="text-sm">Status: <StatusBadge state={t.approvalStatus} label={humanStatus(t.approvalStatus)}/>{t.approvedAt&&<span className="ml-2 text-xs text-slate-500">Approved {dateText(t.approvedAt)}</span>}{t.approvalNotes&&<span className="ml-2 text-xs text-slate-500">“{t.approvalNotes}”</span>}</p>
    {t.stage==='pricing'&&can('pipeline.edit')&&<Btn className="justify-self-start" busy={busy} onClick={()=>void run(()=>api('/api/tenders/workspace',{method:'POST',body:{action:'request-approval',id:t.id}}),onChanged)}>Request internal approval</Btn>}
    {t.stage==='approval'&&t.approvalStatus==='requested'&&can('tender.approve')&&<><Field label="Approval notes"><textarea className={`${field} min-h-16`} value={notes} onChange={e=>setNotes(e.target.value)}/></Field><div className="flex flex-wrap gap-2"><Btn busy={busy} onClick={()=>void run(()=>api('/api/tenders/workspace',{method:'POST',body:{action:'approval-decision',id:t.id,approve:true,notes}}),onChanged)}>Approve for submission</Btn><Btn variant="danger" busy={busy} onClick={()=>void run(()=>api('/api/tenders/workspace',{method:'POST',body:{action:'approval-decision',id:t.id,approve:false,notes}}),onChanged)}>Return to pricing</Btn></div></>}
    <ErrorState error={error}/>
@@ -241,9 +241,9 @@ function AwardTab({t,onChanged}:{t:Tender;onChanged:()=>void}){
  return <Section title="Outcome" description="Award creates the project from the approved estimate revision, preserving scope, assumptions, exclusions and clarifications.">
   {['submitted','clarification'].includes(t.stage)?<div className="grid gap-4">
    {Boolean(t.awardBlockers?.length)&&<div role="status" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-medium">Award is blocked until:</p><ul className="list-disc pl-5">{t.awardBlockers!.map(b=><li key={b}>{b}</li>)}</ul></div>}
-   {can('tender.award')&&<Btn className="justify-self-start" busy={busy} disabled={Boolean(t.awardBlockers?.length)} onClick={()=>void run(()=>api<{projectCreated?:boolean;jobId?:string;message?:string}>('/api/tenders/workspace',{method:'POST',body:{action:'award',id:t.id}}),r=>{if(r.message)setNotice(r.message);onChanged();if(r.jobId)navigate('Projects',undefined,r.jobId);})}><Trophy aria-hidden className="size-4"/>Record award and create project</Btn>}
+   {can('tender.award')&&<Btn className="justify-self-start" busy={busy} disabled={Boolean(t.awardBlockers?.length)} onClick={()=>{if(!confirm(`Record the award of ${t.title}? A project is created from the approved estimate revision and its baseline.`))return;void run(()=>api<{projectCreated?:boolean;jobId?:string;message?:string}>('/api/tenders/workspace',{method:'POST',body:{action:'award',id:t.id}}),r=>{if(r.message)setNotice(r.message);onChanged();if(r.jobId)navigate('Projects',undefined,r.jobId);});}}><Trophy aria-hidden className="size-4"/>Record award and create project</Btn>}
    <Field label="Loss reason"><textarea className={`${field} min-h-16`} value={reason} onChange={e=>setReason(e.target.value)}/></Field>
-   <Btn variant="danger" className="justify-self-start" busy={busy} disabled={!reason.trim()} onClick={()=>void run(()=>api('/api/tenders/workspace',{method:'POST',body:{action:'lost',id:t.id,reason}}),onChanged)}>Record loss</Btn>
+   <Btn variant="danger" className="justify-self-start" busy={busy} disabled={!reason.trim()} onClick={()=>{if(confirm('Record this tender as lost? This closes the tender.'))void run(()=>api('/api/tenders/workspace',{method:'POST',body:{action:'lost',id:t.id,reason}}),onChanged);}}>Record loss</Btn>
   </div>:<div className="grid gap-3"><p className="text-sm text-slate-600">The tender must be submitted before an outcome can be recorded.</p>{can('pipeline.edit')&&<><Field label="Withdraw reason"><textarea className={`${field} min-h-16`} value={reason} onChange={e=>setReason(e.target.value)}/></Field><Btn variant="danger" className="justify-self-start" busy={busy} disabled={!reason.trim()} onClick={()=>void run(()=>api('/api/tenders/workspace',{method:'POST',body:{action:'lost',id:t.id,reason}}),onChanged)}>Withdraw tender</Btn></>}</div>}
   {notice&&<p role="status" className="mt-3 text-sm text-slate-700">{notice}</p>}
   <div className="mt-3"><ErrorState error={error}/></div>

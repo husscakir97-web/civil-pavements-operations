@@ -73,6 +73,7 @@ function ClaimsPanel({projectId,closed,onChanged,preset,onPresetUsed,onData}:{pr
  const {can,role}=useSession();
  const {data,error,loading,refresh}=useApi<{claims:Claim[];invoices:Invoice[];claimable:Line[];retention:Retention}>(`/api/commercial/claims?projectId=${projectId}`);
  const [building,setBuilding]=useState(false);const {busy,error:actionError,run}=useAction();
+ const [acting,setActing]=useState<{claimId:string;kind:'certify'|'invoice'|'payment'}|null>(null);
  const openClaim=Boolean(data?.claims.some(c=>['draft','internal_approval'].includes(c.status)));
  useEffect(()=>{if(data)onData?.({claimable:data.claimable,openClaim:data.claims.some(c=>['draft','internal_approval'].includes(c.status))});},[data,onData]);
  const showBuilder=(building||Boolean(preset))&&Boolean(data)&&!openClaim;
@@ -91,16 +92,31 @@ function ClaimsPanel({projectId,closed,onChanged,preset,onPresetUsed,onData}:{pr
     <div className="mt-2 flex flex-wrap gap-2">
      {moves.map(t=><Btn key={t.to} variant="secondary" busy={busy} onClick={()=>void post({action:'transition',claimId:c.id,to:t.to})}>{t.label}</Btn>)}
      {c.status==='draft'&&can('claim.edit')&&<Btn variant="danger" busy={busy} onClick={()=>{if(confirm('Delete this draft claim? Dockets are released back to approved.'))void post({action:'delete',claimId:c.id});}}>Delete draft</Btn>}
-     {c.status==='submitted'&&can('claim.approve')&&<Btn variant="secondary" busy={busy} onClick={()=>{const v=prompt('Certified amount (ex GST)',String(c.grossAmount));if(v!==null&&v!=='')void post({action:'certify',claimId:c.id,certifiedAmount:Number(v)});}}>Record certification</Btn>}
-     {c.status==='certified'&&can('invoice.manage')&&<Btn variant="secondary" busy={busy} onClick={()=>{const n=prompt('Invoice number');if(n)void post({action:'invoice',claimId:c.id,invoiceNumber:n,invoiceDate:new Date().toISOString().slice(0,10),dueDate:new Date(Date.now()+30*86400000).toISOString().slice(0,10)});}}>Create invoice</Btn>}
+     {c.status==='submitted'&&can('claim.approve')&&<Btn variant="secondary" busy={busy} onClick={()=>setActing({claimId:c.id,kind:'certify'})}>Record certification</Btn>}
+     {c.status==='certified'&&can('invoice.manage')&&<Btn variant="secondary" busy={busy} onClick={()=>setActing({claimId:c.id,kind:'invoice'})}>Create invoice</Btn>}
     </div>
     {inv&&<div className="mt-2 flex flex-wrap items-center gap-2 rounded bg-slate-50 p-2 text-sm"><span>Invoice {inv.invoiceNumber} · {dateText(inv.invoiceDate)} · {money(inv.total,true)} incl. {money(inv.gst,true)} GST</span><StatusBadge machine="invoice" state={inv.status}/><a className="text-sm underline" href={`/api/commercial/claims?invoiceId=${inv.id}`}>PDF</a>{inv.status!=='draft'&&<span className="text-xs text-slate-500">Paid {money(inv.paidAmount,true)} · outstanding {money(inv.outstanding,true)}</span>}
-     {can('invoice.manage')&&inv.status==='draft'&&<Btn variant="secondary" busy={busy} onClick={()=>void post({action:'invoice-action',invoiceId:inv.id,invoiceAction:'issue'})}>Issue</Btn>}
-     {can('invoice.manage')&&['issued','part_paid'].includes(inv.status)&&<Btn variant="secondary" busy={busy} onClick={()=>{const v=prompt('Payment received (incl. GST)',String(inv.outstanding));if(v)void post({action:'invoice-action',invoiceId:inv.id,invoiceAction:'payment',amount:Number(v),date:new Date().toISOString().slice(0,10)});}}>Record payment</Btn>}
+     {can('invoice.manage')&&inv.status==='draft'&&<Btn variant="secondary" busy={busy} onClick={()=>{if(confirm(`Issue invoice ${inv.invoiceNumber} for ${money(inv.total,true)}? Issued invoices cannot be edited.`))void post({action:'invoice-action',invoiceId:inv.id,invoiceAction:'issue'});}}>Issue invoice</Btn>}
+     {can('invoice.manage')&&['issued','part_paid'].includes(inv.status)&&<Btn variant="secondary" busy={busy} onClick={()=>setActing({claimId:c.id,kind:'payment'})}>Record payment</Btn>}
     </div>}
-   </li>;})}</ul>}
+   {acting?.claimId===c.id&&<ClaimActionForm kind={acting.kind} claim={c} invoice={inv} busy={busy} onCancel={()=>setActing(null)} onSubmit={body=>void post(body).then(r=>{if(r!==undefined)setActing(null);})}/>}
+    </li>;})}</ul>}
   <Sheet open={showBuilder} onOpenChange={o=>{if(!o){setBuilding(false);onPresetUsed?.();}}}><SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-2xl"><SheetTitle className="border-b px-5 py-4 text-lg font-semibold">New progress claim</SheetTitle><SheetDescription className="sr-only">Build a claim</SheetDescription>{showBuilder&&data&&<ClaimBuilder projectId={projectId} lines={data.claimable} retention={data.retention} preset={preset||null} onDone={()=>{setBuilding(false);onPresetUsed?.();done();}}/>}</SheetContent></Sheet>
  </Section>;
+}
+
+/** Inline forms for certification, invoicing and payment (replacing browser prompts). */
+function ClaimActionForm({kind,claim,invoice,busy,onCancel,onSubmit}:{kind:'certify'|'invoice'|'payment';claim:Claim;invoice?:Invoice;busy:boolean;onCancel:()=>void;onSubmit:(body:Record<string,unknown>)=>void}){
+ const [v,setV]=useState<Record<string,string>>(():Record<string,string>=>{const today=new Date().toISOString().slice(0,10),in30=new Date(Date.now()+30*86400000).toISOString().slice(0,10);return kind==='certify'?{amount:String(claim.grossAmount),date:today}:kind==='invoice'?{number:'',date:today,due:in30}:{amount:String(invoice?.outstanding??''),date:today};});
+ const set=(k:string)=>(e:{target:{value:string}})=>setV(x=>({...x,[k]:e.target.value}));
+ const body=kind==='certify'?{action:'certify',claimId:claim.id,certifiedAmount:Number(v.amount),certifiedDate:v.date||null}:kind==='invoice'?{action:'invoice',claimId:claim.id,invoiceNumber:v.number.trim(),invoiceDate:v.date,dueDate:v.due||null}:{action:'invoice-action',invoiceId:invoice?.id,invoiceAction:'payment',amount:Number(v.amount),date:v.date};
+ const valid=kind==='invoice'?Boolean(v.number.trim()):v.amount!==''&&Number(v.amount)>=0;
+ return <form className="mt-3 grid gap-3 rounded-lg border border-slate-300 bg-white p-3 sm:grid-cols-3" onSubmit={e=>{e.preventDefault();if(valid)onSubmit(body);}}>
+  {kind==='certify'&&<><Field label="Certified amount (ex GST)" hint={`Claimed ${money(claim.grossAmount,true)}`}><input className={field} type="number" step="0.01" min={0} required value={v.amount} onChange={set('amount')}/></Field><Field label="Certified on"><input className={field} type="date" value={v.date} onChange={set('date')}/></Field></>}
+  {kind==='invoice'&&<><Field label="Invoice number" required><input className={field} required autoFocus value={v.number} onChange={set('number')}/></Field><Field label="Invoice date"><input className={field} type="date" value={v.date} onChange={set('date')}/></Field><Field label="Due date"><input className={field} type="date" value={v.due} onChange={set('due')}/></Field></>}
+  {kind==='payment'&&<><Field label="Payment received (incl. GST)" hint={invoice?`Outstanding ${money(invoice.outstanding,true)}`:undefined}><input className={field} type="number" step="0.01" min={0} required value={v.amount} onChange={set('amount')}/></Field><Field label="Received on"><input className={field} type="date" value={v.date} onChange={set('date')}/></Field></>}
+  <div className="flex items-end gap-2 sm:col-span-3"><Btn busy={busy} type="submit" disabled={!valid}>{kind==='certify'?'Record certification':kind==='invoice'?'Create invoice':'Record payment'}</Btn><Btn variant="secondary" type="button" onClick={onCancel}>Cancel</Btn></div>
+ </form>;
 }
 
 const GROUPS:Array<[string,string]>=[['contract','Contract work'],['variation','Variations'],['docket','Dockets'],['other','Other']];

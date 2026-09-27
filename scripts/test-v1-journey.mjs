@@ -103,6 +103,7 @@ try{
  est=(await json(await call('/api/estimates','PUT',{id:estimateId,data:{...est.data,clientName:'Riverside Council',projectName:'Riverside drainage upgrade',workType:'Drainage',items,marginValue:15,overheadsPct:8,contingencyPct:3}},A.cookie),200)).estimate;
  const tenderApprovalEarly=await call('/api/tenders/workspace','POST',{action:'submit',id:tenderId,method:'Portal'},A.cookie);assert.equal(tenderApprovalEarly.status,409,'cannot submit before approval stage');
  await json(await call('/api/estimates/approval','POST',{estimateId,action:'submit'},A.cookie),200);
+ let actionHome=await json(await call('/api/platform/home','GET',undefined,A.cookie),200);const estimateAction=actionHome.myActions.find(x=>x.key===`estimate-approval-${estimateId}`);assert.deepEqual(estimateAction?.target,{type:'tender',id:tenderId,tab:'estimate'},'Home opens estimate approval in the tender context');
  await json(await call('/api/estimates','PUT',{id:estimateId,data:est.data},A.cookie),409,'estimate in review is locked');
  await json(await call('/api/estimates/approval','POST',{estimateId,action:'approve',notes:'Checked rates'},A.cookie),200);
  const approval=await json(await call('/api/estimates/approval?estimateId='+estimateId,'GET',undefined,A.cookie),200);
@@ -110,6 +111,7 @@ try{
  // direct cost = 120/10*95 + 120*180 + 12*210 = 1140+21600+2520 = 25260
  assert.equal(approval.revisions[0].directCost,25260,'deterministic estimate arithmetic');
  await json(await call('/api/tenders/workspace','POST',{action:'request-approval',id:tenderId},A.cookie),200);
+ actionHome=await json(await call('/api/platform/home','GET',undefined,A.cookie),200);const tenderAction=actionHome.myActions.find(x=>x.key===`tender-approval-${tenderId}`);assert.deepEqual(tenderAction?.target,{type:'tender',id:tenderId,tab:'approval'},'Home opens tender approval at the approval step');
  await json(await call('/api/tenders/workspace','POST',{action:'approval-decision',id:tenderId,approve:true,notes:'Approved to submit'},A.cookie),200);
  const blocked=await json(await call('/api/tenders/workspace','POST',{action:'submit',id:tenderId,method:'Portal'},A.cookie),422,'mandatory items gate submission');
  assert.deepEqual(blocked.checks.map(c=>c.key).sort(),['requirements','returnables']);

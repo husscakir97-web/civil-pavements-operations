@@ -2,7 +2,7 @@
 import {useState} from 'react';
 import {Download,FileSignature,Plus,Trash2} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
-import {api,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,dateText,Pill} from './kit';
+import {api,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,dateText,Pill,ReasonDialog} from './kit';
 import {AiAssist} from './ai';
 import {useCachedApi,useOffline,requestId,isNetworkFailure} from './offline';
 import {allowedTransitions} from '@/lib/platform/workflow';
@@ -16,11 +16,15 @@ export function SwmsPanel({projectId,shiftId,onChanged}:{projectId?:string;shift
  const {can,role}=useSession();
  const {data,error,loading,refresh,cachedAt}=useCachedApi<{swms:SwmsRow[]}>(`/api/hseq/swms${projectId?`?projectId=${projectId}`:''}`);
  const [open,setOpen]=useState<string|'new'|null>(null);
- return <Section title="Safe Work Method Statements" description="Draft from a questionnaire, review, approve and issue. Approved versions are immutable; changes create a new revision." actions={projectId&&can('hseq.edit')&&<Btn onClick={()=>setOpen('new')}><Plus aria-hidden className="size-4"/>Create SWMS</Btn>}>
+ // Opened from a shift (field shell): only what the crew must read and acknowledge, no office authoring.
+ const onSite=Boolean(shiftId);
+ const unissued=onSite?(data?.swms||[]).filter(s=>!s.issuedRevisionId).length:0;
+ const list=onSite&&data?{...data,swms:data.swms.filter(s=>s.issuedRevisionId)}:data;
+ return <Section title={onSite?'SWMS for this job':'Safe Work Method Statements'} description={onSite?`Read each SWMS and acknowledge it before starting work.${unissued?` ${unissued} more ${unissued===1?'is':'are'} still being prepared by the office.`:''}`:'Draft from a questionnaire, review, approve and issue. Approved versions are immutable; changes create a new revision.'} actions={!onSite&&projectId&&can('hseq.edit')&&<Btn onClick={()=>setOpen('new')}><Plus aria-hidden className="size-4"/>Create SWMS</Btn>}>
   <ErrorState error={error} onRetry={refresh}/>
   {cachedAt&&<p className="mb-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">Offline copy saved {new Date(cachedAt).toLocaleString('en-AU')}.</p>}
-  {loading&&!data?<Loading/>:!data?.swms.length?<EmptyState title={role==='field'?'No SWMS have been issued for this project yet.':'No SWMS have been created for this project.'} action={projectId&&can('hseq.edit')?<Btn variant="secondary" onClick={()=>setOpen('new')}>Create SWMS</Btn>:undefined}/>:
-   <ul className="divide-y">{data.swms.map(s=><li key={s.id}><button className="flex w-full flex-wrap items-center gap-3 py-3 text-left hover:bg-slate-50" onClick={()=>setOpen(s.id)}><span className="min-w-0 flex-1"><span className="block font-medium">{s.reference} · {s.title}</span><span className="block text-xs text-slate-500">{!projectId&&`${s.projectName} · `}{s.activity} · Rev {s.currentRevisionNumber}</span></span><StatusBadge machine="swms" state={s.status}/>{s.issuedRevisionId&&<Pill tone={s.acknowledgedByMe?'success':'warning'}>{role==='field'?(s.acknowledgedByMe?'Acknowledged':'Acknowledge'):`${s.acknowledgements} acknowledged`}</Pill>}</button></li>)}</ul>}
+  {loading&&!data?<Loading/>:!list?.swms.length?<EmptyState title={role==='field'||onSite?'No SWMS have been issued for this job yet.':'No SWMS have been created for this project.'} action={!onSite&&projectId&&can('hseq.edit')?<Btn variant="secondary" onClick={()=>setOpen('new')}>Create SWMS</Btn>:undefined}/>:
+   <ul className="divide-y">{list!.swms.map(s=><li key={s.id}><button className="flex w-full flex-wrap items-center gap-3 py-3 text-left hover:bg-slate-50" onClick={()=>setOpen(s.id)}><span className="min-w-0 flex-1"><span className="block font-medium">{s.reference} · {s.title}</span><span className="block text-xs text-slate-500">{!projectId&&`${s.projectName} · `}{s.activity} · Rev {s.currentRevisionNumber}</span></span><StatusBadge machine="swms" state={s.status}/>{s.issuedRevisionId&&<Pill tone={s.acknowledgedByMe?'success':'warning'}>{role==='field'?(s.acknowledgedByMe?'Acknowledged':'Acknowledge'):`${s.acknowledgements} acknowledged`}</Pill>}</button></li>)}</ul>}
   <Sheet open={Boolean(open)} onOpenChange={o=>{if(!o)setOpen(null);}}><SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-3xl"><SheetTitle className="border-b px-5 py-4 text-lg font-semibold">{open==='new'?'Create SWMS':'SWMS'}</SheetTitle><SheetDescription className="sr-only">Safe work method statement</SheetDescription>
    {open==='new'&&projectId&&<SwmsQuestionnaireForm projectId={projectId} onCreated={id=>{refresh();onChanged?.();setOpen(id);}}/>}
    {open&&open!=='new'&&<SwmsDetail id={open} shiftId={shiftId} onChanged={()=>{refresh();onChanged?.();}}/>}
@@ -48,7 +52,7 @@ function SwmsDetail({id,shiftId,onChanged}:{id:string;shiftId?:string;onChanged:
  const {role,can}=useSession();
  const {data,error,loading,refresh,cachedAt}=useCachedApi<Detail>(`/api/hseq/swms?id=${id}`);
  const {busy,error:actionError,run}=useAction();const offline=useOffline();const [queued,setQueued]=useState(false);
- const [draft,setDraft]=useState<SwmsContent|null>(null);const [note,setNote]=useState('');
+ const [draft,setDraft]=useState<SwmsContent|null>(null);const [note,setNote]=useState('');const [revising,setRevising]=useState(false);
  if(loading&&!data)return <div className="p-5"><Loading/></div>;
  if(error&&!data)return <div className="p-5"><ErrorState error={error} onRetry={refresh}/></div>;
  const d=data!,current=d.revisions.find(r=>r.id===d.swms.currentRevisionId)||d.revisions[0],issued=d.revisions.find(r=>r.id===d.swms.issuedRevisionId);
@@ -66,7 +70,8 @@ function SwmsDetail({id,shiftId,onChanged}:{id:string;shiftId?:string;onChanged:
    {role!=='field'&&shown.status==='draft'&&can('hseq.edit')&&!editing&&<Btn variant="secondary" onClick={()=>setDraft(structuredClone(shown.content))}>Edit draft</Btn>}
    {editing&&<Btn busy={busy} onClick={()=>void act({action:'save',revisionId:shown.id,updatedAt:shown.updated_at,content:draft})}>Save draft</Btn>}
    {editing&&<Btn variant="ghost" onClick={()=>setDraft(null)}>Cancel</Btn>}
-   {role!=='field'&&['approved','issued'].includes(shown.status)&&can('hseq.edit')&&<Btn variant="secondary" busy={busy} onClick={()=>{const r=prompt('Reason for the new revision');if(r)void act({action:'revise',reason:r});}}>Create new revision</Btn>}
+   {role!=='field'&&['approved','issued'].includes(shown.status)&&can('hseq.edit')&&<Btn variant="secondary" busy={busy} onClick={()=>setRevising(true)}>Create new revision</Btn>}
+   <ReasonDialog open={revising} title="Create a new SWMS revision" description="The issued revision stays in force and on record. The new revision starts as a draft and must be reviewed, approved and issued again." label="Reason for the new revision" required confirmLabel="Create revision" busy={busy} onCancel={()=>setRevising(false)} onConfirm={r=>{setRevising(false);void act({action:'revise',reason:r});}}/>
    {issued&&can('swms.acknowledge')&&!queued&&<Btn busy={busy} onClick={()=>{
     // Offline: the acknowledgement of this exact revision is queued; the server refuses it if a newer revision was issued meanwhile.
     const body={action:'acknowledge',id,shiftId:shiftId||null,revisionId:issued.id,clientRequestId:requestId()};
@@ -76,7 +81,7 @@ function SwmsDetail({id,shiftId,onChanged}:{id:string;shiftId?:string;onChanged:
    }}><FileSignature aria-hidden className="size-4"/>I have read and understood this SWMS</Btn>}
   </div>
   {transitions.length>0&&!editing&&Boolean(d.gaps?.length)&&<div role="status" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-medium">Complete these before review and approval:</p><ul className="list-disc pl-5">{d.gaps!.map(g=><li key={g}>{g}</li>)}</ul></div>}
-  {transitions.length>0&&!editing&&<div className="grid gap-2 rounded-lg border bg-slate-50 p-3"><textarea className={`${field} min-h-14`} placeholder="Note (recorded in the audit trail)" value={note} onChange={e=>setNote(e.target.value)}/><div className="flex flex-wrap gap-2">{transitions.map(t=><Btn key={t.to} variant="secondary" busy={busy} disabled={['review','approved'].includes(t.to)&&Boolean(d.gaps?.length)} onClick={()=>void act({action:'transition',to:t.to,note:note||undefined})}>{t.label}</Btn>)}</div></div>}
+  {transitions.length>0&&!editing&&<div className="grid gap-2 rounded-lg border bg-slate-50 p-3"><textarea className={`${field} min-h-14`} placeholder="Note (recorded in the audit trail)" value={note} onChange={e=>setNote(e.target.value)}/><div className="flex flex-wrap gap-2">{transitions.map(t=><Btn key={t.to} variant="secondary" busy={busy} disabled={['review','approved'].includes(t.to)&&Boolean(d.gaps?.length)} onClick={()=>{if(t.to==='issued'&&!confirm('Issue this SWMS to site? Workers will be asked to acknowledge it, and the issued revision cannot be edited: changes need a new revision.'))return;void act({action:'transition',to:t.to,note:note||undefined});}}>{t.label}</Btn>)}</div></div>}
   {role!=='field'&&shown.status==='draft'&&!editing&&<AiAssist feature="swms.assist" title="Suggest hazards and controls" description="Proposes hazards and controls for each work step using the hierarchy of controls. Accepted suggestions are added to this draft only; review, approval and issue remain with people." entityType="swms" entityId={id} runBody={{action:'swms-assist',swmsId:id}} onApplied={done}/>}
   <ErrorState error={actionError}/>
   {queued&&<p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Your acknowledgement is saved on this device and will be sent when you are back online. If the SWMS is revised before then, you will be asked to read the new revision.</p>}

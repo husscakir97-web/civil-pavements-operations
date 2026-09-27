@@ -3,9 +3,9 @@
 // items (labour, plant, material, subcontract, other) and the revision
 // approval workflow (draft → review → approved → superseded).
 import {Plus,Trash2} from 'lucide-react';
-import type {Dispatch,SetStateAction} from 'react';
+import {useState,type Dispatch,type SetStateAction} from 'react';
 import {COST_CATEGORIES,itemAmount,itemHours,type EstimateData,type EstimateItem} from '@/lib/estimate-calculations';
-import {api,useApi,useAction,useSession,StatusBadge,ErrorState,Loading,Btn,money,dateText,field} from './kit';
+import {api,useApi,useAction,useSession,StatusBadge,ErrorState,Loading,Btn,money,dateText,field,ReasonDialog} from './kit';
 
 export function EstimateItemsEditor({form,setForm,disabled}:{form:EstimateData;setForm:Dispatch<SetStateAction<EstimateData>>;disabled?:boolean}){
  const items=form.items||[];
@@ -35,10 +35,11 @@ export function EstimateItemsEditor({form,setForm,disabled}:{form:EstimateData;s
 }
 
 type Revision={id:string;revisionNumber:number;status:string;submittedAt:string|null;approvedAt:string|null;decisionNotes:string|null;sellPrice?:number;directCost?:number;grossMarginPct?:number};
-export function EstimateApprovalPanel({estimateId,onChanged,dirty}:{estimateId:string|null;onChanged?:()=>void;dirty?:boolean}){
+export function EstimateApprovalPanel({estimateId,onChanged,dirty,version=0}:{estimateId:string|null;onChanged?:()=>void;dirty?:boolean;version?:number}){
  const {can}=useSession();
- const {data,error,loading,refresh}=useApi<{state:string;approvedRevisionId:string|null;awarded:boolean;revisions:Revision[]}>(estimateId?`/api/estimates/approval?estimateId=${estimateId}`:null);
+ const {data,error,loading,refresh}=useApi<{state:string;approvedRevisionId:string|null;awarded:boolean;revisions:Revision[]}>(estimateId?`/api/estimates/approval?estimateId=${estimateId}${version?`&v=${version}`:''}`:null);
  const {busy,error:actionError,run}=useAction();
+ const [deciding,setDeciding]=useState<'approve'|'reject'|null>(null);
  if(!estimateId)return <p className="rounded-xl border bg-white p-4 text-sm text-slate-500">Save the estimate to start its approval workflow.</p>;
  if(loading&&!data)return <Loading/>;
  const act=(action:string,notes='')=>run(()=>api('/api/estimates/approval',{method:'POST',body:{estimateId,action,notes}}),()=>{refresh();onChanged?.();});
@@ -46,8 +47,10 @@ export function EstimateApprovalPanel({estimateId,onChanged,dirty}:{estimateId:s
   <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="flex items-center gap-2 font-semibold">Estimate approval {data&&<StatusBadge machine="estimate" state={data.state}/>}</h3><p className="mt-1 text-sm text-slate-500">Approved revisions are frozen — including their rates. Editing after approval starts a new draft that must be approved again. Only an approved revision can be awarded.</p></div>
    <div className="flex flex-wrap gap-2">
     {data?.state!=='review'&&!data?.awarded&&can('estimate.edit')&&<Btn busy={busy} disabled={dirty} title={dirty?'Save your changes first':undefined} onClick={()=>void act('submit')}>Submit for review</Btn>}
-    {data?.state==='review'&&can('estimate.approve')&&<><Btn busy={busy} onClick={()=>void act('approve',prompt('Approval notes (optional)')||'')}>Approve revision</Btn><Btn variant="danger" busy={busy} onClick={()=>{const n=prompt('What needs to change?');if(n)void act('reject',n);}}>Return for changes</Btn></>}
+    {data?.state==='review'&&can('estimate.approve')&&<><Btn busy={busy} onClick={()=>setDeciding('approve')}>Approve revision</Btn><Btn variant="danger" busy={busy} onClick={()=>setDeciding('reject')}>Return for changes</Btn></>}
    </div></div>
+  <ReasonDialog open={deciding==='approve'} title="Approve estimate revision" description="The approved revision is frozen, including its rates, and becomes the revision the tender can submit and award." label="Approval notes" confirmLabel="Approve revision" busy={busy} onCancel={()=>setDeciding(null)} onConfirm={n=>{setDeciding(null);void act('approve',n);}}/>
+  <ReasonDialog open={deciding==='reject'} title="Return estimate for changes" description="The revision goes back to draft so the estimator can revise it and submit again." label="What needs to change?" required danger confirmLabel="Return for changes" busy={busy} onCancel={()=>setDeciding(null)} onConfirm={n=>{setDeciding(null);void act('reject',n);}}/>
   {dirty&&<p className="mt-2 text-xs text-amber-700">You have unsaved changes. Save the estimate before submitting it for review.</p>}
   <div className="mt-3"><ErrorState error={error||actionError} onRetry={refresh}/></div>
   {data&&data.revisions.length>0&&<ul className="mt-3 divide-y text-sm">{data.revisions.map(r=><li key={r.id} className="flex flex-wrap items-center gap-3 py-2"><span className="font-medium">Revision {r.revisionNumber}</span><StatusBadge machine="estimate" state={r.status}/>{r.sellPrice!=null&&<span>{money(r.sellPrice)} sell · {r.grossMarginPct?.toFixed(1)}% margin</span>}<span className="text-xs text-slate-500">{r.approvedAt?`Approved ${dateText(r.approvedAt)}`:r.submittedAt?`Submitted ${dateText(r.submittedAt)}`:''}</span>{r.decisionNotes&&<span className="text-xs text-slate-500">“{r.decisionNotes}”</span>}</li>)}</ul>}

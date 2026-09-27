@@ -2,16 +2,19 @@
 // Mobile-first field flow. Payloads come from field-safe projections: no
 // rates, margins, client pricing or office-only documents.
 import {useEffect,useState} from 'react';
-import {ArrowLeft,CheckCircle2,ClipboardList,HardHat,MapPin,Plus,ShieldCheck,Trash2} from 'lucide-react';
+import dynamic from 'next/dynamic';
+import {ArrowLeft,ArrowRight,CheckCircle2,ClipboardList,HardHat,MapPin,Plus,ShieldCheck,Trash2} from 'lucide-react';
 import {api,useAction,ErrorState,Loading,Btn,Field,field,EmptyState,Pill} from './kit';
 import {useCachedApi,useDraft,useOffline,OfflineBanner,requestId,isNetworkFailure} from './offline';
 import {SwmsPanel} from './swms';
 import {RegisterView} from './register-view';
 
+const ShiftRecord=dynamic(()=>import('@/components/field-workspace').then(m=>m.FieldWorkspace),{loading:()=><Loading label="Opening the shift record…"/>});
+
 type Shift={id:string;name:string;status:string;version:string|null;date:string;start:string;finish:string;location:string;supervisor:string;activity:string;instructions:string;siteContact:string;crew:Array<{name:string;role:string;category:string}>;project:{id:string;name:string;number:string|null;closed:boolean}|null;assignedToMe:boolean;swms:Array<{id:string;reference:string;title:string;acknowledged:boolean}>;swmsOutstanding:number;fieldRecord:{status:string}|null;dockets:Array<{id:string;docketNo:string;status:string}>};
 type Today={date:string;today:Shift[];otherToday:Shift[];upcoming:Shift[]};
 
-export function FieldToday({onOpenRecords}:{onOpenRecords:()=>void}){
+export function FieldToday(){
  const {data,error,loading,refresh,cachedAt}=useCachedApi<Today>('/api/field/today');
  const offline=useOffline();
  // Refresh the day once queued work has been accepted.
@@ -20,7 +23,7 @@ export function FieldToday({onOpenRecords}:{onOpenRecords:()=>void}){
  const [selected,setSelected]=useState<string|null>(null);
  const all=[...(data?.today||[]),...(data?.otherToday||[]),...(data?.upcoming||[])];
  const shift=all.find(s=>s.id===selected);
- if(shift)return <ShiftDetail shift={shift} onBack={()=>{setSelected(null);refresh();}} onChanged={refresh} onOpenRecords={onOpenRecords}/>;
+ if(shift)return <ShiftDetail shift={shift} onBack={()=>{setSelected(null);refresh();}} onChanged={refresh}/>;
  const card=(s:Shift)=><li key={s.id}><button onClick={()=>setSelected(s.id)} className="w-full rounded-2xl border bg-white p-4 text-left shadow-sm active:bg-slate-50">
   <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="text-lg font-semibold leading-6">{s.project?.name||s.name}</p><p className="text-sm text-slate-600">{s.start}–{s.finish}{s.date!==data?.date?` · ${s.date}`:''}</p></div><Pill tone={s.fieldRecord?.status==='Submitted'?'success':'info'}>{s.fieldRecord?.status==='Submitted'?'Submitted':s.status}</Pill></div>
   {s.location&&<p className="mt-2 flex items-center gap-1 text-sm text-slate-700"><MapPin aria-hidden className="size-4"/>{s.location}</p>}
@@ -40,25 +43,37 @@ export function FieldToday({onOpenRecords}:{onOpenRecords:()=>void}){
  </div>;
 }
 
-function ShiftDetail({shift,onBack,onChanged,onOpenRecords}:{shift:Shift;onBack:()=>void;onChanged:()=>void;onOpenRecords:()=>void}){
- const [step,setStep]=useState<'start'|'during'|'finish'>(shift.swmsOutstanding?'start':'during');
+function ShiftDetail({shift,onBack,onChanged}:{shift:Shift;onBack:()=>void;onChanged:()=>void}){
+ const [step,setStep]=useState<'start'|'during'|'finish'>(shift.swmsOutstanding?'start':shift.dockets.length?'finish':'during');
+ const [record,setRecord]=useState(false);
+ // The shift record (pre-start, production, photos, sign-off) opens for this shift, not a list.
+ if(record)return <div className="mx-auto grid max-w-xl gap-3"><ShiftRecord initialShiftId={shift.id} onClose={()=>{setRecord(false);onChanged();}}/></div>;
+ const done={start:shift.swmsOutstanding===0,during:shift.fieldRecord?.status==='Submitted',finish:shift.dockets.length>0};
  return <div className="mx-auto grid max-w-xl gap-4">
   <button onClick={onBack} className="flex min-h-11 items-center gap-2 text-sm font-medium text-slate-700"><ArrowLeft aria-hidden className="size-4"/>Today</button>
   <section className="rounded-2xl border bg-white p-4">
-   <p className="text-xs uppercase tracking-wide text-slate-500">{shift.project?.number||'Shift'}</p>
+   <p className="text-xs uppercase tracking-wide text-slate-500">{shift.project?.number||'Shift'} · {shift.start}–{shift.finish}</p>
    <h1 className="text-xl font-semibold">{shift.project?.name||shift.name}</h1>
-   <dl className="mt-3 grid grid-cols-2 gap-3 text-sm"><div><dt className="text-slate-500">Time</dt><dd className="font-medium">{shift.start}–{shift.finish}</dd></div><div><dt className="text-slate-500">Supervisor</dt><dd className="font-medium">{shift.supervisor||'Not recorded'}</dd></div><div className="col-span-2"><dt className="text-slate-500">Location</dt><dd>{shift.location||'Not recorded'}</dd></div>{shift.activity&&<div className="col-span-2"><dt className="text-slate-500">Activity</dt><dd>{shift.activity}</dd></div>}{shift.instructions&&<div className="col-span-2"><dt className="text-slate-500">Instructions</dt><dd className="whitespace-pre-wrap">{shift.instructions}</dd></div>}{shift.crew.length>0&&<div className="col-span-2"><dt className="text-slate-500">Crew and plant</dt><dd>{shift.crew.map(c=>`${c.name}${c.role?` (${c.role})`:''}`).join(', ')}</dd></div>}</dl>
+   {shift.location&&<p className="mt-1 flex items-center gap-1 text-sm text-slate-700"><MapPin aria-hidden className="size-4"/>{shift.location}</p>}
+   {shift.activity&&<p className="mt-2 text-sm font-medium">{shift.activity}</p>}
+   {shift.instructions&&<p className="mt-2 whitespace-pre-wrap rounded-lg bg-amber-50 p-2 text-sm text-amber-950">{shift.instructions}</p>}
+   <details className="mt-2 text-sm"><summary className="cursor-pointer py-1 text-slate-600">Supervisor, crew and site contact</summary><dl className="mt-1 grid gap-2"><div><dt className="text-slate-500">Supervisor</dt><dd>{shift.supervisor||'Not recorded'}</dd></div>{shift.crew.length>0&&<div><dt className="text-slate-500">Crew and plant</dt><dd>{shift.crew.map(c=>`${c.name}${c.role?` (${c.role})`:''}`).join(', ')}</dd></div>}{shift.siteContact&&<div><dt className="text-slate-500">Site contact</dt><dd>{shift.siteContact}</dd></div>}</dl></details>
    {shift.project?.closed&&<p className="mt-3 rounded-lg bg-amber-50 p-2 text-sm text-amber-900">This project is closed. Contact the office before recording work.</p>}
   </section>
-  <nav className="grid grid-cols-3 gap-2" aria-label="Shift steps">{([['start','Start work',ShieldCheck],['during','During work',HardHat],['finish','Finish',ClipboardList]] as const).map(([k,label,Icon])=><button key={k} onClick={()=>setStep(k)} aria-current={step===k?'step':undefined} className={`flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border text-sm font-medium ${step===k?'border-orange-400 bg-orange-50 text-orange-900':'bg-white text-slate-700'}`}><Icon aria-hidden className="size-5"/>{label}</button>)}</nav>
-  {step==='start'&&shift.project&&<div className="grid gap-3"><p className="text-sm text-slate-600">Read each issued SWMS for this project and acknowledge it before starting work.</p><SwmsPanel projectId={shift.project.id} shiftId={shift.id}/><Btn className="min-h-12" onClick={()=>{onChanged();setStep('during');}}>Continue to work<CheckCircle2 aria-hidden className="size-4"/></Btn></div>}
+  <nav className="grid grid-cols-3 gap-2" aria-label="Shift steps">{([['start','Before work',ShieldCheck],['during','During work',HardHat],['finish','Finish',ClipboardList]] as const).map(([k,label,Icon])=><button key={k} onClick={()=>setStep(k)} aria-current={step===k?'step':undefined} className={`relative flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border text-sm font-medium ${step===k?'border-orange-400 bg-orange-50 text-orange-900':done[k]?'border-emerald-200 bg-emerald-50 text-emerald-900':'bg-white text-slate-700'}`}>{done[k]?<CheckCircle2 aria-hidden className="size-5 text-emerald-600"/>:<Icon aria-hidden className="size-5"/>}{label}<span className="sr-only">{done[k]?' (done)':''}</span></button>)}</nav>
+  {step==='start'&&<div className="grid gap-3">
+   {shift.project&&<SwmsPanel projectId={shift.project.id} shiftId={shift.id} onChanged={onChanged}/>}
+   <Btn variant="secondary" className="min-h-12" onClick={()=>setRecord(true)}><ClipboardList aria-hidden className="size-5"/>Sign on and pre-start</Btn>
+   <Btn className="min-h-12" onClick={()=>{onChanged();setStep('during');}}>Continue to work<CheckCircle2 aria-hidden className="size-4"/></Btn>
+  </div>}
   {step==='during'&&<div className="grid gap-3">
-   <Btn className="min-h-12" onClick={onOpenRecords}><ClipboardList aria-hidden className="size-5"/>Open shift record (pre-start, production, photos)</Btn>
+   <Btn className="min-h-12" onClick={()=>setRecord(true)}><ClipboardList aria-hidden className="size-5"/>Shift record: production, photos, delays</Btn>
    {shift.project&&<OfflineIncident projectId={shift.project.id}/>}
    {shift.project&&<RegisterView register="incidents" parentId={shift.project.id} title="Report an incident or near miss"/>}
    {shift.project&&<RegisterView register="itps" parentId={shift.project.id} title="Quality records (ITPs)" hideCreate rowActions={r=><ItpItems itpId={r.id} projectId={shift.project!.id}/>}/>}
+   <Btn variant="secondary" className="min-h-12" onClick={()=>setStep('finish')}>Finish work<ArrowRight aria-hidden className="size-4"/></Btn>
   </div>}
-  {step==='finish'&&<DocketForm shift={shift} onSubmitted={onChanged}/>}
+  {step==='finish'&&<div className="grid gap-3"><DocketForm shift={shift} onSubmitted={onChanged}/><Btn variant="secondary" className="min-h-12" onClick={()=>setRecord(true)}>Client and supervisor sign-off</Btn></div>}
  </div>;
 }
 

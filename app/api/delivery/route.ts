@@ -6,7 +6,8 @@ import { imsBlockers } from '@/lib/ims-readiness';
 import { requireActor } from '@/lib/authz';
 import { currentOrganisationId, currentOrganisationId as ORG, requireEstimateDb, safeJson, jsonError } from '@/lib/estimates-db';
 import { CHECKS, SHIFT_STATUSES, mergeJob, shiftWarnings, type DeliveryRecord, type Meta } from '@/lib/planning';
-import { evaluateShift, blocking, loadResources, loadNearbyShifts, shiftInput, type Conflict } from '@/lib/modules/operations/conflicts';
+import { evaluateShift, availability, blocking, loadResources, loadNearbyShifts, shiftInput, type Conflict } from '@/lib/modules/operations/conflicts';
+import { RESOURCE_CATEGORIES } from '@/lib/v1/resource-mapping';
 import { shiftStatements } from '@/lib/v1/resource-sync';
 export const dynamic = 'force-dynamic';
 const tables = ['jobs','shifts','workers','crews','plant','suppliers','subcontractors'] as const;
@@ -20,9 +21,18 @@ async function handleGET(request: Request) {
 }
 async function handlePOST(request:Request) {
   try {
-    const body=await request.json() as {kind:string;record:DeliveryRecord};
+    const body=await request.json() as {kind:string;record:DeliveryRecord;check?:boolean;candidates?:Array<{category:string;resourceId:string}>};
     if (!['jobs','shifts'].includes(body.kind)) return jsonError('Invalid record type.');
     const db=requireEstimateDb(); const actor=await requireActor(request, db, 'write'); const record=body.record;
+    // Read-only availability check for the planner: evaluates the draft shift and candidate
+    // resources with the same conflict engine used on save. Nothing is written.
+    if(body.check && body.kind==='shifts'){
+      const input=shiftInput({id:String(record?.id||'__draft__'),name:String(record?.name||''),status:String(record?.status||'Draft'),metadata:JSON.stringify(record?.metadata||{})});
+      const candidates=(Array.isArray(body.candidates)?body.candidates:[]).slice(0,300).map(c=>({resourceType:(RESOURCE_CATEGORIES as Record<string,string>)[String(c.category)]||String(c.category),resourceId:String(c.resourceId||'')})).filter(c=>c.resourceId);
+      const resources=await loadResources(db,ORG(),[...input.assignments,...candidates]);
+      const others=await loadNearbyShifts(db,ORG(),input.date);
+      return Response.json({conflicts:evaluateShift(input,resources,others),availability:availability(input,candidates,resources,others)},{headers:{'Cache-Control':'private, no-store'}});
+    }
     if (!record?.name?.trim()) return jsonError('Name is required.');
     const existing=record.id ? (await load(db,body.kind)).find(r=>r.id===record.id) : undefined;
     if(record.id && !existing) return jsonError('Record no longer exists.',404);

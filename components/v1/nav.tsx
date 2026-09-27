@@ -11,9 +11,9 @@ export function parseRoute(hash:string):Route{
 // Empty segments are kept (e.g. #Projects//<id>/setup) so positions survive reload.
 export function routeHash(r:Route){const parts=[r.area,r.sub||'',r.id||'',r.tab||''];while(parts.length>1&&!parts[parts.length-1])parts.pop();return '#'+parts.map(s=>encodeURIComponent(s)).join('/');}
 /** Maps a Home/search "area" string (e.g. "Pipeline/Tenders") to navigate args. */
-export function areaTarget(area:string,target?:{type:string;id:string}):[string,string?,string?]{
+export function areaTarget(area:string,target?:{type:string;id:string;tab?:string}):[string,string?,string?,string?]{
  const [a,s]=area.split('/');
- if(target?.type==='tender')return ['Pipeline','Tenders',target.id];
- if(target?.type==='project')return ['Projects',undefined,target.id];
+ if(target?.type==='tender')return ['Pipeline','Tenders',target.id,target.tab];
+ if(target?.type==='project')return ['Projects',undefined,target.id,target.tab];
  return [a,s];
 }

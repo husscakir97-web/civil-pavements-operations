@@ -41,6 +41,7 @@ const TendersView = dynamic(() => loaders.pipeline().then(m => m.TendersView), {
 const EstimatesQuotes = dynamic(() => loaders.estimates().then(m => m.EstimatesQuotes), { loading });
 const ProjectsView = dynamic(() => loaders.projects().then(m => m.ProjectsView), { loading });
 const OperationsPage = dynamic(() => loaders.operations().then(m => m.OperationsPage), { loading });
+const JobsPlanning = dynamic(() => import("@/components/jobs-planning").then(m => m.JobsPlanning), { loading });
 const DocketDashboard = dynamic(() => loaders.dockets().then(m => m.DocketDashboard), { loading });
 const CommercialArea = dynamic(() => loaders.commercial().then(m => m.CommercialArea), { loading });
 const HseqArea = dynamic(() => loaders.hseq().then(m => m.HseqArea), { loading });
@@ -53,10 +54,10 @@ const FieldToday = dynamic(() => loaders.field().then(m => m.FieldToday), { load
 const ResourcesArea = dynamic(() => loaders.resources().then(m => m.ResourcesArea), { loading });
 const FieldWorkspace = dynamic(() => loaders.fieldRecords().then(m => m.FieldWorkspace), { loading });
 
-type Area = { key: string; label: string; icon: LucideIcon; module?: string; capability?: Capability; subs?: Array<{ key: string; module?: string; capability?: Capability; anyOf?: Capability[] }>; preload: () => Promise<unknown> };
+type Area = { key: string; label: string; icon: LucideIcon; module?: string; capability?: Capability; defaultSub?: string; subs?: Array<{ key: string; module?: string; capability?: Capability; anyOf?: Capability[] }>; preload: () => Promise<unknown> };
 const AREAS: Area[] = [
   { key: "Home", label: "Home", icon: Home, preload: loaders.home },
-  { key: "Pipeline", label: "Pipeline", icon: BriefcaseBusiness, module: "pipeline", capability: "pipeline.view", subs: [{ key: "Opportunities" }, { key: "Tenders" }, { key: "Estimates", module: "estimating" }], preload: loaders.pipeline },
+  { key: "Pipeline", label: "Pipeline", icon: BriefcaseBusiness, module: "pipeline", capability: "pipeline.view", defaultSub: "Tenders", subs: [{ key: "Opportunities" }, { key: "Tenders" }, { key: "Estimates", module: "estimating" }], preload: loaders.pipeline },
   { key: "Projects", label: "Projects", icon: HardHat, module: "projects", capability: "project.view", preload: loaders.projects },
   { key: "Operations", label: "Operations", icon: Workflow, module: "operations", capability: "schedule.view", subs: [{ key: "Schedule" }, { key: "Resources" }, { key: "Dockets", module: "dockets", capability: "docket.approve" }], preload: loaders.operations },
   { key: "Commercial", label: "Commercial", icon: DollarSign, module: "commercial", capability: "commercial.view", preload: loaders.commercial },
@@ -111,7 +112,7 @@ function FieldShell() {
   return <div className="min-h-screen bg-[#f6f7f9] pb-20 text-slate-900">
     <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b bg-white px-4 py-3"><div className="min-w-0"><p className="truncate font-semibold">{brand.companyName}</p><p className="text-xs text-slate-500">{role === "supervisor" ? "Supervisor" : "Field"}</p></div><Link href="/account" className="flex min-h-11 items-center rounded-lg border px-3 text-sm" title={userEmail}>Account</Link></header>
     <Toaster position="top-center" richColors />
-    <main className="p-4 sm:p-6">{tab === "today" ? <FieldToday onOpenRecords={() => setTab("records")} /> : tab === "records" ? <FieldWorkspace /> : <SearchV1 />}</main>
+    <main className="p-4 sm:p-6">{tab === "today" ? <FieldToday /> : tab === "records" ? <FieldWorkspace /> : <SearchV1 />}</main>
     <nav aria-label="Field navigation" className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t bg-white pb-[env(safe-area-inset-bottom)]">{([["today", "Today", Home], ["records", "Shift records", ClipboardList], ["search", "Search", Search]] as const).map(([k, label, Icon]) => <button key={k} onClick={() => setTab(k)} aria-current={tab === k ? "page" : undefined} className={`flex min-h-16 flex-col items-center justify-center gap-1 text-xs font-medium ${tab === k ? "text-orange-700" : "text-slate-500"}`}><Icon aria-hidden className="size-5" />{label}</button>)}</nav>
   </div>;
 }
@@ -126,7 +127,8 @@ function WorkspaceShell() {
   const areas = AREAS.filter(a => allowed(a) && (!a.subs || a.subs.some(allowed)));
   const area = areas.find(a => a.key === route.area) ?? (route.area === "Search" ? null : areas[0]);
   const subs = area?.subs?.filter(allowed) ?? [];
-  const sub = subs.find(s => s.key === route.sub)?.key ?? subs[0]?.key;
+  // Areas open on the section where day-to-day work happens (Pipeline → Tenders).
+  const sub = subs.find(s => s.key === route.sub)?.key ?? subs.find(s => s.key === area?.defaultSub)?.key ?? subs[0]?.key;
 
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); navigate("Search"); } };
@@ -156,7 +158,7 @@ function WorkspaceShell() {
   else if (k === "Home") content = <HomeV1 />;
   else if (k === "Pipeline") content = sub === "Tenders" ? <TendersView /> : sub === "Estimates" ? <EstimatesQuotes key={route.id || "all"} initialEstimateId={route.id} /> : <OpportunitiesView />;
   else if (k === "Projects") content = <ProjectsView />;
-  else if (k === "Operations") content = sub === "Dockets" ? <DocketDashboard /> : sub === "Resources" ? <ResourcesArea key="resources" other={<OperationsPage module="Resources" initialResource="crews" resourceTypes={otherResources} onNavigate={legacyNavigate} />} /> : <OperationsPage key="schedule" module="Planning" onNavigate={legacyNavigate} />;
+  else if (k === "Operations") content = sub === "Dockets" ? <DocketDashboard /> : sub === "Resources" ? <ResourcesArea key="resources" other={<OperationsPage module="Resources" initialResource="crews" resourceTypes={otherResources} onNavigate={legacyNavigate} />} /> : <JobsPlanning key={`schedule-${route.id || "all"}`} page="Planning" initialJobId={route.id} onBack={route.id ? () => navigate("Projects", undefined, route.id) : undefined} />;
   else if (k === "Commercial") content = <CommercialArea />;
   else if (k === "IMS & HSEQ") content = <HseqArea />;
   else if (k === "Reports") content = <ReportsV1 />;

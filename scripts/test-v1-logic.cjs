@@ -60,6 +60,61 @@ assert.deepEqual(navDef.adminSubsFor('read_only'),[],'read-only: no admin area')
 assert.deepEqual(navDef.adminSubsFor('field'),[]);assert.deepEqual(navDef.adminSubsFor('supervisor'),[]);
 assert(!navDef.adminSubsFor('office').some(k=>['Team & Permissions','Integrations','Settings','Company'].includes(k)),'office has no organisation administration');
 assert.deepEqual(navDef.FIELD_SHELL_ROLES,['field','supervisor']);
+// Tender lifecycle presentation: step states and next-action targets mirror the tender stage and stats.
+{const tf=load('lib/v1/tender-flow.ts');
+ const base={stage:'pricing',approvalStatus:'not_requested',submittedAt:null,estimateId:'e1',projectId:null,checks:[{key:'estimate',ok:true},{key:'requirements',ok:false},{key:'returnables',ok:false},{key:'approval',ok:false}],stats:{documents:1,requirements:3,suggested:0,mandatoryOpen:2,returnables:1,returnablesMandatoryOpen:1,clarificationsOpen:0,estimateState:'approved',bidDecision:'bid',approvedRevisionNumber:1}};
+ const by=t=>Object.fromEntries(tf.tenderSteps(t).map(s=>[s.key,s.state]));
+ assert.equal(tf.nextStep(base),'requirements','open mandatory requirements come next once the estimate is approved');
+ assert.deepEqual(by(base),{intake:'done',requirements:'attention',bid:'done',estimate:'done',returnables:'attention',approval:'todo',submission:'todo',clarifications:'todo',award:'todo'});
+ assert.equal(tf.tenderSteps(base).find(s=>s.key==='requirements').count,2);
+ assert.equal(tf.nextStep({...base,stats:{...base.stats,approvedRevisionNumber:null,estimateState:'draft'}}),'estimate');
+ assert.equal(tf.nextStep({...base,stats:{...base.stats,suggested:1}}),'requirements','suggestions must be confirmed first');
+ assert.equal(tf.nextStep({...base,stats:{...base.stats,mandatoryOpen:0,returnablesMandatoryOpen:0}}),'approval');
+ assert.equal(tf.nextStep({...base,stage:'approval',approvalStatus:'approved',checks:base.checks.map(c=>({...c,ok:true}))}),'submission');
+ assert.equal(tf.nextStep({...base,stage:'draft',stats:{...base.stats,documents:0,requirements:0}}),'intake');
+ assert.equal(tf.nextStep({...base,stage:'submitted',submittedAt:'x',stats:{...base.stats,clarificationsOpen:1}}),'clarifications');
+ assert.equal(tf.nextStep({...base,stage:'awarded',projectId:'p1'}),'project');
+ assert.equal(by({...base,stage:'draft',stats:{...base.stats,bidDecision:'pending',mandatoryOpen:2}}).requirements,'todo','requirements are not flagged before pricing');
+ assert(Object.values(by({...base,stage:'lost'})).every(s=>['done','closed'].includes(s)),'a lost tender has no current or attention steps');
+ assert.deepEqual(tf.TENDER_PHASES.flatMap(p=>p.stages).sort(),['approval','awarded','clarification','draft','lost','pricing','reviewing','submitted'],'every tender stage belongs to exactly one phase');}
+// Project setup presentation: readiness categories become a checklist whose buttons lead to where each gap is fixed.
+{const ps=load('lib/v1/project-setup.ts');
+ const item=(category,title,ok,source='checklist',mandatory=true)=>({category,title,ok,source,mandatory});
+ const cats=[{category:'contract',items:[item('contract','Contract executed',true),item('contract','Approved baseline recorded',false,'derived')]},{category:'SWMS',items:[item('SWMS','SWMS approved for planned high-risk work',false,'derived')]},{category:'permits',items:[item('permits','Road occupancy permit',false)]},{category:'plant',items:[item('plant','Plant inspected',true)]}];
+ const areas=ps.setupAreas(cats,{complete:false,missing:['Contract number']});
+ assert.deepEqual(areas.map(a=>[a.label,a.status]),[['Contract details','attention'],['Contract','attention'],['SWMS','not_started'],['Permits & approvals','not_started'],['Plant','complete']]);
+ assert.deepEqual(areas.find(a=>a.key==='contract').target,{kind:'anchor',anchor:'setup-baseline'},'a missing baseline opens the baseline section');
+ assert.deepEqual(areas.find(a=>a.key==='SWMS').target,{kind:'tab',tab:'quality'},'SWMS gaps open Quality & HSEQ');
+ assert.deepEqual(areas.find(a=>a.key==='permits').target,{kind:'checklist',category:'permits'},'checklist gaps open the checklist filtered to their category');
+ assert.equal(ps.fixFor(item('project plans','Project IMS pack approved',false,'derived')).target.area,'IMS & HSEQ');
+ assert.equal(ps.fixFor(item('competencies','Scheduled workers hold current competencies',false,'derived')).target.sub,'Resources');
+ assert.deepEqual(ps.nextActionTarget('setup','Approve SWMS before mobilisation'),{kind:'tab',tab:'quality'});
+ assert.deepEqual(ps.nextActionTarget('setup','Complete 3 readiness requirements'),{kind:'tab',tab:'setup'});
+ assert.deepEqual(ps.nextActionTarget('active','Record the client decision on 1 submitted variation'),{kind:'tab',tab:'commercial'});
+ assert.deepEqual(ps.nextActionTarget('closeout','Final claim'),{kind:'tab',tab:'closeout'});
+ assert.equal(ps.nextActionTarget('closed',null),null);
+ assert.equal(ps.nextActionTarget('setup','Mark the project ready'),null,'the header button is the action: no competing Go button');
+ assert.equal(ps.nextActionTarget('ready','Start delivery'),null);}
+// Search opens the work context a record belongs to, falling back to the register without one.
+{const sr=load('lib/v1/search-routing.ts');const r=(type,o={})=>({id:'x1',type,area:'Pipeline/Estimates',projectId:null,tenderId:null,...o});
+ assert.deepEqual(sr.searchTarget(r('Estimate',{tenderId:'t1'}),'estimator'),['Pipeline','Tenders','t1','estimate'],'estimate linked to a tender opens the tender estimate step');
+ assert.deepEqual(sr.searchTarget(r('Estimate'),'estimator'),['Pipeline','Estimates','x1'],'unlinked estimate opens in the estimate register');
+ assert.deepEqual(sr.searchTarget(r('Tender'),'admin'),['Pipeline','Tenders','x1']);
+ assert.deepEqual(sr.searchTarget(r('Project'),'admin'),['Projects',undefined,'x1']);
+ assert.deepEqual(sr.searchTarget(r('Variation',{projectId:'p1',area:'Commercial'}),'admin'),['Projects',undefined,'p1','commercial']);
+ assert.deepEqual(sr.searchTarget(r('Claim',{projectId:'p1',area:'Commercial'}),'accounts'),['Projects',undefined,'p1','commercial']);
+ assert.deepEqual(sr.searchTarget(r('SWMS',{projectId:'p1',area:'IMS & HSEQ'}),'admin'),['Projects',undefined,'p1','quality']);
+ assert.deepEqual(sr.searchTarget(r('Docket',{projectId:'p1',area:'Operations/Dockets'}),'admin'),['Projects',undefined,'p1','delivery']);
+ assert.deepEqual(sr.searchTarget(r('Docket',{area:'Operations/Dockets'}),'admin'),['Operations','Dockets'],'docket without a project opens the docket register');
+ assert.deepEqual(sr.searchTarget(r('Shift',{projectId:'p1',area:'Operations/Schedule'}),'scheduler'),['Operations','Schedule','p1']);
+ assert.deepEqual(sr.searchTarget(r('Shift',{projectId:'p1',area:'Operations/Schedule'}),'field'),['Operations','Schedule']);}
+// Shift cards list the most urgent readiness warnings first; nothing is added or dropped.
+{const sw=load('lib/v1/shift-warnings.ts');
+ const list=['Missing purchase order.','Missing TMP.','John Smith: competency expired 2026-01-01.','Casey: competency expiry not recorded.','Excavator 05: overlaps Depot yard.'];
+ const p=sw.prioritiseWarnings(list);
+ assert.deepEqual(p.top,['John Smith: competency expired 2026-01-01.','Excavator 05: overlaps Depot yard.']);
+ assert.equal(p.rest.length,3);assert.deepEqual([...p.all].sort(),[...list].sort(),'same warnings, only reordered');
+ assert.deepEqual(p.all.slice(2),['Casey: competency expiry not recorded.','Missing purchase order.','Missing TMP.']);}
 for(const r of navDef.FIELD_SHELL_ROLES)assert.equal(perm.can(r,'commercial.view'),false,r+' shell never carries money');
 assert.equal(perm.can('read_only','project.edit'),false);assert(perm.capabilitiesFor('read_only').every(c=>c.endsWith('.view')),'read-only holds view capabilities only');
 
@@ -69,6 +124,7 @@ assert.equal(abn.isValidAbn('51 824 753 556'),true);assert.equal(abn.isValidAbn(
 // Finance: forecast, earned value, claim limits, GST.
 let f=fin.forecast({originalContract:100000,approvedVariations:10000,pendingVariations:5000,originalBudget:80000,approvedVariationCost:6000,actual:30000,committed:10000,accrued:5000,claimed:40000,certified:38000,invoiced:38000,paid:20000});
 assert.equal(f.currentContract,110000);assert.equal(f.currentBudget,86000);assert.equal(f.costToComplete,41000);assert.equal(f.forecastFinalCost,86000);assert.equal(f.forecastProfit,24000);assert.equal(f.forecastMarginPct,21.82);assert.equal(f.outstanding,18000);
+assert.equal(f.approvedVariationCost,6000,'forecast exposes the approved budget change it already used (current budget = original + approved change)');assert.equal(f.currentBudget,f.originalBudget+f.approvedVariationCost);
 f=fin.forecast({originalContract:100000,approvedVariations:0,pendingVariations:0,originalBudget:80000,approvedVariationCost:0,actual:90000,committed:5000,accrued:0,claimed:0,certified:0,invoiced:0,paid:0});
 assert.equal(f.costToComplete,0,'overspend: no negative cost to complete');assert.equal(f.forecastFinalCost,95000);assert.equal(f.forecastProfit,5000);
 f=fin.forecast({originalContract:0,approvedVariations:0,pendingVariations:0,originalBudget:0,approvedVariationCost:0,actual:0,committed:0,accrued:0,claimed:0,certified:0,invoiced:0,paid:0});
@@ -117,6 +173,13 @@ const cf=load('lib/modules/operations/conflicts.ts'),rm=load('lib/v1/resource-ma
 const res=new Map([['worker:w1',{id:'w1',type:'worker',name:'Alex',status:'Active',active:true,competencies:[{type:'White card',expiryDate:'2030-01-01',status:'current'},{type:'First aid',expiryDate:'2020-01-01',status:'current'}]}],['plant:p1',{id:'p1',type:'plant',name:'Paver',status:'Available',active:true,complianceExpiry:'2026-01-01'}]]);
 const sh=(o={})=>({id:'s1',name:'Night',status:'Planned',date:'2026-03-01',start:'20:00',finish:'04:00',assignments:[{resourceType:'worker',resourceId:'w1'}],requiredCompetencies:[],...o});
 const codes=c=>c.map(x=>`${x.code}:${x.severity}`).sort();
+// Availability before saving: each candidate is judged by the same engine for the draft window.
+{const busy=[{id:'s2',name:'Depot',status:'Planned',date:'2026-03-01',start:'22:00',finish:'02:00',assignments:[{resourceType:'plant',resourceId:'p1'}]}];
+ const av=cf.availability(sh({assignments:[]}),[{resourceType:'worker',resourceId:'w1'},{resourceType:'plant',resourceId:'p1'},{resourceType:'worker',resourceId:'ghost'}],res,busy);
+ assert.deepEqual(codes(av.w1),['COMPETENCY_EXPIRED_OTHER:warn'],'available worker only carries a warning');
+ assert.deepEqual(codes(av.p1),['PLANT_COMPLIANCE_EXPIRED:block','PLANT_DOUBLE_BOOKED:block'],'plant clash and expired compliance are known before saving');
+ assert.deepEqual(codes(av.ghost),['RESOURCE_MISSING:block']);
+ assert.deepEqual(cf.availability(sh({status:'Cancelled'}),[{resourceType:'plant',resourceId:'p1'}],res,busy),{p1:[]},'cancelled shifts have no conflicts');}
 assert.deepEqual(codes(cf.evaluateShift(sh(),res,[])),['COMPETENCY_EXPIRED_OTHER:warn']);
 assert.deepEqual(codes(cf.evaluateShift(sh({requiredCompetencies:['white card','Paver ticket']}),res,[])),['COMPETENCY_EXPIRED_OTHER:warn','COMPETENCY_MISSING:block']);
 assert.deepEqual(codes(cf.evaluateShift(sh({requiredCompetencies:['First aid']}),res,[])),['COMPETENCY_EXPIRED:block']);

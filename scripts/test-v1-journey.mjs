@@ -103,6 +103,7 @@ try{
  est=(await json(await call('/api/estimates','PUT',{id:estimateId,data:{...est.data,clientName:'Riverside Council',projectName:'Riverside drainage upgrade',workType:'Drainage',items,marginValue:15,overheadsPct:8,contingencyPct:3}},A.cookie),200)).estimate;
  const tenderApprovalEarly=await call('/api/tenders/workspace','POST',{action:'submit',id:tenderId,method:'Portal'},A.cookie);assert.equal(tenderApprovalEarly.status,409,'cannot submit before approval stage');
  await json(await call('/api/estimates/approval','POST',{estimateId,action:'submit'},A.cookie),200);
+ let actionHome=await json(await call('/api/platform/home','GET',undefined,A.cookie),200);const estimateAction=actionHome.myActions.find(x=>x.key===`estimate-approval-${estimateId}`);assert.deepEqual(estimateAction?.target,{type:'tender',id:tenderId,tab:'estimate'},'Home opens estimate approval in the tender context');
  await json(await call('/api/estimates','PUT',{id:estimateId,data:est.data},A.cookie),409,'estimate in review is locked');
  await json(await call('/api/estimates/approval','POST',{estimateId,action:'approve',notes:'Checked rates'},A.cookie),200);
  const approval=await json(await call('/api/estimates/approval?estimateId='+estimateId,'GET',undefined,A.cookie),200);
@@ -110,6 +111,7 @@ try{
  // direct cost = 120/10*95 + 120*180 + 12*210 = 1140+21600+2520 = 25260
  assert.equal(approval.revisions[0].directCost,25260,'deterministic estimate arithmetic');
  await json(await call('/api/tenders/workspace','POST',{action:'request-approval',id:tenderId},A.cookie),200);
+ actionHome=await json(await call('/api/platform/home','GET',undefined,A.cookie),200);const tenderAction=actionHome.myActions.find(x=>x.key===`tender-approval-${tenderId}`);assert.deepEqual(tenderAction?.target,{type:'tender',id:tenderId,tab:'approval'},'Home opens tender approval at the approval step');
  await json(await call('/api/tenders/workspace','POST',{action:'approval-decision',id:tenderId,approve:true,notes:'Approved to submit'},A.cookie),200);
  const blocked=await json(await call('/api/tenders/workspace','POST',{action:'submit',id:tenderId,method:'Portal'},A.cookie),422,'mandatory items gate submission');
  assert.deepEqual(blocked.checks.map(c=>c.key).sort(),['requirements','returnables']);
@@ -123,6 +125,9 @@ try{
  const award=await json(await call('/api/tenders/workspace','POST',{action:'award',id:tenderId},A.cookie),200);
  assert.equal(award.projectCreated,true);const projectId=award.jobId;
  const again=await json(await call('/api/tenders/workspace','POST',{action:'award',id:tenderId},A.cookie),200);assert.equal(again.alreadyAwarded,true,'award is idempotent');
+ const estSearch=await json(await call('/api/search?q=Riverside','GET',undefined,A.cookie),200);
+ assert.equal(estSearch.results.find(r=>r.type==='Estimate')?.tenderId,tenderId,'search links an estimate to its tender so it opens in the tender workspace');
+ const foreignSearch=await json(await call('/api/search?q=Riverside','GET',undefined,B.cookie),200);assert(!foreignSearch.results.length,'another organisation finds nothing');
  console.log('PASS B: library + documents, opportunity → tender lineage, documents, requirements, bid review/decision, estimate items, approval lock, internal approval, submission gate, clarification, award');
 
  // ---------------------------------------------------------------- Scenario C
@@ -173,6 +178,14 @@ try{
  await db.execute('INSERT INTO workers (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)',[workerId,memberA.organisation_id,'Casey Field','active',JSON.stringify({role:'Pipe layer',hourlyRate:88,competencyExpiry:'2099-12-31',userId:C.user.id}),new Date().toISOString()]);
  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Australia/Sydney',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
  const shift=(await json(await call('/api/delivery','POST',{kind:'shifts',record:{id:'',name:'Pipe laying day 1',status:'Planned',metadata:{jobId:projectId,date:today,start:'07:00',finish:'15:30',scope:'Lay 40m of 375 RCP',instructions:'Shoring inspected before entry',assignments:[{resourceId:workerId,category:'workers',name:'Casey Field',role:'Pipe layer',hours:8,rate:88,payload:0,trips:0,userId:C.user.id}]}}},A.cookie),201)).record;
+ // Planner availability check: read-only, same engine, tenant-scoped, write roles only.
+ const [[shiftCountBefore]]=await db.execute('SELECT COUNT(*) AS n FROM shifts WHERE organisation_id=?',[memberA.organisation_id]);
+ const check=await json(await call('/api/delivery','POST',{kind:'shifts',check:true,candidates:[{category:'workers',resourceId:workerId}],record:{id:'',name:'Trial',status:'Planned',metadata:{jobId:projectId,date:today,start:'08:00',finish:'12:00',assignments:[]}}},A.cookie),200,'availability check');
+ assert(check.availability[workerId].some(c=>c.code==='WORKER_DOUBLE_BOOKED'&&c.severity==='block'),'a worker already on an overlapping shift shows as booked before saving');
+ const [[shiftCountAfter]]=await db.execute('SELECT COUNT(*) AS n FROM shifts WHERE organisation_id=?',[memberA.organisation_id]);assert.equal(Number(shiftCountAfter.n),Number(shiftCountBefore.n),'the availability check writes nothing');
+ const foreignCheck=await json(await call('/api/delivery','POST',{kind:'shifts',check:true,candidates:[{category:'workers',resourceId:workerId}],record:{id:'',name:'Trial',status:'Planned',metadata:{date:today,start:'08:00',finish:'12:00',assignments:[]}}},B.cookie),200,'foreign availability check');
+ assert.deepEqual(foreignCheck.availability[workerId].map(c=>c.code),['RESOURCE_MISSING'],'another organisation learns nothing about the worker');assert(!JSON.stringify(foreignCheck).includes('Casey'),'no foreign names leak');
+ assert.equal((await call('/api/delivery','POST',{kind:'shifts',check:true,candidates:[],record:{id:'',name:'x',status:'Draft',metadata:{}}},C.cookie)).status,403,'field users cannot run planner checks');
  let day=await json(await call('/api/field/today','GET',undefined,C.cookie),200);
  const mine=day.today.find(s=>s.id===shift.id);assert(mine,'field user sees assigned shift today');assert.equal(mine.swmsOutstanding,1);
  const fieldText=JSON.stringify(day);for(const k of ['"rate"','contractValue','approvedBudget','hourlyRate','sellPrice'])assert(!fieldText.includes(k),'field Today leaked '+k);
@@ -228,6 +241,8 @@ try{
  const docket=(await json(await call(`/api/dockets?month=${today.slice(0,7)}`,'GET',undefined,A.cookie),200)).dockets.find(d=>d.id===fd.docketId);
  assert(docket,'office sees the field docket');
  const priced={...docket,amount:1200,lineItems:[{description:'Pipe laying crew',quantity:8,unit:'h',rate:150,amount:1200}],status:'approved'};
+ const docketSearch=await json(await call(`/api/search?q=${encodeURIComponent(`D-${suffix}`)}`,'GET',undefined,A.cookie),200);
+ assert.equal(docketSearch.results.find(r=>r.type==='Docket')?.projectId,projectId,'search links a docket to its project');
  const approved=await json(await call('/api/dockets','PUT',priced,A.cookie),200);assert.equal(approved.costLinesPosted,1);
  await json(await call('/api/dockets','PUT',priced,A.cookie),200);
  const [[costs]]=await db.execute("SELECT COUNT(*) AS n,SUM(amount) AS total FROM cost_transactions WHERE organisation_id=? AND source_id=? AND status='actual'",[memberA.organisation_id,docket.id]);

@@ -1,6 +1,7 @@
 "use client";
 
 import { EstimateItemsEditor, EstimateApprovalPanel } from "@/components/v1/estimating";
+import { StatusBadge as WorkflowBadge } from "@/components/v1/kit";
 import { useWorkspaceBrand } from "@/components/workspace-brand";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -147,13 +148,18 @@ function newId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
-export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId}:{opportunityId?:string;opportunityName?:string;initialEstimateId?:string}={}) {
+// `embedded`: shown inside the tender workspace, which owns the page header, the approval
+// panel and the estimate register, so those parts are omitted here.
+export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId,embedded=false,onSaved,workflowState}:{opportunityId?:string;opportunityName?:string;initialEstimateId?:string;embedded?:boolean;onSaved?:()=>void;workflowState?:string|null}={}) {
   const {brand} = useWorkspaceBrand();
   const [estimates, setEstimates] = useState<EstimateRecord[]>([]);
   const [form, setForm] = useState<EstimateData>(() => makeDefaultEstimate());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [currentStatus, setCurrentStatus] = useState<EstimateStatus>("Draft");
   const [revisions, setRevisions] = useState<RevisionRecord[]>([]);
+  // One authoritative status: the approval workflow (draft → review → approved). The tender passes it
+  // in; the standalone register reads it. The legacy quote status is kept only as a quote outcome.
+  const [fetchedWorkflow, setFetchedWorkflow] = useState<string | null>(null);
   const [rateLibraries, setRateLibraries] = useState<RateLibrary[]>([DEFAULT_RATE_LIBRARY]);
   const [activeLibrary, setActiveLibrary] = useState<RateLibrary>(DEFAULT_RATE_LIBRARY);
   const [clients, setClients] = useState<Lookup[]>([]);
@@ -217,6 +223,16 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
     return () => { mounted = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (embedded || !selectedId) return;
+    let live = true;
+    fetch(`/api/estimates/approval?estimateId=${encodeURIComponent(selectedId)}`, { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((d) => { if (live && d) setFetchedWorkflow(d.state); }).catch(() => {});
+    return () => { live = false; };
+  }, [embedded, selectedId, revisions]);
+  const workflow = embedded ? (workflowState ?? null) : (selectedId ? fetchedWorkflow : null);
+  const reviewLocked = workflow === "review";
+  const outcome = ["Submitted", "Lost", "Cancelled", "Awarded"].includes(currentStatus) ? currentStatus : "open";
 
   function setField<K extends keyof EstimateData>(key: K, value: EstimateData[K]) {
     setForm((previous) => ({ ...previous, [key]: value }));
@@ -286,6 +302,7 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
       const id = payload.estimate?.id ?? selectedId;
       toast.success(selectedId ? `Revision saved as ${status}.` : "Estimate created as Draft.");
       await refresh(id);
+      onSaved?.();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "The estimate could not be saved.");
     } finally {
@@ -391,13 +408,13 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
 
   return (
     <div className="estimate-page space-y-5">
-      <div className="no-print flex flex-wrap items-end justify-between gap-4">
+      {!embedded&&<div className="no-print flex flex-wrap items-end justify-between gap-4">
         <div><p className="text-sm font-medium text-slate-500">Commercial control</p><h2 className="mt-1 text-2xl font-bold tracking-tight text-slate-950">Estimates &amp; Quotes</h2><p className="mt-1 text-sm text-slate-500">Build a priced baseline from quantities, resources and organisation rates.</p></div>
         <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => setShowRates((value) => !value)}><LibraryBig className="size-4" /> Rate library</Button><Button onClick={startNew}><Plus className="size-4" /> New estimate</Button></div>
-      </div>
+      </div>}
 
-      <div className="no-print grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="space-y-4">
+      <div className={`no-print grid gap-4 ${embedded?'':'xl:grid-cols-[280px_minmax(0,1fr)]'}`}>
+        <aside className={embedded?'hidden':'space-y-4'}>
           <div className="rounded-xl border bg-white p-3 shadow-sm">
             <div className="flex items-center justify-between px-2 pb-2"><p className="text-sm font-semibold text-slate-900">Estimate register</p><span className="text-xs text-slate-500">{estimates.length}</span></div>
             <Input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search estimates…" className="mb-2 h-9" />
@@ -412,15 +429,16 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
 
         <div className="min-w-0 space-y-5">
           <section className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
-            <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><h3 className="text-lg font-semibold text-slate-950">{form.name || form.projectName || "New estimate"}</h3><StatusBadge status={currentStatus} /></div><p className="mt-1 text-sm text-slate-500">{selectedId ? `Estimate ID ${selectedId.slice(0, 8)} · Rev ${revisions[0]?.metadata?.revisionNumber ?? 1}` : "Unsaved estimate · complete the inputs and save a draft"}</p></div><div className="no-print flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={applyLibraryRates}><RefreshCw className="size-3.5" /> Apply rates</Button><Button variant="outline" size="sm" onClick={exportEstimate}><Download className="size-3.5" /> Export</Button><Button variant="outline" size="sm" onClick={() => window.print()}><Printer className="size-3.5" /> Print quote</Button></div></div>
+            <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><h3 className="text-lg font-semibold text-slate-950">{form.name || form.projectName || "New estimate"}</h3>{workflow ? <WorkflowBadge machine="estimate" state={workflow} /> : !selectedId ? <WorkflowBadge machine="estimate" state="draft" label="Unsaved" /> : null}{!embedded && outcome !== "open" && <StatusBadge status={currentStatus === "Submitted" ? "Submitted to client" as EstimateStatus : currentStatus} />}</div><p className="mt-1 text-sm text-slate-500">{selectedId ? `Estimate ID ${selectedId.slice(0, 8)} · Rev ${revisions[0]?.metadata?.revisionNumber ?? 1}` : "Unsaved estimate · complete the inputs and save a draft"}</p></div><div className="no-print flex flex-wrap gap-2">{embedded&&<Button variant="outline" size="sm" onClick={() => setShowRates((value) => !value)}><LibraryBig className="size-4" /> Rate library</Button>}<Button variant="outline" size="sm" onClick={applyLibraryRates}><RefreshCw className="size-3.5" /> Apply rates</Button><Button variant="outline" size="sm" onClick={exportEstimate}><Download className="size-3.5" /> Export</Button><Button variant="outline" size="sm" onClick={() => window.print()}><Printer className="size-3.5" /> Print quote</Button></div></div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Field label="Estimate name" className="lg:col-span-2"><Input value={form.name} onChange={(event) => setField("name", event.target.value)} placeholder="e.g. Kings Highway resurfacing" /></Field>
-              <Field label="Status"><NativeSelect value={currentStatus} onChange={(event) => setCurrentStatus(event.target.value as EstimateStatus)} disabled={currentStatus === "Awarded"}><NativeSelectOption value="Draft">Draft</NativeSelectOption><NativeSelectOption value="Internal Review">Internal Review</NativeSelectOption><NativeSelectOption value="Submitted">Submitted</NativeSelectOption><NativeSelectOption value="Revised">Revised</NativeSelectOption><NativeSelectOption value="Lost">Lost</NativeSelectOption><NativeSelectOption value="Cancelled">Cancelled</NativeSelectOption></NativeSelect></Field>
+              {!embedded && <Field label="Quote outcome" hint="Approval is handled by the estimate workflow."><NativeSelect value={outcome} onChange={(event) => { const v = event.target.value; if (v === "open") { if (outcome !== "open") setCurrentStatus("Draft"); } else setCurrentStatus(v as EstimateStatus); }} disabled={currentStatus === "Awarded"}><NativeSelectOption value="open">Open (not yet sent)</NativeSelectOption><NativeSelectOption value="Submitted">Submitted to client</NativeSelectOption><NativeSelectOption value="Lost">Lost</NativeSelectOption><NativeSelectOption value="Cancelled">Cancelled</NativeSelectOption>{currentStatus === "Awarded" && <NativeSelectOption value="Awarded">Awarded</NativeSelectOption>}</NativeSelect></Field>}
               <Field label="Rate library"><NativeSelect value={activeLibrary.id ?? ""} onChange={(event) => { const next = rateLibraries.find((library) => library.id === event.target.value); if (next) setActiveLibrary(next); }}><NativeSelectOption value="">Select library</NativeSelectOption>{rateLibraries.map((library) => <NativeSelectOption key={library.id ?? library.name} value={library.id ?? ""}>{library.name}</NativeSelectOption>)}</NativeSelect></Field>
             </div>
+          {embedded && <div className="mt-4 flex flex-wrap items-center gap-3 border-t pt-3"><Button onClick={() => saveEstimate(currentStatus, "Saved from the tender")} disabled={busy || reviewLocked || currentStatus === "Awarded"}><Save className="size-4" /> Save changes</Button><span className="text-xs text-slate-500">{reviewLocked ? "In review: this revision is locked until it is approved or returned for changes." : currentStatus === "Awarded" ? "Awarded: the approved baseline is retained on the project." : workflow === "approved" ? "Saving starts a new draft revision that must be approved again." : "Save your changes, then submit the estimate for review above."}</span></div>}
           </section>
 
-          <div className="sticky top-16 z-10 space-y-3 rounded-xl border bg-white/95 p-3 shadow-sm backdrop-blur no-print">
+          <div className={`${embedded?'':'sticky top-16 z-10 '}space-y-3 rounded-xl border bg-white/95 p-3 shadow-sm backdrop-blur no-print`}>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
               <Metric label="Direct cost" value={<Money value={totals.directCost}/>} />
               <Metric label="Total cost" value={<Money value={totals.totalCost}/>} />
@@ -431,7 +449,7 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
               <Metric label="$/m²" value={<Money value={totals.sellRatePerM2} exact/>} />
               <Metric label="Shifts" value={totals.estimatedShifts} />
             </div>
-            <nav aria-label="Estimate sections" className="flex gap-2 overflow-x-auto">{estimateSteps.map(step=><Button key={step} size="sm" className="shrink-0" variant={estimateStep===step?"default":"outline"} onClick={()=>setEstimateStep(step)}>{step}</Button>)}</nav>
+            <nav aria-label="Estimate sections" className="flex gap-2 overflow-x-auto">{estimateSteps.filter(step=>!(embedded&&step==="Review & Approval")).map(step=><Button key={step} size="sm" className="shrink-0" variant={estimateStep===step?"default":"outline"} onClick={()=>setEstimateStep(step)}>{step}</Button>)}</nav>
           </div>
 
           <Section className={estimateStep==="Scope & Quantities"?"":"hidden"} icon={FileText} title="Client, project & scope" description="Link the estimate to the opportunity and describe the work being priced.">
@@ -515,7 +533,7 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
           {estimateStep==="Review & Approval" && (validation.errors.length > 0 || validation.warnings.length > 0) && <section className="no-print rounded-xl border border-amber-200 bg-amber-50/70 p-4"><div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 size-5 text-amber-700" /><div><h3 className="font-semibold text-amber-950">Estimate validation</h3>{validation.errors.length > 0 && <div className="mt-2 space-y-1 text-sm text-rose-800">{validation.errors.map((message) => <p key={message} className="flex gap-2"><X className="mt-0.5 size-4 shrink-0" />{message}</p>)}</div>}{validation.warnings.length > 0 && <div className="mt-2 space-y-1 text-sm text-amber-900">{validation.warnings.map((message) => <p key={message} className="flex gap-2"><AlertTriangle className="mt-0.5 size-4 shrink-0" />{message}</p>)}</div>}</div></div></section>}
 
           {estimateStep==="Review & Approval" && <EstimateApprovalPanel estimateId={selectedId} onChanged={() => { void loadList(selectedId); }} />}
-          <section className={`no-print rounded-xl border bg-[#101a24] p-4 text-white shadow-sm sm:p-5 ${estimateStep==="Review & Approval"?"":"hidden"}`}><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-wider text-orange-300">Quote control</p><h3 className="mt-1 text-lg font-semibold">{currentStatus === "Awarded" ? "Approved budget baseline" : "Save and progress this estimate"}</h3><p className="mt-1 text-sm text-slate-300">{currentStatus === "Awarded" ? `Job ${estimates.find((estimate) => estimate.id === selectedId)?.jobId?.slice(0, 8) ?? "created"} retains the awarded snapshot.` : "Every save creates a revision so the original pricing remains traceable."}</p></div><div className="flex flex-wrap justify-end gap-2">{currentStatus !== "Awarded" && <><Button variant="secondary" onClick={() => saveEstimate("Draft", "Saved draft")} disabled={busy}><Save className="size-4" /> Save draft</Button><Button variant="outline" className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white" onClick={() => saveEstimate("Internal Review", "Sent to internal review")} disabled={busy}><ShieldAlert className="size-4" /> Internal review</Button><Button variant="outline" className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white" onClick={() => saveEstimate("Submitted", "Submitted to client")} disabled={busy}><FileCheck2 className="size-4" /> Submit</Button>{["Revised", "Lost", "Cancelled"].includes(currentStatus) && <Button variant="outline" className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white" onClick={() => saveEstimate(currentStatus, `Saved as ${currentStatus}`)} disabled={busy}><Save className="size-4" /> Save {currentStatus}</Button>}<Button onClick={awardEstimate} disabled={busy || !selectedId}><CheckCircle2 className="size-4" /> Award &amp; create job</Button></>}{currentStatus === "Awarded" && <Button onClick={reopenEstimate} disabled={busy}><RefreshCw className="size-4" /> Reopen estimate</Button>}</div></div></section>
+          <section className={`no-print rounded-xl border bg-[#101a24] p-4 text-white shadow-sm sm:p-5 ${estimateStep==="Review & Approval"?"":"hidden"}`}><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-wider text-orange-300">Quote control</p><h3 className="mt-1 text-lg font-semibold">{currentStatus === "Awarded" ? "Approved budget baseline" : "Save and progress this estimate"}</h3><p className="mt-1 text-sm text-slate-300">{currentStatus === "Awarded" ? `Job ${estimates.find((estimate) => estimate.id === selectedId)?.jobId?.slice(0, 8) ?? "created"} retains the awarded snapshot.` : "Every save creates a revision so the original pricing remains traceable."}</p></div><div className="flex flex-wrap justify-end gap-2">{currentStatus !== "Awarded" && <><Button variant="secondary" onClick={() => saveEstimate(outcome === "open" ? currentStatus : "Draft", "Saved draft")} disabled={busy || reviewLocked}><Save className="size-4" /> Save draft</Button><Button variant="outline" className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white" onClick={() => saveEstimate("Submitted", "Submitted to client")} disabled={busy || reviewLocked}><FileCheck2 className="size-4" /> Mark submitted to client</Button>{["Lost", "Cancelled"].includes(currentStatus) && <Button variant="outline" className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white" onClick={() => saveEstimate(currentStatus, `Saved as ${currentStatus}`)} disabled={busy}><Save className="size-4" /> Save as {currentStatus.toLowerCase()}</Button>}<Button onClick={awardEstimate} disabled={busy || !selectedId}><CheckCircle2 className="size-4" /> Award &amp; create job</Button></>}{currentStatus === "Awarded" && <Button onClick={reopenEstimate} disabled={busy}><RefreshCw className="size-4" /> Reopen estimate</Button>}</div></div></section>
         </div>
       </div>
 

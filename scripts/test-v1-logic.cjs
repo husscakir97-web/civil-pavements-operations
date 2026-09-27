@@ -60,6 +60,20 @@ assert.deepEqual(navDef.adminSubsFor('read_only'),[],'read-only: no admin area')
 assert.deepEqual(navDef.adminSubsFor('field'),[]);assert.deepEqual(navDef.adminSubsFor('supervisor'),[]);
 assert(!navDef.adminSubsFor('office').some(k=>['Team & Permissions','Integrations','Settings','Company'].includes(k)),'office has no organisation administration');
 assert.deepEqual(navDef.FIELD_SHELL_ROLES,['field','supervisor']);
+// Six-engine operating model: fixed order, explicit hand-offs and backwards-compatible legacy routes.
+{const eng=load('lib/v1/engines.ts');
+ assert.deepEqual(eng.ENGINE_KEYS,['Win Work','Prepare Work','Resource Work','Deliver Work','Control Money','Learn']);
+ assert.deepEqual(eng.ENGINES.map(e=>e.number),[1,2,3,4,5,6]);
+ assert.deepEqual(eng.ENGINES.map(e=>e.next),['Prepare Work','Resource Work','Deliver Work','Control Money','Learn','Win Work']);
+ assert.deepEqual(eng.resolveEngineRoute({area:'Pipeline',sub:'Tenders',id:'t1',tab:'estimate'}),{area:'Win Work',sub:'Tenders',id:'t1',tab:'estimate'});
+ assert.deepEqual(eng.resolveEngineRoute({area:'Projects',id:'p1',tab:'delivery'}),{area:'Prepare Work',sub:'Projects',id:'p1',tab:'delivery'});
+ assert.deepEqual(eng.resolveEngineRoute({area:'Operations',sub:'Resources'}),{area:'Resource Work',sub:'Resources'});
+ assert.deepEqual(eng.resolveEngineRoute({area:'Operations',sub:'Dockets'}),{area:'Deliver Work',sub:'Dockets'});
+ assert.deepEqual(eng.resolveEngineRoute({area:'Commercial'}),{area:'Control Money',sub:'Commercial'});
+ assert.deepEqual(eng.resolveEngineRoute({area:'IMS & HSEQ'}),{area:'Prepare Work',sub:'IMS & HSEQ'});
+ assert.deepEqual(eng.resolveEngineRoute({area:'Reports'}),{area:'Learn',sub:'Reports'});
+ assert.deepEqual(eng.resolveEngineRoute({area:'Deliver Work',sub:'Projects',id:'p2'}),{area:'Deliver Work',sub:'Projects',id:'p2'},'new engine routes remain stable');
+}
 // Tender lifecycle presentation: step states and next-action targets mirror the tender stage and stats.
 {const tf=load('lib/v1/tender-flow.ts');
  const base={stage:'pricing',approvalStatus:'not_requested',submittedAt:null,estimateId:'e1',projectId:null,checks:[{key:'estimate',ok:true},{key:'requirements',ok:false},{key:'returnables',ok:false},{key:'approval',ok:false}],stats:{documents:1,requirements:3,suggested:0,mandatoryOpen:2,returnables:1,returnablesMandatoryOpen:1,clarificationsOpen:0,estimateState:'approved',bidDecision:'bid',approvedRevisionNumber:1}};

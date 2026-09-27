@@ -18,11 +18,12 @@ type Detail={project:Project;readiness:{percent:number|null;blockers:string[];ca
 
 export function ProjectsView(){
  const {route,navigate}=useNav();
- if(route.id)return <ProjectWorkspace id={route.id} tab={route.tab} onBack={()=>navigate('Projects')}/>;
- return <ProjectRegister/>;
+ const area=route.area==='Deliver Work'?'Deliver Work':'Prepare Work';
+ if(route.id)return <ProjectWorkspace id={route.id} tab={route.tab} area={area} onBack={()=>navigate(area,'Projects')}/>;
+ return <ProjectRegister area={area}/>;
 }
 
-function ProjectRegister(){
+function ProjectRegister({area}:{area:'Prepare Work'|'Deliver Work'}){
  const {data,error,loading,refresh}=useApi<{projects:Project[]}>('/api/projects');
  const {navigate}=useNav();const {can}=useSession();const [creating,setCreating]=useState(false);
  const [show,setShow]=useState<'active'|'setup'|'ready'|'delivery'|'closeout'|'closed'>('active');
@@ -35,13 +36,13 @@ function ProjectRegister(){
   <ErrorState error={error} onRetry={refresh}/>
   {all.length>0&&<div role="group" aria-label="Project workflow stage" className="flex flex-wrap gap-2">{filters.map(x=><button key={x.key} aria-pressed={show===x.key} onClick={()=>setShow(x.key)} className={`min-h-9 rounded-full border px-3 text-sm ${show===x.key?'border-[#172633] bg-[#172633] text-white':'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{x.label} ({x.count})</button>)}</div>}
   {loading&&!data?<Loading/>:!all.length?<EmptyState title="No projects yet." detail="Projects are created automatically when a tender or estimate is awarded, preserving the approved baseline."/>:!list.length?<EmptyState title={`No projects are in ${filters.find(x=>x.key===show)?.label.toLowerCase()}.`}/>:
-   <section className="surface overflow-hidden"><ul className="divide-y">{list.map(p=><li key={p.id}><button onClick={()=>navigate('Projects',undefined,p.id)} className="grid w-full gap-2 p-4 text-left hover:bg-slate-50 md:grid-cols-[minmax(0,2fr)_1fr_1fr_1fr] md:items-center">
+   <section className="surface overflow-hidden"><ul className="divide-y">{list.map(p=><li key={p.id}><button onClick={()=>navigate(area,'Projects',p.id)} className="grid w-full gap-2 p-4 text-left hover:bg-slate-50 md:grid-cols-[minmax(0,2fr)_1fr_1fr_1fr] md:items-center">
     <span className="min-w-0"><span className="block font-medium">{p.name}</span><span className="block text-xs text-slate-500">{[p.projectNumber,p.clientName,p.projectManagerName].filter(Boolean).join(' · ')||'Client not recorded'}</span></span>
     <span><StatusBadge machine="project" state={p.stage}/></span>
     <span>{can('commercial.view')?<span className="text-sm">{money(p.contractValue)}</span>:<span className="text-sm text-slate-500">{dateText(p.startDate)}</span>}</span>
     <span><Progress value={p.readiness} label="Ready"/>{p.nextAction&&<span className="mt-1 block truncate text-xs text-orange-800">{p.nextAction}</span>}</span>
    </button></li>)}</ul></section>}
-  <Sheet open={creating} onOpenChange={setCreating}><SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-lg"><SheetTitle className="border-b px-5 py-4 text-lg font-semibold">New project</SheetTitle><SheetDescription className="sr-only">Create project</SheetDescription>{creating&&<NewProjectForm onDone={id=>{setCreating(false);refresh();if(id)navigate('Projects',undefined,id);}}/>}</SheetContent></Sheet>
+  <Sheet open={creating} onOpenChange={setCreating}><SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-lg"><SheetTitle className="border-b px-5 py-4 text-lg font-semibold">New project</SheetTitle><SheetDescription className="sr-only">Create project</SheetDescription>{creating&&<NewProjectForm onDone={id=>{setCreating(false);refresh();if(id)navigate(area,'Projects',id);}}/>}</SheetContent></Sheet>
  </div>;
 }
 function NewProjectForm({onDone}:{onDone:(id?:string)=>void}){
@@ -55,7 +56,7 @@ function NewProjectForm({onDone}:{onDone:(id?:string)=>void}){
 
 type TabKey='overview'|'setup'|'delivery'|'quality'|'commercial'|'documents'|'closeout';
 const TAB_LABEL:Record<TabKey,string>={overview:'Overview',setup:'Setup',delivery:'Delivery',quality:'Quality & HSEQ',commercial:'Commercial',documents:'Documents',closeout:'Closeout'};
-function ProjectWorkspace({id,tab,onBack}:{id:string;tab?:string;onBack:()=>void}){
+function ProjectWorkspace({id,tab,area,onBack}:{id:string;tab?:string;area:'Prepare Work'|'Deliver Work';onBack:()=>void}){
  const {navigate}=useNav();const session=useSession();const {busy,error:actionError,run}=useAction();
  const active=(tab||'overview') as TabKey;
  const [checklistFocus,setChecklistFocus]=useState<string|null>(null);
@@ -70,9 +71,9 @@ function ProjectWorkspace({id,tab,onBack}:{id:string;tab?:string;onBack:()=>void
  const scrollTo=(anchor:string)=>setTimeout(()=>document.getElementById(anchor)?.scrollIntoView({behavior:'smooth',block:'start'}),350);
  /** Every "fix" and "next action" button lands on the place the work is done. */
  const goTarget=(t:SetupTarget)=>{
-  if(t.kind==='tab')return navigate('Projects',undefined,id,t.tab);
+  if(t.kind==='tab')return navigate(area,'Projects',id,t.tab);
   if(t.kind==='area')return navigate(t.area,t.sub,t.withProject?id:undefined);
-  navigate('Projects',undefined,id,'setup');
+  navigate(area,'Projects',id,'setup');
   if(t.kind==='anchor')return scrollTo(t.anchor);
   setChecklistFocus(t.category);scrollTo('setup-checklist');
  };
@@ -82,7 +83,7 @@ function ProjectWorkspace({id,tab,onBack}:{id:string;tab?:string;onBack:()=>void
  const blockedReady=d.readiness.blockers.length>0,blockedClose=Boolean(d.closeout?.blockers.length);
  return <div>
   <div className="-mx-4 mb-4 border-b bg-[#f6f7f9]/95 px-4 pb-3 pt-1 backdrop-blur sm:sticky sm:top-[72px] sm:z-10 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
-   <PageHeader crumbs={[{label:'Projects',onClick:onBack},{label:p.name,onClick:active==='overview'?undefined:()=>navigate('Projects',undefined,id)},...(active==='overview'?[]:[{label:TAB_LABEL[active]}])]} title={p.name} badges={<StatusBadge machine="project" state={p.stage}/>}
+   <PageHeader crumbs={[{label:'Projects',onClick:onBack},{label:p.name,onClick:active==='overview'?undefined:()=>navigate(area,'Projects',id)},...(active==='overview'?[]:[{label:TAB_LABEL[active]}])]} title={p.name} badges={<StatusBadge machine="project" state={p.stage}/>}
     subtitle={[p.projectNumber,p.clientName||'No client',p.projectManagerName?`PM ${p.projectManagerName}`:'No PM assigned',session.can('commercial.view')&&p.contractValue!=null?`Contract ${money(p.contractValue)}`:null].filter(Boolean).join(' · ')}
     actions={<div className="flex flex-wrap items-center gap-2">{p.stage==='setup'&&<Progress value={d.readiness.percent} label={blockedReady?`${d.readiness.blockers.length} blocker${d.readiness.blockers.length===1?'':'s'}`:'Ready'}/>}{moves.filter(m=>session.can(m.capability)).map(m=>{const blocked=m.to==='ready'&&blockedReady||m.to==='closed'&&blockedClose;return <Btn key={m.to} variant={m.to==='closed'?'danger':blocked?'secondary':'primary'} busy={busy} disabled={blocked} title={blocked?(m.to==='ready'?'Resolve the readiness blockers first':'Resolve the closeout items first'):undefined} onClick={()=>move(m.to)}>{m.label}</Btn>;})}</div>}/>
    <NextAction text={p.nextAction} onClick={nextGo} actionLabel={nextTarget?.kind==='tab'?`Go to ${TAB_LABEL[nextTarget.tab]}`:'Go'}/>
@@ -91,9 +92,9 @@ function ProjectWorkspace({id,tab,onBack}:{id:string;tab?:string;onBack:()=>void
   <ErrorState error={actionError||error} onRetry={refresh}/>
   {closed&&<p className="mb-4 rounded-lg border bg-slate-50 p-3 text-sm text-slate-600">This project is closed. Records are read-only; reopen it (with a reason) to add operational records.</p>}
   {/* Phones: one labelled picker for the seven areas (no sideways tab hunt). Same routes, so deep links and back/forward work. */}
-  <label className="sticky top-[72px] z-10 -mx-4 mb-4 grid gap-1 border-b bg-[#f6f7f9]/95 px-4 pb-3 pt-2 text-sm backdrop-blur sm:hidden"><span className="truncate text-xs font-semibold uppercase tracking-wide text-slate-500">{p.name} · section</span><select aria-label="Project section" className={`${field} font-semibold`} value={active} onChange={e=>navigate('Projects',undefined,id,e.target.value)}>{tabs.filter(t=>!t.hidden).map(t=><option key={t.key} value={t.key}>{t.label}{t.key==='setup'&&p.stage==='setup'&&d.readiness.blockers.length?` · ${d.readiness.blockers.length} blocker${d.readiness.blockers.length===1?'':'s'}`:''}</option>)}</select></label>
-  <div className="hidden sm:block"><Tabs label="Project workspace" tabs={tabs} active={active} onChange={k=>navigate('Projects',undefined,id,k)}/></div>
-  {active==='overview'&&<Overview d={d} onTab={k=>navigate('Projects',undefined,id,k)} goTarget={goTarget}/>}
+  <label className="sticky top-[72px] z-10 -mx-4 mb-4 grid gap-1 border-b bg-[#f6f7f9]/95 px-4 pb-3 pt-2 text-sm backdrop-blur sm:hidden"><span className="truncate text-xs font-semibold uppercase tracking-wide text-slate-500">{p.name} · section</span><select aria-label="Project section" className={`${field} font-semibold`} value={active} onChange={e=>navigate(area,'Projects',id,e.target.value)}>{tabs.filter(t=>!t.hidden).map(t=><option key={t.key} value={t.key}>{t.label}{t.key==='setup'&&p.stage==='setup'&&d.readiness.blockers.length?` · ${d.readiness.blockers.length} blocker${d.readiness.blockers.length===1?'':'s'}`:''}</option>)}</select></label>
+  <div className="hidden sm:block"><Tabs label="Project workspace" tabs={tabs} active={active} onChange={k=>navigate(area,'Projects',id,k)}/></div>
+  {active==='overview'&&<Overview d={d} onTab={k=>navigate(area,'Projects',id,k)} goTarget={goTarget}/>}
   {active==='setup'&&<Setup d={d} onChanged={refresh} goTarget={goTarget} focus={checklistFocus} setFocus={setChecklistFocus}/>}
   {active==='delivery'&&<Delivery projectId={id}/>}
   {active==='quality'&&<Quality projectId={id} closed={closed} onChanged={refresh}/>}

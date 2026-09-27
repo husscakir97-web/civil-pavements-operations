@@ -1,0 +1,1 @@
+ALTER TABLE `dockets` MODIFY COLUMN `organisation_id` varchar(191) NOT NULL;

@@ -49,3 +49,5 @@ next-env.d.ts
 # Keep the names-only environment template in source control.
 !.env.example
 .dev.vars*
+
+/exports/

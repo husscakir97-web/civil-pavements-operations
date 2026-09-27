@@ -49,6 +49,23 @@ export type SubcontractorLine = {
   unitRate: number;
 };
 
+/** Generic work-section line (any discipline): quantity × rate, or hours × rate where
+ * hours derive from quantity ÷ productivity (units per hour). */
+export type CostCategory = "labour" | "plant" | "material" | "subcontract" | "other";
+export const COST_CATEGORIES: CostCategory[] = ["labour", "plant", "material", "subcontract", "other"];
+export type EstimateItem = {
+  id: string;
+  section: string;
+  costCode: string;
+  category: CostCategory;
+  description: string;
+  quantity: number;
+  unit: string;
+  productivity: number;
+  rateBasis: "unit" | "hour";
+  rate: number;
+};
+
 export type RateItem = {
   id: string;
   name: string;
@@ -122,6 +139,9 @@ export type EstimateData = {
   notes: string;
   exclusions: string;
   assumptions: string;
+  /** Asphalt/paving quantity engine. Legacy estimates default to true. */
+  includePaving: boolean;
+  items: EstimateItem[];
 };
 
 export type EstimateTotals = {
@@ -140,6 +160,8 @@ export type EstimateTotals = {
   mobilisationCost: number;
   allowancesCost: number;
   subcontractorCost: number;
+  itemsCost: number;
+  itemsByCategory: Record<CostCategory, number>;
   directCost: number;
   overheadCost: number;
   contingencyCost: number;
@@ -268,6 +290,33 @@ function normaliseSubcontractors(value: unknown): SubcontractorLine[] {
   });
 }
 
+export function itemHours(item: EstimateItem) {
+  return item.productivity > 0 ? item.quantity / item.productivity : 0;
+}
+export function itemAmount(item: EstimateItem) {
+  return item.rateBasis === "hour" ? itemHours(item) * item.rate : item.quantity * item.rate;
+}
+
+function normaliseItems(value: unknown): EstimateItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 500).map((line, index) => {
+    const raw = (line ?? {}) as Record<string, unknown>;
+    const category = COST_CATEGORIES.includes(raw.category as CostCategory) ? raw.category as CostCategory : "other";
+    return {
+      id: textValue(raw.id, lineId("item", index)),
+      section: textValue(raw.section, "General"),
+      costCode: textValue(raw.costCode),
+      category,
+      description: textValue(raw.description, "Item"),
+      quantity: Math.max(0, numberValue(raw.quantity)),
+      unit: textValue(raw.unit, "item"),
+      productivity: Math.max(0, numberValue(raw.productivity)),
+      rateBasis: raw.rateBasis === "hour" ? "hour" : "unit",
+      rate: Math.max(0, numberValue(raw.rate)),
+    };
+  });
+}
+
 export function makeDefaultEstimate(library: RateLibrary = DEFAULT_RATE_LIBRARY): EstimateData {
   const rate = (category: keyof RateLibrary, id: string, fallback: number) => {
     const list = library[category];
@@ -339,6 +388,25 @@ export function makeDefaultEstimate(library: RateLibrary = DEFAULT_RATE_LIBRARY)
     notes: "",
     exclusions: "Permit fees, major pavement failures and out-of-hours approvals unless stated.",
     assumptions: "Access, traffic staging, supplier availability and production rates remain as priced.",
+    includePaving: true,
+    items: [],
+  };
+}
+
+/** A discipline-neutral starting point: no paving quantities, crew or plant assumptions. */
+export function makeGeneralEstimate(library: RateLibrary = DEFAULT_RATE_LIBRARY): EstimateData {
+  return {
+    ...makeDefaultEstimate(library),
+    workType: "General works",
+    specification: "",
+    includePaving: false,
+    areaM2: 0,
+    labour: [],
+    plant: [],
+    traffic: [],
+    mobilisations: 0,
+    exclusions: "",
+    assumptions: "",
   };
 }
 
@@ -400,19 +468,27 @@ export function normaliseEstimateData(input: unknown, library: RateLibrary = DEF
     notes: textValue(raw.notes, defaults.notes),
     exclusions: textValue(raw.exclusions, defaults.exclusions),
     assumptions: textValue(raw.assumptions, defaults.assumptions),
+    includePaving: raw.includePaving !== false,
+    items: normaliseItems(raw.items),
   };
 }
 
 const roundMoney = (value: number) => Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
 const roundQuantity = (value: number) => Math.round((Number.isFinite(value) ? value : 0) * 1000) / 1000;
 
-export function calculateEstimate(data: EstimateData): EstimateTotals {
+export function calculateEstimate(input: EstimateData): EstimateTotals {
+  const paving = input.includePaving !== false;
+  const data = paving ? input : { ...input, areaM2: 0, lengthM: 0, widthM: 0, profilingIncluded: false, productionTonnesPerShift: 0 };
+  const items = Array.isArray(input.items) ? input.items : [];
+  const itemsByCategory = Object.fromEntries(COST_CATEGORIES.map((c) => [c, 0])) as Record<CostCategory, number>;
+  for (const item of items) itemsByCategory[item.category] += itemAmount(item);
+  const itemsCost = Object.values(itemsByCategory).reduce((a, b) => a + b, 0);
   const effectiveAreaM2 = data.areaM2 > 0 ? data.areaM2 : data.lengthM * data.widthM;
   const rawTonnes = effectiveAreaM2 * (data.compactedDepthMm / 1000) * data.materialDensityTPerM3;
   const totalTonnes = rawTonnes * (1 + data.wastePct / 100);
   const estimatedShifts = data.shiftsOverride > 0
     ? Math.ceil(data.shiftsOverride)
-    : data.productionTonnesPerShift > 0
+    : paving && data.productionTonnesPerShift > 0
       ? Math.max(1, Math.ceil(totalTonnes / data.productionTonnesPerShift))
       : 0;
   const requiredTrips = data.truckPayloadT > 0 ? Math.ceil(totalTonnes / data.truckPayloadT) : 0;
@@ -429,7 +505,7 @@ export function calculateEstimate(data: EstimateData): EstimateTotals {
   const allowancesCost = data.accommodationNights * data.accommodationPersons * data.accommodationRate
     + data.travelPersons * data.travelDays * data.travelAllowanceRate;
   const directCost = materialCost + tackCoatCost + profilingCost + cartageCost + labourCost + plantCost
-    + trafficCost + mobilisationCost + allowancesCost + subcontractorCost;
+    + trafficCost + mobilisationCost + allowancesCost + subcontractorCost + itemsCost;
   const overheadCost = directCost * data.overheadsPct / 100;
   const contingencyCost = (directCost + overheadCost) * data.contingencyPct / 100;
   const totalCost = directCost + overheadCost + contingencyCost;
@@ -456,6 +532,8 @@ export function calculateEstimate(data: EstimateData): EstimateTotals {
     mobilisationCost: roundMoney(mobilisationCost),
     allowancesCost: roundMoney(allowancesCost),
     subcontractorCost: roundMoney(subcontractorCost),
+    itemsCost: roundMoney(itemsCost),
+    itemsByCategory: Object.fromEntries(COST_CATEGORIES.map((c) => [c, roundMoney(itemsByCategory[c])])) as Record<CostCategory, number>,
     directCost: roundMoney(directCost),
     overheadCost: roundMoney(overheadCost),
     contingencyCost: roundMoney(contingencyCost),
@@ -479,6 +557,18 @@ export function validateEstimate(data: EstimateData, totals: EstimateTotals): Va
   if (!data.projectName) errors.push("Enter a project name.");
   if (!data.site) warnings.push("Site has not been entered.");
   if (!data.workType) errors.push("Select a work type.");
+  if (data.includePaving === false) {
+    if (totals.directCost <= 0) errors.push("Add at least one priced item.");
+    const perShift = [...data.labour, ...data.plant, ...data.traffic].some((line) => ("headcount" in line ? line.headcount : line.units) > 0);
+    if (perShift && totals.estimatedShifts <= 0) errors.push("Enter the number of shifts for crew, plant and traffic lines.");
+    (data.items || []).forEach((item, index) => {
+      if (item.quantity > 0 && item.rate <= 0) errors.push(`Item ${index + 1} (${item.description}) has no rate.`);
+      if (item.rateBasis === "hour" && item.quantity > 0 && item.productivity <= 0) errors.push(`Item ${index + 1} (${item.description}) needs a productivity to calculate hours.`);
+    });
+    if (data.marginType === "margin" && data.marginValue >= 99.9) errors.push("Margin must be below 99.9%.");
+    if (totals.grossMargin + 0.0001 < data.targetMarginPct) warnings.push(`Gross margin is ${totals.grossMargin.toFixed(1)}%, below the ${data.targetMarginPct.toFixed(1)}% target.`);
+    return { errors, warnings, isValid: errors.length === 0 };
+  }
   if (totals.effectiveAreaM2 <= 0) errors.push("Area must be greater than zero.");
   if (data.compactedDepthMm <= 0) errors.push("Compacted depth must be greater than zero.");
   if (data.compactedDepthMm > 300) errors.push("Compacted depth looks unrealistic (maximum 300 mm).");
@@ -500,6 +590,10 @@ export function validateEstimate(data: EstimateData, totals: EstimateTotals): Va
     ...data.subcontractors.filter((line) => line.quantity > 0 && line.unitRate <= 0).map((line) => `${line.name || "Subcontractor"} rate is missing.`),
   ];
   errors.push(...rateLineErrors);
+  (data.items || []).forEach((item, index) => {
+    if (item.quantity > 0 && item.rate <= 0) errors.push(`Item ${index + 1} (${item.description}) has no rate.`);
+    if (item.rateBasis === "hour" && item.quantity > 0 && item.productivity <= 0) errors.push(`Item ${index + 1} (${item.description}) needs a productivity to calculate hours.`);
+  });
   if (data.areaM2 > 0 && data.lengthM > 0 && data.widthM > 0) {
     const dimensionalArea = data.lengthM * data.widthM;
     if (Math.abs(dimensionalArea - data.areaM2) / data.areaM2 > 0.05) {
@@ -510,4 +604,19 @@ export function validateEstimate(data: EstimateData, totals: EstimateTotals): Va
     warnings.push(`Gross margin is ${totals.grossMargin.toFixed(1)}%, below the ${data.targetMarginPct.toFixed(1)}% target.`);
   }
   return { errors, warnings, isValid: errors.length === 0 };
+}
+
+/** Cost breakdown by the platform's five cost categories (used for baselines and estimate-vs-actual). */
+export function costBreakdown(totals: EstimateTotals) {
+  const items = totals.itemsByCategory ?? { labour: 0, plant: 0, material: 0, subcontract: 0, other: 0 };
+  const breakdown = {
+    labour: roundMoney(totals.labourCost + items.labour),
+    plant: roundMoney(totals.plantCost + items.plant),
+    material: roundMoney(totals.materialCost + totals.tackCoatCost + items.material),
+    subcontract: roundMoney(totals.subcontractorCost + totals.trafficCost + totals.profilingCost + items.subcontract),
+    other: roundMoney(totals.cartageCost + totals.mobilisationCost + totals.allowancesCost + items.other),
+    indirect: roundMoney(totals.overheadCost),
+    contingency: roundMoney(totals.contingencyCost),
+  };
+  return { ...breakdown, total: roundMoney(totals.totalCost) };
 }

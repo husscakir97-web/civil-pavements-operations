@@ -2,10 +2,10 @@ const ts=require('typescript'),fs=require('node:fs'),path=require('node:path'),a
 const {DatabaseSync}=require('node:sqlite');
 const sql=new DatabaseSync(':memory:');
 for(const file of fs.readdirSync('drizzle').filter(f=>f.endsWith('.sql')).sort())sql.exec(fs.readFileSync('drizzle/'+file,'utf8'));
-const db={prepare(query){let values=[];const stmt={bind(...v){values=v;return stmt},async first(){return sql.prepare(query).get(...values)||null},async all(){return {results:sql.prepare(query).all(...values)}},async run(){const r=sql.prepare(query).run(...values);return {success:true,meta:{changes:Number(r.changes)}}}};return stmt},async batch(items){sql.exec('BEGIN');try{const out=[];for(const item of items)out.push(await item.run());sql.exec('COMMIT');return out}catch(e){sql.exec('ROLLBACK');throw e}}};
+require('./test-services.cjs').prepare(sql);const db={prepare(query){let values=[];const stmt={bind(...v){values=v;return stmt},async first(){return sql.prepare(query).get(...values)||null},async all(){return {results:sql.prepare(query).all(...values)}},async run(){const r=sql.prepare(query).run(...values);return {success:true,meta:{changes:Number(r.changes)}}}};return stmt},async batch(items){sql.exec('BEGIN');try{const out=[];for(const item of items)out.push(await item.run());sql.exec('COMMIT');return out}catch(e){sql.exec('ROLLBACK');throw e}}};
 const files=new Map(),bucket={async put(k,b,opts){files.set(k,{body:b,writeHttpMetadata(h){h.set('Content-Type',opts.httpMetadata.contentType)}})},async get(k){return files.get(k)}};
-const cache={};function load(file){file=path.resolve(file);if(cache[file])return cache[file].exports;const loadedModule={exports:{}};cache[file]=loadedModule;const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;new Function('require','module','exports',code)(name=>name==='cloudflare:workers'?{env:{DB:db,BUCKET:bucket}}:name.startsWith('@/')?load(name.slice(2)+'.ts'):name.startsWith('.')?load(path.resolve(path.dirname(file),name)+'.ts'):require(name),loadedModule,loadedModule.exports);return loadedModule.exports}
-const headers={'oai-authenticated-user-id':'test-owner','oai-authenticated-user-email':'huss.cakir97@gmail.com'};
+const cache={};function load(file){file=path.resolve(file);const external=require('./test-services.cjs').mock(file,db,sql,typeof bucket==='undefined'?undefined:bucket);if(external)return external;if(cache[file])return cache[file].exports;const loadedModule={exports:{}};cache[file]=loadedModule;const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;new Function('require','module','exports',code)(name=>name.startsWith('@/')?load(name.slice(2)+'.ts'):name.startsWith('.')?load(path.resolve(path.dirname(file),name)+'.ts'):require(name),loadedModule,loadedModule.exports);return loadedModule.exports}
+const headers={'x-test-user-id':'test-owner','x-test-user-email':'admin@example.invalid'};
 const req=(method='GET',body)=>new Request('https://test.invalid/api/invoices',{method,headers:{...headers,...(body instanceof FormData?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:body instanceof FormData?body:JSON.stringify(body)});
 (async()=>{
  const {parseInvoice,invoiceIssues}=load('lib/invoice-parser.ts'),invoices=load('app/api/invoices/route.ts');
@@ -32,8 +32,8 @@ const req=(method='GET',body)=>new Request('https://test.invalid/api/invoices',{
  assert.equal((await workspace.PUT(req('PUT',{...brand,accentColor:'invalid'}))).status,400);
  assert.equal((await (await invoices.GET(req())).json()).invoices.length,2,'Branding must not appear as an invoice');
  assert.equal(sql.prepare("SELECT count(*) AS n FROM audit_events WHERE name='workspace.branding.updated'").get().n,1);
- sql.prepare('INSERT INTO users VALUES (?,?,?,?,?,?)').run('reader','roadworx-sydney','reader@example.invalid','Reader','Read-only',new Date().toISOString());
- const readRequest=(method='GET')=>new Request('https://test.invalid',{method,headers:{'oai-authenticated-user-id':'reader','oai-authenticated-user-email':'reader@example.invalid','Content-Type':'application/json'},body:method==='GET'?undefined:JSON.stringify(brand)});
+ sql.prepare('INSERT INTO users VALUES (?,?,?,?,?,?)').run('reader','roadworx-sydney','reader@example.invalid','Reader','field',new Date().toISOString());
+ const readRequest=(method='GET')=>new Request('https://test.invalid',{method,headers:{'x-test-user-id':'reader','x-test-user-email':'reader@example.invalid','Content-Type':'application/json'},body:method==='GET'?undefined:JSON.stringify(brand)});
  assert.equal((await workspace.PUT(readRequest('PUT'))).status,403);
  assert.equal((await ai.POST(readRequest('POST'))).status,403);
  assert.equal((await (await workspace.GET(readRequest())).json()).canEdit,false);
@@ -65,15 +65,15 @@ const req=(method='GET',body)=>new Request('https://test.invalid/api/invoices',{
  assert.equal(sql.prepare('SELECT count(*) AS n FROM job_ims_items WHERE job_id=?').get('ims-job').n,15,'Pack initialization must be idempotent');
  const commercial=load('app/api/commercial/route.ts');
  assert.equal((await commercial.GET(new Request('https://test.invalid'))).status,401);
- assert.equal((await commercial.POST(req('POST',{action:'variation',jobId:'ims-job',description:'Extra work',submittedValue:450}))).status,201);
+ // Intended V1 rule: legacy commercial writes are retired (single money store in the typed commercial tables).
+ assert.equal((await commercial.POST(req('POST',{action:'variation',jobId:'ims-job',description:'Extra work',submittedValue:450}))).status,410);
  const docketTime=new Date().toISOString();
  sql.prepare('INSERT INTO dockets (id,docket_no,work_date,organisation_id,amount,status,links,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)').run('claim-docket','CLAIM-1','2026-09-12','roadworx-sydney',100,'approved',JSON.stringify({jobId:'ims-job'}),docketTime,docketTime);
- assert.equal((await commercial.POST(req('POST',{action:'claim',jobId:'ims-job',claimPeriod:'2026-09',docketIds:['claim-docket']}))).status,200);
- assert.notEqual((await commercial.POST(req('POST',{action:'claim',jobId:'ims-job',claimPeriod:'2026-09',docketIds:['claim-docket']}))).status,200);
- assert.equal(sql.prepare('SELECT count(*) AS n FROM claim_items WHERE docket_id=?').get('claim-docket').n,1);
- const commercialData=await (await commercial.GET(req())).json();assert.equal(commercialData.jobs.find(j=>j.id==='ims-job').current.claimed,100);
+ assert.equal((await commercial.POST(req('POST',{action:'claim',jobId:'ims-job',claimPeriod:'2026-09',docketIds:['claim-docket']}))).status,410);
+ assert.equal(sql.prepare('SELECT count(*) AS n FROM claim_items WHERE docket_id=?').get('claim-docket').n,0,'no legacy claim rows are written');
+ const commercialData=await (await commercial.GET(req())).json();assert.equal(commercialData.jobs.find(j=>j.id==='ims-job').current.unbilled,100,'approved docket stays claimable in the V1 claims workflow');
  const hub=load('app/api/job-hub/route.ts');assert.equal((await hub.GET(new Request('https://test.invalid/api/job-hub?jobId=ims-job',{headers}))).status,200);
- console.log('PASS: saved variation, claim preparation, duplicate-claim exclusion, commercial reporting, authenticated Job Hub.');
+ console.log('PASS: legacy variation/claim writes retired (410), approved docket left for V1 claims, commercial reporting, authenticated Job Hub.');
  const originalFetch=global.fetch;let providerCalls=0;
  global.fetch=async()=>{providerCalls++;throw new Error('Unexpected provider call')};
  try{for(let i=0;i<2;i++){assert.equal((await ai.POST(req('POST',{sourceId:saved.id}))).status,409);assert.equal((await legacy.POST(req('POST',{sourceId:saved.id}))).status,409)}}finally{global.fetch=originalFetch}

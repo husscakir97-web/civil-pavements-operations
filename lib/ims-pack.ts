@@ -1,3 +1,4 @@
+import type { Database } from '@/lib/platform/database';
 export const CORE_PACK: Array<[string, string]> = [
   ['Project management plan', 'Project management plan'], ['Quality plan', 'Quality plan'], ['ITP', 'ITP'],
   ['Project risk register', 'Risk register'], ['SWMS', 'SWMS'], ['Site-specific risk assessment', 'Risk assessment'],
@@ -7,6 +8,6 @@ export const CORE_PACK: Array<[string, string]> = [
   ['Subcontractor documentation', 'Subcontractor compliance'], ['Client approvals', 'Client approval'],
   ['Pre-start and toolbox records', 'Pre-start'],
 ];
-export function packStatements(db:D1Database,organisationId:string,jobId:string,now:string){
- return CORE_PACK.map(([title,type])=>db.prepare('INSERT OR IGNORE INTO job_ims_items (id,organisation_id,job_id,title,document_type,mandatory,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),organisationId,jobId,title,type,1,'Missing',now,now));
+export function packStatements(db:Database,organisationId:string,jobId:string,now:string){
+ return CORE_PACK.map(([title,type])=>db.prepare('INSERT INTO job_ims_items (id,organisation_id,job_id,title,document_type,mandatory,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id').bind(crypto.randomUUID(),organisationId,jobId,title,type,1,'Missing',now,now));
 }

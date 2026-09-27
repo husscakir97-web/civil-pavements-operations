@@ -5,7 +5,7 @@ import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sh
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,PageHeader,NextAction,Progress,Tabs,Stat,money,pct,dateText,Pill,humanStatus} from './kit';
 import {RegisterView,usePeople} from './register-view';
 import {SwmsPanel} from './swms';
-import {ProjectCommercial} from './commercial';
+import {ProjectCommercial,presetClaimLine} from './commercial';
 import {ActivityLog} from './admin';
 import {useNav} from './nav';
 import {allowedTransitions} from '@/lib/platform/workflow';
@@ -204,7 +204,7 @@ function BaselineForm({projectId,onDone}:{projectId:string;onDone:()=>void}){
 }
 
 function Delivery({projectId}:{projectId:string}){
- const {navigate}=useNav();const {can}=useSession();
+ const {navigate}=useNav();const {can,module}=useSession();
  const {data,error,loading,refresh}=useApi<{shifts:Array<{id:string;name:string;status:string;metadata:Record<string,string>}>;dockets:Array<{id:string;name:string;status:string;work_date:string}>}>(`/api/job-hub?jobId=${projectId}`);
  const today=new Date().toLocaleDateString('en-CA',{timeZone:'Australia/Sydney'});
  const shifts=[...(data?.shifts||[])].sort((a,b)=>`${a.metadata.date}${a.metadata.start}`.localeCompare(`${b.metadata.date}${b.metadata.start}`));
@@ -218,7 +218,7 @@ function Delivery({projectId}:{projectId:string}){
     {past.length>0&&<details className="mt-3"><summary className="cursor-pointer text-sm text-slate-600">Earlier shifts ({past.length})</summary><ul className="divide-y text-sm">{past.map(shiftRow)}</ul></details>}</>}
   </Section>
   <Section title="Dockets" description={toReview.length?`${toReview.length} waiting for review`:undefined} actions={can('docket.approve')&&<Btn variant="secondary" onClick={()=>navigate('Operations','Dockets')}>{toReview.length?'Review dockets':'Open dockets'}</Btn>}>
-   {!data?.dockets.length?<EmptyState title="No dockets have been submitted for this project."/>:<ul className="divide-y text-sm">{[...toReview,...data.dockets.filter(d=>!toReview.includes(d))].map(d=><li key={d.id} className="flex items-center justify-between gap-2 py-2"><span>{d.name}<span className="block text-xs text-slate-500">{dateText(d.work_date)}</span></span><Pill tone={d.status==='approved'?'success':['included_claim','invoiced'].includes(d.status)?'info':'warning'}>{d.status==='included_claim'?'Claimed':humanStatus(d.status)}</Pill></li>)}</ul>}
+   {!data?.dockets.length?<EmptyState title="No dockets have been submitted for this project."/>:<ul className="divide-y text-sm">{[...toReview,...data.dockets.filter(d=>!toReview.includes(d))].map(d=><li key={d.id} className="flex items-center justify-between gap-2 py-2"><span>{d.name}<span className="block text-xs text-slate-500">{dateText(d.work_date)}</span></span><span className="flex items-center gap-2">{d.status==='approved'&&can('claim.edit')&&module('commercial')&&<Btn variant="secondary" className="min-h-9 py-1" onClick={()=>{presetClaimLine(projectId,'docket',d.id);navigate('Projects',undefined,projectId,'commercial');}}>Add to claim</Btn>}<Pill tone={d.status==='approved'?'success':['included_claim','invoiced'].includes(d.status)?'info':'warning'}>{d.status==='included_claim'?'Claimed':humanStatus(d.status)}</Pill></span></li>)}</ul>}
   </Section>
  </div>;
 }

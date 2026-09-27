@@ -102,6 +102,7 @@ assert.equal(abn.isValidAbn('51 824 753 556'),true);assert.equal(abn.isValidAbn(
 // Finance: forecast, earned value, claim limits, GST.
 let f=fin.forecast({originalContract:100000,approvedVariations:10000,pendingVariations:5000,originalBudget:80000,approvedVariationCost:6000,actual:30000,committed:10000,accrued:5000,claimed:40000,certified:38000,invoiced:38000,paid:20000});
 assert.equal(f.currentContract,110000);assert.equal(f.currentBudget,86000);assert.equal(f.costToComplete,41000);assert.equal(f.forecastFinalCost,86000);assert.equal(f.forecastProfit,24000);assert.equal(f.forecastMarginPct,21.82);assert.equal(f.outstanding,18000);
+assert.equal(f.approvedVariationCost,6000,'forecast exposes the approved budget change it already used (current budget = original + approved change)');assert.equal(f.currentBudget,f.originalBudget+f.approvedVariationCost);
 f=fin.forecast({originalContract:100000,approvedVariations:0,pendingVariations:0,originalBudget:80000,approvedVariationCost:0,actual:90000,committed:5000,accrued:0,claimed:0,certified:0,invoiced:0,paid:0});
 assert.equal(f.costToComplete,0,'overspend: no negative cost to complete');assert.equal(f.forecastFinalCost,95000);assert.equal(f.forecastProfit,5000);
 f=fin.forecast({originalContract:0,approvedVariations:0,pendingVariations:0,originalBudget:0,approvedVariationCost:0,actual:0,committed:0,accrued:0,claimed:0,certified:0,invoiced:0,paid:0});

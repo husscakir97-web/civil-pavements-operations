@@ -22,7 +22,7 @@ export function forecast(i:ForecastInput){
  // Earned revenue on a cost-to-date basis (percent complete = incurred / forecast final cost).
  const percentComplete=forecastFinalCost>0?Math.min(1,(i.actual+i.accrued)/forecastFinalCost):0;
  const earnedRevenue=r(currentContract*percentComplete);
- return {currentContract,approvedVariations:r(i.approvedVariations),pendingVariations:r(i.pendingVariations),originalContract:r(i.originalContract),originalBudget:r(i.originalBudget),currentBudget,actual:r(i.actual),committed:r(i.committed),accrued:r(i.accrued),costToComplete,forecastFinalCost,forecastRevenue,forecastProfit,forecastMarginPct,percentComplete:r(percentComplete*100),earnedRevenue,claimed:r(i.claimed),certified:r(i.certified),invoiced:r(i.invoiced),paid:r(i.paid),unbilled:r(Math.max(0,earnedRevenue-i.claimed)),outstanding:r(Math.max(0,i.invoiced-i.paid))};
+ return {currentContract,approvedVariations:r(i.approvedVariations),pendingVariations:r(i.pendingVariations),originalContract:r(i.originalContract),originalBudget:r(i.originalBudget),approvedVariationCost:r(i.approvedVariationCost),currentBudget,actual:r(i.actual),committed:r(i.committed),accrued:r(i.accrued),costToComplete,forecastFinalCost,forecastRevenue,forecastProfit,forecastMarginPct,percentComplete:r(percentComplete*100),earnedRevenue,claimed:r(i.claimed),certified:r(i.certified),invoiced:r(i.invoiced),paid:r(i.paid),unbilled:r(Math.max(0,earnedRevenue-i.claimed)),outstanding:r(Math.max(0,i.invoiced-i.paid))};
 }
 export type Forecast=ReturnType<typeof forecast>;
 

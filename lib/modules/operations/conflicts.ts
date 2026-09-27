@@ -65,6 +65,15 @@ export function evaluateShift(shift:ShiftInput,resources:Map<string,ResourceInfo
  return out.filter(c=>{const k=`${c.code}:${c.resourceId}:${c.message}`;if(seen.has(k))return false;seen.add(k);return true;});
 }
 
+/** Availability of candidate resources for a shift window, before anything is saved: the same
+ * engine evaluates a trial shift holding every candidate, grouped per resource. Read-only. */
+export function availability(shift:ShiftInput,candidates:Array<{resourceType:string;resourceId:string}>,resources:Map<string,ResourceInfo>,others:ShiftWindow[]):Record<string,Conflict[]>{
+ const trial:ShiftInput={...shift,assignments:candidates};
+ const out:Record<string,Conflict[]>=Object.fromEntries(candidates.map(c=>[c.resourceId,[]]));
+ for(const c of evaluateShift(trial,resources,others))if(c.resourceId&&out[c.resourceId])out[c.resourceId].push(c);
+ return out;
+}
+
 export const blocking=(status:string,conflicts:Conflict[])=>ENFORCED_STATUSES.includes(status)?conflicts.filter(c=>c.severity==='block'):[];
 
 type Legacy=LegacyRow&{active?:number|null;legacy_synced_at?:string|null;compliance_expiry?:string|null};

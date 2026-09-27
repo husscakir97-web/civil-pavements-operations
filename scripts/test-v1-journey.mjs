@@ -173,6 +173,14 @@ try{
  await db.execute('INSERT INTO workers (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)',[workerId,memberA.organisation_id,'Casey Field','active',JSON.stringify({role:'Pipe layer',hourlyRate:88,competencyExpiry:'2099-12-31',userId:C.user.id}),new Date().toISOString()]);
  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Australia/Sydney',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
  const shift=(await json(await call('/api/delivery','POST',{kind:'shifts',record:{id:'',name:'Pipe laying day 1',status:'Planned',metadata:{jobId:projectId,date:today,start:'07:00',finish:'15:30',scope:'Lay 40m of 375 RCP',instructions:'Shoring inspected before entry',assignments:[{resourceId:workerId,category:'workers',name:'Casey Field',role:'Pipe layer',hours:8,rate:88,payload:0,trips:0,userId:C.user.id}]}}},A.cookie),201)).record;
+ // Planner availability check: read-only, same engine, tenant-scoped, write roles only.
+ const [[shiftCountBefore]]=await db.execute('SELECT COUNT(*) AS n FROM shifts WHERE organisation_id=?',[memberA.organisation_id]);
+ const check=await json(await call('/api/delivery','POST',{kind:'shifts',check:true,candidates:[{category:'workers',resourceId:workerId}],record:{id:'',name:'Trial',status:'Planned',metadata:{jobId:projectId,date:today,start:'08:00',finish:'12:00',assignments:[]}}},A.cookie),200,'availability check');
+ assert(check.availability[workerId].some(c=>c.code==='WORKER_DOUBLE_BOOKED'&&c.severity==='block'),'a worker already on an overlapping shift shows as booked before saving');
+ const [[shiftCountAfter]]=await db.execute('SELECT COUNT(*) AS n FROM shifts WHERE organisation_id=?',[memberA.organisation_id]);assert.equal(Number(shiftCountAfter.n),Number(shiftCountBefore.n),'the availability check writes nothing');
+ const foreignCheck=await json(await call('/api/delivery','POST',{kind:'shifts',check:true,candidates:[{category:'workers',resourceId:workerId}],record:{id:'',name:'Trial',status:'Planned',metadata:{date:today,start:'08:00',finish:'12:00',assignments:[]}}},B.cookie),200,'foreign availability check');
+ assert.deepEqual(foreignCheck.availability[workerId].map(c=>c.code),['RESOURCE_MISSING'],'another organisation learns nothing about the worker');assert(!JSON.stringify(foreignCheck).includes('Casey'),'no foreign names leak');
+ assert.equal((await call('/api/delivery','POST',{kind:'shifts',check:true,candidates:[],record:{id:'',name:'x',status:'Draft',metadata:{}}},C.cookie)).status,403,'field users cannot run planner checks');
  let day=await json(await call('/api/field/today','GET',undefined,C.cookie),200);
  const mine=day.today.find(s=>s.id===shift.id);assert(mine,'field user sees assigned shift today');assert.equal(mine.swmsOutstanding,1);
  const fieldText=JSON.stringify(day);for(const k of ['"rate"','contractValue','approvedBudget','hourlyRate','sellPrice'])assert(!fieldText.includes(k),'field Today leaked '+k);

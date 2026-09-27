@@ -150,6 +150,13 @@ const cf=load('lib/modules/operations/conflicts.ts'),rm=load('lib/v1/resource-ma
 const res=new Map([['worker:w1',{id:'w1',type:'worker',name:'Alex',status:'Active',active:true,competencies:[{type:'White card',expiryDate:'2030-01-01',status:'current'},{type:'First aid',expiryDate:'2020-01-01',status:'current'}]}],['plant:p1',{id:'p1',type:'plant',name:'Paver',status:'Available',active:true,complianceExpiry:'2026-01-01'}]]);
 const sh=(o={})=>({id:'s1',name:'Night',status:'Planned',date:'2026-03-01',start:'20:00',finish:'04:00',assignments:[{resourceType:'worker',resourceId:'w1'}],requiredCompetencies:[],...o});
 const codes=c=>c.map(x=>`${x.code}:${x.severity}`).sort();
+// Availability before saving: each candidate is judged by the same engine for the draft window.
+{const busy=[{id:'s2',name:'Depot',status:'Planned',date:'2026-03-01',start:'22:00',finish:'02:00',assignments:[{resourceType:'plant',resourceId:'p1'}]}];
+ const av=cf.availability(sh({assignments:[]}),[{resourceType:'worker',resourceId:'w1'},{resourceType:'plant',resourceId:'p1'},{resourceType:'worker',resourceId:'ghost'}],res,busy);
+ assert.deepEqual(codes(av.w1),['COMPETENCY_EXPIRED_OTHER:warn'],'available worker only carries a warning');
+ assert.deepEqual(codes(av.p1),['PLANT_COMPLIANCE_EXPIRED:block','PLANT_DOUBLE_BOOKED:block'],'plant clash and expired compliance are known before saving');
+ assert.deepEqual(codes(av.ghost),['RESOURCE_MISSING:block']);
+ assert.deepEqual(cf.availability(sh({status:'Cancelled'}),[{resourceType:'plant',resourceId:'p1'}],res,busy),{p1:[]},'cancelled shifts have no conflicts');}
 assert.deepEqual(codes(cf.evaluateShift(sh(),res,[])),['COMPETENCY_EXPIRED_OTHER:warn']);
 assert.deepEqual(codes(cf.evaluateShift(sh({requiredCompetencies:['white card','Paver ticket']}),res,[])),['COMPETENCY_EXPIRED_OTHER:warn','COMPETENCY_MISSING:block']);
 assert.deepEqual(codes(cf.evaluateShift(sh({requiredCompetencies:['First aid']}),res,[])),['COMPETENCY_EXPIRED:block']);

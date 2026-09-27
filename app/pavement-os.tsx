@@ -41,6 +41,7 @@ const TendersView = dynamic(() => loaders.pipeline().then(m => m.TendersView), {
 const EstimatesQuotes = dynamic(() => loaders.estimates().then(m => m.EstimatesQuotes), { loading });
 const ProjectsView = dynamic(() => loaders.projects().then(m => m.ProjectsView), { loading });
 const OperationsPage = dynamic(() => loaders.operations().then(m => m.OperationsPage), { loading });
+const JobsPlanning = dynamic(() => import("@/components/jobs-planning").then(m => m.JobsPlanning), { loading });
 const DocketDashboard = dynamic(() => loaders.dockets().then(m => m.DocketDashboard), { loading });
 const CommercialArea = dynamic(() => loaders.commercial().then(m => m.CommercialArea), { loading });
 const HseqArea = dynamic(() => loaders.hseq().then(m => m.HseqArea), { loading });
@@ -157,7 +158,7 @@ function WorkspaceShell() {
   else if (k === "Home") content = <HomeV1 />;
   else if (k === "Pipeline") content = sub === "Tenders" ? <TendersView /> : sub === "Estimates" ? <EstimatesQuotes key={route.id || "all"} initialEstimateId={route.id} /> : <OpportunitiesView />;
   else if (k === "Projects") content = <ProjectsView />;
-  else if (k === "Operations") content = sub === "Dockets" ? <DocketDashboard /> : sub === "Resources" ? <ResourcesArea key="resources" other={<OperationsPage module="Resources" initialResource="crews" resourceTypes={otherResources} onNavigate={legacyNavigate} />} /> : <OperationsPage key="schedule" module="Planning" onNavigate={legacyNavigate} />;
+  else if (k === "Operations") content = sub === "Dockets" ? <DocketDashboard /> : sub === "Resources" ? <ResourcesArea key="resources" other={<OperationsPage module="Resources" initialResource="crews" resourceTypes={otherResources} onNavigate={legacyNavigate} />} /> : <JobsPlanning key={`schedule-${route.id || "all"}`} page="Planning" initialJobId={route.id} onBack={route.id ? () => navigate("Projects", undefined, route.id) : undefined} />;
   else if (k === "Commercial") content = <CommercialArea />;
   else if (k === "IMS & HSEQ") content = <HseqArea />;
   else if (k === "Reports") content = <ReportsV1 />;

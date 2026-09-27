@@ -3,6 +3,7 @@ import {ArrowRight,CalendarDays,CheckCheck,ClipboardList,Siren,BarChart3} from '
 import {useApi,useSession,ErrorState,Loading,Btn,money,pct,StatusBadge} from './kit';
 import {useNav,areaTarget} from './nav';
 import type {HomeItem} from '@/lib/seams/home';
+import {ENGINES,type EngineKey} from '@/lib/v1/engines';
 
 // Home answers "what needs me?": my work first, then today, then exceptions, and only
 // then portfolio figures. Everything comes from the role-aware home feed.
@@ -34,11 +35,21 @@ export function HomeV1(){
  const {data,error,loading,refresh}=useApi<Feed>('/api/platform/home');
  const {brand,userName,can,module}=useSession();const {navigate}=useNav();
  const hour=new Date().getHours();
+ const engineAccess:Record<EngineKey,boolean>={
+  'Win Work':can('pipeline.view')||can('estimate.edit'),
+  'Prepare Work':can('project.view')||can('hseq.view')||can('library.edit'),
+  'Resource Work':can('schedule.view')||can('resources.edit'),
+  'Deliver Work':can('project.view')||can('docket.approve'),
+  'Control Money':can('commercial.view'),
+  'Learn':can('reports.view'),
+ };
+ const engines=ENGINES.filter(e=>engineAccess[e.key]);
  return <div className="grid gap-5">
   <header className="flex flex-wrap items-end justify-between gap-3">
    <div><p className="text-sm text-slate-500">{new Intl.DateTimeFormat('en-AU',{timeZone:'Australia/Sydney',dateStyle:'full'}).format(new Date())} · {brand.companyName}</p><h1 className="mt-0.5 text-2xl font-semibold tracking-tight">Good {hour<12?'morning':hour<17?'afternoon':'evening'}{userName?`, ${userName.split(' ')[0]}`:''}</h1></div>
    <div className="flex flex-wrap gap-2">{can('schedule.view')&&module('operations')&&<Btn variant="secondary" onClick={()=>navigate('Operations','Schedule')}><CalendarDays aria-hidden className="size-4"/>Today&apos;s schedule</Btn>}{can('pipeline.edit')&&module('pipeline')&&<Btn variant="secondary" onClick={()=>navigate('Pipeline','Tenders')}>Tenders</Btn>}</div>
   </header>
+  {engines.length>0&&<section aria-label="Infrastruct operating engines" className="-mx-4 flex snap-x gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 xl:grid-cols-6">{engines.map(e=><button key={e.key} onClick={()=>navigate(e.key,'Overview')} className="min-w-[142px] snap-start rounded-2xl border bg-white p-3 text-left shadow-sm transition hover:border-orange-200 hover:bg-orange-50/30 sm:min-w-0"><span className="text-[10px] font-bold uppercase tracking-[0.1em] text-orange-600">Engine {e.number}</span><span className="mt-1 block text-sm font-semibold text-slate-950">{e.key}</span><span className="mt-1 block line-clamp-2 text-xs leading-5 text-slate-500">{e.question}</span></button>)}</section>}
   <ErrorState error={error} onRetry={refresh}/>
   {loading&&!data?<Loading label="Loading your work…"/>:data&&<>
    <div className="grid items-start gap-5 lg:grid-cols-3">

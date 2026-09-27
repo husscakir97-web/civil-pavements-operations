@@ -112,7 +112,7 @@ function FieldShell() {
   return <div className="min-h-screen bg-[#f6f7f9] pb-20 text-slate-900">
     <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b bg-white px-4 py-3"><div className="min-w-0"><p className="truncate font-semibold">{brand.companyName}</p><p className="text-xs text-slate-500">{role === "supervisor" ? "Supervisor" : "Field"}</p></div><Link href="/account" className="flex min-h-11 items-center rounded-lg border px-3 text-sm" title={userEmail}>Account</Link></header>
     <Toaster position="top-center" richColors />
-    <main className="p-4 sm:p-6">{tab === "today" ? <FieldToday onOpenRecords={() => setTab("records")} /> : tab === "records" ? <FieldWorkspace /> : <SearchV1 />}</main>
+    <main className="p-4 sm:p-6">{tab === "today" ? <FieldToday /> : tab === "records" ? <FieldWorkspace /> : <SearchV1 />}</main>
     <nav aria-label="Field navigation" className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t bg-white pb-[env(safe-area-inset-bottom)]">{([["today", "Today", Home], ["records", "Shift records", ClipboardList], ["search", "Search", Search]] as const).map(([k, label, Icon]) => <button key={k} onClick={() => setTab(k)} aria-current={tab === k ? "page" : undefined} className={`flex min-h-16 flex-col items-center justify-center gap-1 text-xs font-medium ${tab === k ? "text-orange-700" : "text-slate-500"}`}><Icon aria-hidden className="size-5" />{label}</button>)}</nav>
   </div>;
 }

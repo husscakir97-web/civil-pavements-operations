@@ -92,7 +92,29 @@ assert.deepEqual(navDef.FIELD_SHELL_ROLES,['field','supervisor']);
  assert.deepEqual(ps.nextActionTarget('setup','Complete 3 readiness requirements'),{kind:'tab',tab:'setup'});
  assert.deepEqual(ps.nextActionTarget('active','Record the client decision on 1 submitted variation'),{kind:'tab',tab:'commercial'});
  assert.deepEqual(ps.nextActionTarget('closeout','Final claim'),{kind:'tab',tab:'closeout'});
- assert.equal(ps.nextActionTarget('closed',null),null);}
+ assert.equal(ps.nextActionTarget('closed',null),null);
+ assert.equal(ps.nextActionTarget('setup','Mark the project ready'),null,'the header button is the action: no competing Go button');
+ assert.equal(ps.nextActionTarget('ready','Start delivery'),null);}
+// Search opens the work context a record belongs to, falling back to the register without one.
+{const sr=load('lib/v1/search-routing.ts');const r=(type,o={})=>({id:'x1',type,area:'Pipeline/Estimates',projectId:null,tenderId:null,...o});
+ assert.deepEqual(sr.searchTarget(r('Estimate',{tenderId:'t1'}),'estimator'),['Pipeline','Tenders','t1','estimate'],'estimate linked to a tender opens the tender estimate step');
+ assert.deepEqual(sr.searchTarget(r('Estimate'),'estimator'),['Pipeline','Estimates','x1'],'unlinked estimate opens in the estimate register');
+ assert.deepEqual(sr.searchTarget(r('Tender'),'admin'),['Pipeline','Tenders','x1']);
+ assert.deepEqual(sr.searchTarget(r('Project'),'admin'),['Projects',undefined,'x1']);
+ assert.deepEqual(sr.searchTarget(r('Variation',{projectId:'p1',area:'Commercial'}),'admin'),['Projects',undefined,'p1','commercial']);
+ assert.deepEqual(sr.searchTarget(r('Claim',{projectId:'p1',area:'Commercial'}),'accounts'),['Projects',undefined,'p1','commercial']);
+ assert.deepEqual(sr.searchTarget(r('SWMS',{projectId:'p1',area:'IMS & HSEQ'}),'admin'),['Projects',undefined,'p1','quality']);
+ assert.deepEqual(sr.searchTarget(r('Docket',{projectId:'p1',area:'Operations/Dockets'}),'admin'),['Projects',undefined,'p1','delivery']);
+ assert.deepEqual(sr.searchTarget(r('Docket',{area:'Operations/Dockets'}),'admin'),['Operations','Dockets'],'docket without a project opens the docket register');
+ assert.deepEqual(sr.searchTarget(r('Shift',{projectId:'p1',area:'Operations/Schedule'}),'scheduler'),['Operations','Schedule','p1']);
+ assert.deepEqual(sr.searchTarget(r('Shift',{projectId:'p1',area:'Operations/Schedule'}),'field'),['Operations','Schedule']);}
+// Shift cards list the most urgent readiness warnings first; nothing is added or dropped.
+{const sw=load('lib/v1/shift-warnings.ts');
+ const list=['Missing purchase order.','Missing TMP.','John Smith: competency expired 2026-01-01.','Casey: competency expiry not recorded.','Excavator 05: overlaps Depot yard.'];
+ const p=sw.prioritiseWarnings(list);
+ assert.deepEqual(p.top,['John Smith: competency expired 2026-01-01.','Excavator 05: overlaps Depot yard.']);
+ assert.equal(p.rest.length,3);assert.deepEqual([...p.all].sort(),[...list].sort(),'same warnings, only reordered');
+ assert.deepEqual(p.all.slice(2),['Casey: competency expiry not recorded.','Missing purchase order.','Missing TMP.']);}
 for(const r of navDef.FIELD_SHELL_ROLES)assert.equal(perm.can(r,'commercial.view'),false,r+' shell never carries money');
 assert.equal(perm.can('read_only','project.edit'),false);assert(perm.capabilitiesFor('read_only').every(c=>c.endsWith('.view')),'read-only holds view capabilities only');
 

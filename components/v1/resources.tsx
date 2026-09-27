@@ -2,7 +2,7 @@
 // Typed resource registers: workers with competencies, plant with compliance,
 // and legacy migration issues. Rates are only shown to commercial roles.
 import {useState,type FormEvent,type ReactNode} from 'react';
-import {api,useApi,useAction,useSession,PageHeader,Section,EmptyState,ErrorState,Loading,Pill,Tabs,Field,Btn,field,money,dateText} from './kit';
+import {api,useApi,useAction,useSession,PageHeader,Section,EmptyState,ErrorState,Loading,Pill,Tabs,Field,Btn,field,money,dateText,ReasonDialog} from './kit';
 import {usePeople} from './register-view';
 
 type Competency={id:string;competency_type:string;reference:string|null;issued_date:string|null;expiry_date:string|null;state:string;source:string};
@@ -76,9 +76,11 @@ function WorkerForm({worker,rates,onClose,onSaved}:{worker:Worker|null;rates:boo
 function CompetencyEditor({worker,canEdit,onChanged}:{worker:Worker;canEdit:boolean;onChanged:()=>void}){
  const [open,setOpen]=useState(false),[f,setF]=useState({competencyType:'',reference:'',issuedDate:'',expiryDate:''});
  const {busy,error,run}=useAction();
+ const [revoking,setRevoking]=useState<Competency|null>(null);
  if(!canEdit)return null;
- const revoke=(c:Competency)=>{const reason=window.prompt(`Why is ${c.competency_type} being revoked?`);if(reason)void run(()=>api('/api/operations/resources',{method:'POST',body:{action:'revokeCompetency',workerId:worker.id,id:c.id,reason}}),onChanged);};
- return <div className="mt-2">
+ const revoke=(c:Competency)=>setRevoking(c);
+ const confirmRevoke=(reason:string)=>{const c=revoking!;setRevoking(null);void run(()=>api('/api/operations/resources',{method:'POST',body:{action:'revokeCompetency',workerId:worker.id,id:c.id,reason}}),onChanged);};
+ return <div className="mt-2"><ReasonDialog open={Boolean(revoking)} title={`Revoke ${revoking?.competency_type||'competency'}`} description="The competency stays on the worker's record as revoked (never deleted), and scheduling treats it as not held from now on." label="Why is it being revoked?" required danger confirmLabel="Revoke competency" busy={busy} onCancel={()=>setRevoking(null)} onConfirm={confirmRevoke}/>
   {!open?<Btn variant="ghost" className="px-2 text-xs" onClick={()=>setOpen(true)}>Manage competencies</Btn>:
   <div className="mt-2 rounded-lg border bg-white p-3">
    {worker.competencies.length>0&&<ul className="mb-3 grid gap-1 text-sm">{worker.competencies.map(c=><li key={c.id} className="flex flex-wrap items-center justify-between gap-2"><span>{c.competency_type}{c.reference?` · ${c.reference}`:''} · {expiryLabel(c.state,c.expiry_date)}{c.source==='legacy'?' · migrated':''}</span><span className="flex gap-1"><Btn variant="ghost" className="px-2 text-xs" onClick={()=>setF({competencyType:c.competency_type,reference:c.reference||'',issuedDate:c.issued_date||'',expiryDate:c.expiry_date||''})}>Edit</Btn><Btn variant="ghost" className="px-2 text-xs text-red-700" onClick={()=>revoke(c)}>Revoke</Btn></span></li>)}</ul>}

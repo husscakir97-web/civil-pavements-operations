@@ -123,6 +123,9 @@ try{
  const award=await json(await call('/api/tenders/workspace','POST',{action:'award',id:tenderId},A.cookie),200);
  assert.equal(award.projectCreated,true);const projectId=award.jobId;
  const again=await json(await call('/api/tenders/workspace','POST',{action:'award',id:tenderId},A.cookie),200);assert.equal(again.alreadyAwarded,true,'award is idempotent');
+ const estSearch=await json(await call('/api/search?q=Riverside','GET',undefined,A.cookie),200);
+ assert.equal(estSearch.results.find(r=>r.type==='Estimate')?.tenderId,tenderId,'search links an estimate to its tender so it opens in the tender workspace');
+ const foreignSearch=await json(await call('/api/search?q=Riverside','GET',undefined,B.cookie),200);assert(!foreignSearch.results.length,'another organisation finds nothing');
  console.log('PASS B: library + documents, opportunity → tender lineage, documents, requirements, bid review/decision, estimate items, approval lock, internal approval, submission gate, clarification, award');
 
  // ---------------------------------------------------------------- Scenario C
@@ -236,6 +239,8 @@ try{
  const docket=(await json(await call(`/api/dockets?month=${today.slice(0,7)}`,'GET',undefined,A.cookie),200)).dockets.find(d=>d.id===fd.docketId);
  assert(docket,'office sees the field docket');
  const priced={...docket,amount:1200,lineItems:[{description:'Pipe laying crew',quantity:8,unit:'h',rate:150,amount:1200}],status:'approved'};
+ const docketSearch=await json(await call(`/api/search?q=${encodeURIComponent(`D-${suffix}`)}`,'GET',undefined,A.cookie),200);
+ assert.equal(docketSearch.results.find(r=>r.type==='Docket')?.projectId,projectId,'search links a docket to its project');
  const approved=await json(await call('/api/dockets','PUT',priced,A.cookie),200);assert.equal(approved.costLinesPosted,1);
  await json(await call('/api/dockets','PUT',priced,A.cookie),200);
  const [[costs]]=await db.execute("SELECT COUNT(*) AS n,SUM(amount) AS total FROM cost_transactions WHERE organisation_id=? AND source_id=? AND status='actual'",[memberA.organisation_id,docket.id]);

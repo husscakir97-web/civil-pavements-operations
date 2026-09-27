@@ -1,12 +1,13 @@
 'use client';
 import {useEffect,useState} from 'react';
 import {ArrowRight,Search as SearchIcon} from 'lucide-react';
-import {api,ErrorState,PageHeader,field,Pill,humanStatus} from './kit';
+import {api,ErrorState,PageHeader,field,Pill,humanStatus,useSession} from './kit';
+import {searchTarget} from '@/lib/v1/search-routing';
 import {useNav} from './nav';
 
-type Result={id:string;name:string;type:string;status:string;detail:string;area:string;projectId:string|null};
+type Result={id:string;name:string;type:string;status:string;detail:string;area:string;projectId:string|null;tenderId?:string|null};
 export function SearchV1(){
- const {navigate}=useNav();
+ const {navigate}=useNav();const {role}=useSession();
  const [q,setQ]=useState(''),[results,setResults]=useState<Result[]|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const term=q.trim();
  useEffect(()=>{
@@ -15,13 +16,8 @@ export function SearchV1(){
   const timer=setTimeout(()=>{setBusy(true);api<{results:Result[]}>(`/api/search?q=${encodeURIComponent(term)}`,{signal:abort.signal}).then(r=>{setResults(r.results);setError('');}).catch(e=>{if(!abort.signal.aborted)setError(e.message);}).finally(()=>{if(!abort.signal.aborted)setBusy(false);});},250);
   return()=>{clearTimeout(timer);abort.abort();};
  },[term]);
- const open=(r:Result)=>{
-  if(r.type==='Tender')return navigate('Pipeline','Tenders',r.id);
-  if(r.type==='Project')return navigate('Projects',undefined,r.id);
-  if(r.projectId&&['SWMS','Variation','Claim','Invoice','Document'].includes(r.type))return navigate('Projects',undefined,r.projectId,r.type==='SWMS'?'quality':r.type==='Document'?'documents':'commercial');
-  if(r.type==='Estimate')return navigate('Pipeline','Estimates',r.id);
-  const [a,s]=r.area.split('/');navigate(a,s);
- };
+ // Opens the work context the record belongs to (lib/v1/search-routing.ts).
+ const open=(r:Result)=>{const [a,s,id,tab]=searchTarget(r,role);navigate(a,s,id,tab);};
  const shown=term.length>=2?results:null;
  return <div className="mx-auto grid max-w-3xl gap-4">
   <PageHeader title="Search" subtitle="Projects, tenders, opportunities, clients, workers, plant, dockets, variations, claims, invoices and documents you are allowed to see."/>

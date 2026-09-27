@@ -2,7 +2,7 @@
 import {useState,type ReactNode} from 'react';
 import {ArrowRight,CalendarDays,CheckCircle2,Plus,Upload} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
-import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,PageHeader,NextAction,Progress,Tabs,Stat,money,pct,dateText,Pill,humanStatus} from './kit';
+import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,PageHeader,NextAction,Progress,Tabs,Stat,money,pct,dateText,Pill,humanStatus,ReasonDialog} from './kit';
 import {RegisterView,usePeople} from './register-view';
 import {SwmsPanel} from './swms';
 import {ProjectCommercial,presetClaimLine} from './commercial';
@@ -57,13 +57,14 @@ function ProjectWorkspace({id,tab,onBack}:{id:string;tab?:string;onBack:()=>void
  const {navigate}=useNav();const session=useSession();const {busy,error:actionError,run}=useAction();
  const active=(tab||'overview') as TabKey;
  const [checklistFocus,setChecklistFocus]=useState<string|null>(null);
+ const [reopening,setReopening]=useState<string|null>(null);
  // Re-fetch on tab change so the header (readiness, next action) reflects work done in other tabs.
  const {data,error,loading,refresh}=useApi<Detail>(`/api/projects/workspace?id=${id}&view=${active}`);
  if(loading&&!data)return <Loading label="Loading project…"/>;
  if(error&&!data)return <div className="grid gap-3"><ErrorState error={error} onRetry={refresh}/><Btn variant="secondary" onClick={onBack}>Back to projects</Btn></div>;
  const d=data!,p=d.project,closed=p.stage==='closed';
  const moves=allowedTransitions('project',p.stage,session.role,true);
- const move=(to:string)=>{let reason:string|undefined;if(p.stage==='closed'){reason=prompt('Reason for reopening')||'';if(!reason)return;}if(to==='closed'&&!confirm('Close this project? Records become read-only until it is reopened with a reason.'))return;void run(()=>api('/api/projects/workspace',{method:'POST',body:{action:'transition',id,to,reason}}),refresh);};
+ const move=(to:string,reason?:string)=>{if(p.stage==='closed'&&reason===undefined){setReopening(to);return;}if(to==='closed'&&!confirm('Close this project? Records become read-only until it is reopened with a reason.'))return;void run(()=>api('/api/projects/workspace',{method:'POST',body:{action:'transition',id,to,reason}}),refresh);};
  const scrollTo=(anchor:string)=>setTimeout(()=>document.getElementById(anchor)?.scrollIntoView({behavior:'smooth',block:'start'}),350);
  /** Every "fix" and "next action" button lands on the place the work is done. */
  const goTarget=(t:SetupTarget)=>{
@@ -78,15 +79,18 @@ function ProjectWorkspace({id,tab,onBack}:{id:string;tab?:string;onBack:()=>void
  const tabs:Array<{key:TabKey;label:string;badge?:ReactNode;hidden?:boolean}>=[{key:'overview',label:'Overview'},{key:'setup',label:'Setup',badge:d.readiness.blockers.length&&p.stage==='setup'?<Pill tone="warning">{d.readiness.blockers.length}</Pill>:undefined},{key:'delivery',label:'Delivery'},{key:'quality',label:'Quality & HSEQ',hidden:!session.module('ims')},{key:'commercial',label:'Commercial',hidden:!session.can('commercial.view')||!session.module('commercial')},{key:'documents',label:'Documents'},{key:'closeout',label:'Closeout'}];
  const blockedReady=d.readiness.blockers.length>0,blockedClose=Boolean(d.closeout?.blockers.length);
  return <div>
-  <div className="sticky top-[72px] z-10 -mx-4 mb-4 border-b bg-[#f6f7f9]/95 px-4 pb-3 pt-1 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+  <div className="-mx-4 mb-4 border-b bg-[#f6f7f9]/95 px-4 pb-3 pt-1 backdrop-blur sm:sticky sm:top-[72px] sm:z-10 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
    <PageHeader crumbs={[{label:'Projects',onClick:onBack},{label:p.name,onClick:active==='overview'?undefined:()=>navigate('Projects',undefined,id)},...(active==='overview'?[]:[{label:TAB_LABEL[active]}])]} title={p.name} badges={<StatusBadge machine="project" state={p.stage}/>}
     subtitle={[p.projectNumber,p.clientName||'No client',p.projectManagerName?`PM ${p.projectManagerName}`:'No PM assigned',session.can('commercial.view')&&p.contractValue!=null?`Contract ${money(p.contractValue)}`:null].filter(Boolean).join(' · ')}
     actions={<div className="flex flex-wrap items-center gap-2">{p.stage==='setup'&&<Progress value={d.readiness.percent} label={blockedReady?`${d.readiness.blockers.length} blocker${d.readiness.blockers.length===1?'':'s'}`:'Ready'}/>}{moves.filter(m=>session.can(m.capability)).map(m=>{const blocked=m.to==='ready'&&blockedReady||m.to==='closed'&&blockedClose;return <Btn key={m.to} variant={m.to==='closed'?'danger':blocked?'secondary':'primary'} busy={busy} disabled={blocked} title={blocked?(m.to==='ready'?'Resolve the readiness blockers first':'Resolve the closeout items first'):undefined} onClick={()=>move(m.to)}>{m.label}</Btn>;})}</div>}/>
    <NextAction text={p.nextAction} onClick={nextGo} actionLabel={nextTarget?.kind==='tab'?`Go to ${TAB_LABEL[nextTarget.tab]}`:'Go'}/>
   </div>
+  <ReasonDialog open={Boolean(reopening)} title="Reopen project" description="This moves the project from Closed back to Closeout so records can be added or corrected. The reason is recorded in the audit trail." label="Reason for reopening" required confirmLabel="Reopen project" busy={busy} onCancel={()=>setReopening(null)} onConfirm={r=>{const to=reopening!;setReopening(null);move(to,r);}}/>
   <ErrorState error={actionError||error} onRetry={refresh}/>
   {closed&&<p className="mb-4 rounded-lg border bg-slate-50 p-3 text-sm text-slate-600">This project is closed. Records are read-only; reopen it (with a reason) to add operational records.</p>}
-  <Tabs label="Project workspace" tabs={tabs} active={active} onChange={k=>navigate('Projects',undefined,id,k)}/>
+  {/* Phones: one labelled picker for the seven areas (no sideways tab hunt). Same routes, so deep links and back/forward work. */}
+  <label className="sticky top-[72px] z-10 -mx-4 mb-4 grid gap-1 border-b bg-[#f6f7f9]/95 px-4 pb-3 pt-2 text-sm backdrop-blur sm:hidden"><span className="truncate text-xs font-semibold uppercase tracking-wide text-slate-500">{p.name} · section</span><select aria-label="Project section" className={`${field} font-semibold`} value={active} onChange={e=>navigate('Projects',undefined,id,e.target.value)}>{tabs.filter(t=>!t.hidden).map(t=><option key={t.key} value={t.key}>{t.label}{t.key==='setup'&&p.stage==='setup'&&d.readiness.blockers.length?` · ${d.readiness.blockers.length} blocker${d.readiness.blockers.length===1?'':'s'}`:''}</option>)}</select></label>
+  <div className="hidden sm:block"><Tabs label="Project workspace" tabs={tabs} active={active} onChange={k=>navigate('Projects',undefined,id,k)}/></div>
   {active==='overview'&&<Overview d={d} onTab={k=>navigate('Projects',undefined,id,k)} goTarget={goTarget}/>}
   {active==='setup'&&<Setup d={d} onChanged={refresh} goTarget={goTarget} focus={checklistFocus} setFocus={setChecklistFocus}/>}
   {active==='delivery'&&<Delivery projectId={id}/>}

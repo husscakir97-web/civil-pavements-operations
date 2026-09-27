@@ -5,6 +5,7 @@
 import {useCallback,useEffect,useRef,useState,type ReactNode} from 'react';
 import {AlertTriangle,ChevronRight,Loader2,RefreshCw} from 'lucide-react';
 import {useWorkspaceBrand} from '@/components/workspace-brand';
+import {Dialog,DialogContent,DialogTitle,DialogDescription} from '@/components/ui/dialog';
 import {stateLabel,stateTone,type MachineKey,type Tone} from '@/lib/platform/workflow';
 import {can as roleCan,type Capability} from '@/lib/platform/permissions';
 
@@ -57,7 +58,7 @@ export function useSession(){
 const toneClass:Record<Tone,string>={neutral:'bg-slate-100 text-slate-700 border-slate-200',info:'bg-sky-50 text-sky-800 border-sky-200',warning:'bg-amber-50 text-amber-900 border-amber-200',success:'bg-emerald-50 text-emerald-800 border-emerald-200',danger:'bg-red-50 text-red-800 border-red-200'};
 export function StatusBadge({machine,state,label}:{machine?:MachineKey;state:string;label?:string}){
  const tone=machine?stateTone(machine,state):'neutral';
- return <span className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${toneClass[tone]}`}>{label||(machine?stateLabel(machine,state):state)}</span>;
+ return <span className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${toneClass[tone]}`}>{label||(machine?stateLabel(machine,state):humanStatus(state))}</span>;
 }
 /** Human label for a stored status the workflow machines don't cover (e.g. legacy dockets): internal_approval → Internal approval. */
 export function humanStatus(value:unknown){const s=String(value??'').trim();if(!s)return '';const t=s.replace(/[_-]+/g,' ').replace(/\s+/g,' ').toLowerCase();return t.charAt(0).toUpperCase()+t.slice(1);}
@@ -96,7 +97,7 @@ export function Stat({label,value,hint,tone}:{label:string;value:ReactNode;hint?
 }
 export function NextAction({text,onClick,actionLabel='Go'}:{text:string|null|undefined;onClick?:()=>void;actionLabel?:string}){
  if(!text)return null;
- return <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-950"><span className="text-xs font-semibold uppercase tracking-wide text-orange-800">Next action</span><span className="min-w-0 flex-1 font-medium">{text}</span>{onClick&&<button className="inline-flex min-h-9 items-center gap-1 rounded-md bg-[#172633] px-3 text-xs font-semibold text-white hover:bg-[#263c4c]" onClick={onClick}>{actionLabel}<ChevronRight aria-hidden className="size-3.5"/></button>}</div>;
+ return <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-950"><span className="text-xs font-semibold uppercase tracking-wide text-orange-800">Next action</span><span className="min-w-[11rem] flex-1 font-medium">{text}</span>{onClick&&<button className="inline-flex min-h-9 items-center gap-1 rounded-md bg-[#172633] px-3 text-xs font-semibold text-white hover:bg-[#263c4c]" onClick={onClick}>{actionLabel}<ChevronRight aria-hidden className="size-3.5"/></button>}</div>;
 }
 export function Progress({value,label}:{value:number|null|undefined;label?:string}){
  if(value==null)return <span className="text-xs text-slate-500">{label?`${label}: `:''}Not available</span>;
@@ -112,4 +113,15 @@ export function FieldGroup({label,children,hint}:{label:string;children:ReactNod
 export function Btn({children,variant='primary',busy,className='',...props}:React.ButtonHTMLAttributes<HTMLButtonElement>&{variant?:'primary'|'secondary'|'danger'|'ghost';busy?:boolean}){
  const v=variant==='primary'?'bg-[#172633] text-white hover:bg-[#263c4c] border-[#172633]':variant==='danger'?'bg-white text-red-700 border-red-300 hover:bg-red-50':variant==='ghost'?'border-transparent bg-transparent text-slate-700 hover:bg-slate-100':'bg-white text-slate-800 border-slate-300 hover:bg-slate-50';
  return <button {...props} disabled={props.disabled||busy} className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border px-3.5 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${v} ${className}`}>{busy&&<Loader2 aria-hidden className="size-4 animate-spin"/>}{children}</button>;
+}
+
+/** Decision with a note/reason (replaces browser prompts). `required` mirrors the server rule for that action. */
+export function ReasonDialog({open,title,description,label,required=false,confirmLabel,danger=false,busy,onConfirm,onCancel}:{open:boolean;title:string;description:ReactNode;label:string;required?:boolean;confirmLabel:string;danger?:boolean;busy?:boolean;onConfirm:(reason:string)=>void;onCancel:()=>void}){
+ const [text,setText]=useState('');
+ const close=()=>{setText('');onCancel();};
+ return <Dialog open={open} onOpenChange={o=>{if(!o)close();}}><DialogContent className="sm:max-w-lg"><DialogTitle>{title}</DialogTitle><DialogDescription>{description}</DialogDescription>
+  <form className="grid gap-4" onSubmit={e=>{e.preventDefault();if(required&&!text.trim())return;onConfirm(text.trim());setText('');}}>
+   <Field label={label} required={required} hint={required?undefined:'Optional. Recorded in the audit trail.'}><textarea autoFocus className={`${field} min-h-24`} value={text} onChange={e=>setText(e.target.value)}/></Field>
+   <div className="flex flex-wrap justify-end gap-2"><Btn type="button" variant="secondary" onClick={close}>Cancel</Btn><Btn type="submit" variant={danger?'danger':'primary'} busy={busy} disabled={required&&!text.trim()}>{confirmLabel}</Btn></div>
+  </form></DialogContent></Dialog>;
 }

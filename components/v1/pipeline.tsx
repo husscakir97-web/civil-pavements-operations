@@ -10,7 +10,7 @@ import {EstimateApprovalPanel} from './estimating';
 import {useNav} from './nav';
 import {TENDER_STEPS,TENDER_PHASES,tenderSteps,nextStep,type TenderStepKey,type StepState} from '@/lib/v1/tender-flow';
 
-const EmbeddedEstimate=dynamic(()=>import('@/components/estimates-quotes').then(m=>function Embedded({estimateId,onSaved}:{estimateId:string;onSaved:()=>void}){return <m.EstimatesQuotes embedded initialEstimateId={estimateId} onSaved={onSaved}/>;}),{loading:()=><Loading label="Loading estimate…"/>});
+const EmbeddedEstimate=dynamic(()=>import('@/components/estimates-quotes').then(m=>function Embedded({estimateId,onSaved,workflowState}:{estimateId:string;onSaved:()=>void;workflowState:string|null}){return <m.EstimatesQuotes embedded initialEstimateId={estimateId} onSaved={onSaved} workflowState={workflowState}/>;}),{loading:()=><Loading label="Loading estimate…"/>});
 const TenderReviewAssistant=dynamic(()=>import('@/components/tender-review-assistant').then(m=>m.TenderReviewAssistant),{loading:()=><Loading label="Loading tender documents…"/>});
 
 export function OpportunitiesView(){
@@ -114,7 +114,7 @@ function TenderWorkspace({id,tab,onBack}:{id:string;tab?:string;onBack:()=>void}
  const goNext=next==='project'&&t.projectId?()=>navigate('Projects',undefined,t.projectId!):next&&next!=='project'&&next!==active?()=>go(next):undefined;
  const label=TENDER_STEPS.find(([k])=>k===active)?.[1];
  return <div>
-  <div className="sticky top-[72px] z-10 -mx-4 mb-4 border-b bg-[#f6f7f9]/95 px-4 pb-3 pt-1 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+  <div className="-mx-4 mb-4 border-b bg-[#f6f7f9]/95 px-4 pb-3 pt-1 backdrop-blur sm:sticky sm:top-[72px] sm:z-10 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
    <PageHeader crumbs={[{label:'Tenders',onClick:onBack},{label:t.title,onClick:()=>go(next&&next!=='project'?next:'intake')},{label:label||''}]} title={t.title} badges={<StatusBadge machine="tender" state={t.stage}/>}
     subtitle={<span className="flex flex-wrap gap-x-2">{[t.clientName||'No client',t.reference].filter(Boolean).join(' · ')}<span aria-hidden>·</span><DueText date={t.dueDate} closed={closed}/><span aria-hidden>·</span>{t.ownerName?`Owner ${t.ownerName}`:'No owner'}</span>}
     actions={<div className="flex items-center gap-3">{session.can('commercial.view')&&<span className="text-sm text-slate-600">{t.approvedSellPrice!=null?`Approved ${money(t.approvedSellPrice)}`:t.estimatedValue!=null?`Est. ${money(t.estimatedValue)}`:'Value not available'}</span>}<Progress value={t.completion} label="Complete"/></div>}/>
@@ -190,12 +190,13 @@ function BidTab({t,review,onChanged}:{t:Tender;review:Record<string,string|null>
 }
 
 function EstimateTab({t,onChanged}:{t:Tender;onChanged:()=>void}){
+ const [saves,setSaves]=useState(0);
  const {navigate}=useNav();const {can}=useSession();const {busy,error,run}=useAction();
  if(!t.estimateId)return <Section title="Tender estimate"><EmptyState title="No estimate has been created for this tender." detail={t.stage==='pricing'?'Choose a discipline-neutral estimate built from work items, or include the asphalt quantity engine.':'Estimates are created once the bid decision is made.'} action={t.stage==='pricing'&&can('estimate.edit')?<div className="flex flex-wrap justify-center gap-2"><Btn busy={busy} onClick={()=>void run(()=>api('/api/tenders/workspace',{method:'POST',body:{action:'create-estimate',id:t.id,mode:'general'}}),onChanged)}>Create estimate</Btn><Btn variant="secondary" busy={busy} onClick={()=>void run(()=>api('/api/tenders/workspace',{method:'POST',body:{action:'create-estimate',id:t.id,mode:'paving'}}),onChanged)}>Create with paving engine</Btn></div>:undefined}/><div className="mt-3"><ErrorState error={error}/></div></Section>;
  // The working estimate opens here, inside the tender: header, steps and approval stay in view.
  return <div className="grid gap-4">
-  <EstimateApprovalPanel estimateId={t.estimateId} onChanged={onChanged}/>
-  {can('estimate.edit')||can('commercial.view')?<EmbeddedEstimate key={t.estimateId} estimateId={t.estimateId} onSaved={onChanged}/>:<Section title="Tender estimate"><div className="grid gap-3 sm:grid-cols-2"><Stat label="Workflow" value={<StatusBadge machine="estimate" state={t.stats.estimateState||'draft'}/>}/><Stat label="Approved revision" value={t.stats.approvedRevisionNumber?`Rev ${t.stats.approvedRevisionNumber}`:'None yet'}/></div></Section>}
+  <EstimateApprovalPanel estimateId={t.estimateId} onChanged={onChanged} version={saves}/>
+  {can('estimate.edit')||can('commercial.view')?<EmbeddedEstimate key={t.estimateId} estimateId={t.estimateId} onSaved={()=>{setSaves(n=>n+1);onChanged();}} workflowState={t.stats.estimateState||'draft'}/>:<Section title="Tender estimate"><div className="grid gap-3 sm:grid-cols-2"><Stat label="Workflow" value={<StatusBadge machine="estimate" state={t.stats.estimateState||'draft'}/>}/><Stat label="Approved revision" value={t.stats.approvedRevisionNumber?`Rev ${t.stats.approvedRevisionNumber}`:'None yet'}/></div></Section>}
   <p className="text-xs text-slate-500">Prefer the full-screen register? <button className="underline" onClick={()=>navigate('Pipeline','Estimates',t.estimateId!)}>Open in Estimates</button></p>
  </div>;
 }

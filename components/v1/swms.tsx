@@ -2,7 +2,7 @@
 import {useState} from 'react';
 import {Download,FileSignature,Plus,Trash2} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
-import {api,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,dateText,Pill} from './kit';
+import {api,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,dateText,Pill,ReasonDialog} from './kit';
 import {AiAssist} from './ai';
 import {useCachedApi,useOffline,requestId,isNetworkFailure} from './offline';
 import {allowedTransitions} from '@/lib/platform/workflow';
@@ -52,7 +52,7 @@ function SwmsDetail({id,shiftId,onChanged}:{id:string;shiftId?:string;onChanged:
  const {role,can}=useSession();
  const {data,error,loading,refresh,cachedAt}=useCachedApi<Detail>(`/api/hseq/swms?id=${id}`);
  const {busy,error:actionError,run}=useAction();const offline=useOffline();const [queued,setQueued]=useState(false);
- const [draft,setDraft]=useState<SwmsContent|null>(null);const [note,setNote]=useState('');
+ const [draft,setDraft]=useState<SwmsContent|null>(null);const [note,setNote]=useState('');const [revising,setRevising]=useState(false);
  if(loading&&!data)return <div className="p-5"><Loading/></div>;
  if(error&&!data)return <div className="p-5"><ErrorState error={error} onRetry={refresh}/></div>;
  const d=data!,current=d.revisions.find(r=>r.id===d.swms.currentRevisionId)||d.revisions[0],issued=d.revisions.find(r=>r.id===d.swms.issuedRevisionId);
@@ -70,7 +70,8 @@ function SwmsDetail({id,shiftId,onChanged}:{id:string;shiftId?:string;onChanged:
    {role!=='field'&&shown.status==='draft'&&can('hseq.edit')&&!editing&&<Btn variant="secondary" onClick={()=>setDraft(structuredClone(shown.content))}>Edit draft</Btn>}
    {editing&&<Btn busy={busy} onClick={()=>void act({action:'save',revisionId:shown.id,updatedAt:shown.updated_at,content:draft})}>Save draft</Btn>}
    {editing&&<Btn variant="ghost" onClick={()=>setDraft(null)}>Cancel</Btn>}
-   {role!=='field'&&['approved','issued'].includes(shown.status)&&can('hseq.edit')&&<Btn variant="secondary" busy={busy} onClick={()=>{const r=prompt('Reason for the new revision');if(r)void act({action:'revise',reason:r});}}>Create new revision</Btn>}
+   {role!=='field'&&['approved','issued'].includes(shown.status)&&can('hseq.edit')&&<Btn variant="secondary" busy={busy} onClick={()=>setRevising(true)}>Create new revision</Btn>}
+   <ReasonDialog open={revising} title="Create a new SWMS revision" description="The issued revision stays in force and on record. The new revision starts as a draft and must be reviewed, approved and issued again." label="Reason for the new revision" required confirmLabel="Create revision" busy={busy} onCancel={()=>setRevising(false)} onConfirm={r=>{setRevising(false);void act({action:'revise',reason:r});}}/>
    {issued&&can('swms.acknowledge')&&!queued&&<Btn busy={busy} onClick={()=>{
     // Offline: the acknowledgement of this exact revision is queued; the server refuses it if a newer revision was issued meanwhile.
     const body={action:'acknowledge',id,shiftId:shiftId||null,revisionId:issued.id,clientRequestId:requestId()};

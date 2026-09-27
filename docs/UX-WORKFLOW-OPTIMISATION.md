@@ -59,3 +59,23 @@ state machines, tenancy or permission rules changed. There are two small server 
 - New logic tests cover tender steps and next-step targets, setup checklist and fix targets, next-action tabs, `availability()`, and the forecast budget change.
 - The journey asserts that the availability check shows a double booking before saving, writes nothing, leaks nothing across organisations, and is refused for field users.
 - Browser QA covered admin, estimator, project manager, operations, accounts and read-only at 1440, 1024, 768, 430 and 375, plus field and supervisor at 430 and 375. Every screen had no page errors and no horizontal overflow. Role visibility checks passed, and field and supervisor screens show no money.
+
+## Final polish
+
+- **One estimate status.**
+  - The editor header shows the approval-workflow badge (draft / in review / approved).
+  - Inside the tender, the legacy editable "Status" field is gone. The standalone register keeps only the non-duplicating outcome values as a separate "Quote outcome" (the stored legacy value is preserved).
+  - The legacy "Internal review" button, which duplicated the workflow, is removed.
+  - The embedded editor gets its own "Save changes". It is locked while a revision is in review.
+- **Shift cards.** Instead of "N readiness warnings", cards show "Needs attention" with the two most urgent existing warnings and "+N more" to reveal the rest (`lib/v1/shift-warnings.ts` only orders them).
+- **No native prompts.** Estimate approval/return, SWMS new revision, project reopen (explains Closed → Closeout) and competency revoke use a shared reason dialog. Each keeps the existing optional/required rule.
+- **Phones.**
+  - The project workspace uses a sticky section picker (project name and current section) instead of a sideways tab strip. It uses the same routes, so deep links and back/forward work.
+  - Project and tender headers scroll away below 640px.
+  - Next-action buttons wrap instead of covering the text.
+- **Search.**
+  - An estimate linked to a tender opens Tender → Estimate.
+  - Dockets open their project's Delivery, and shifts their project's schedule.
+  - Variations and claims open project Commercial, and SWMS open Quality & HSEQ.
+  - Records without a known context fall back to their register (`lib/v1/search-routing.ts`).
+- **Action consistency.** No competing "Go to Setup" when the next action is the header's own Mark ready / Start delivery. Status badges without a workflow machine and underscore options use readable labels.

@@ -6,7 +6,7 @@ import {Download,Plus,Upload} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
 import {REGISTERS,type RegisterDef,type FieldDef,type RegisterKey} from '@/lib/v1/registers';
 import {allowedTransitions,MACHINES} from '@/lib/platform/workflow';
-import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,money,dateText,Section} from './kit';
+import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,money,dateText,Section,humanStatus} from './kit';
 
 type Rec=Record<string,unknown>&{id:string;revision?:number};
 let peopleCache:Promise<Array<{id:string;name:string;role:string}>>|null=null;
@@ -48,7 +48,7 @@ function Input({f,value,onChange,disabled,people,relationOptions,documentContext
   case 'rating':return <select className={field} value={String(v)} disabled={disabled} onChange={e=>onChange(e.target.value?Number(e.target.value):null)}><option value="">Not rated</option>{[1,2,3,4,5].map(n=><option key={n} value={n}>{n}</option>)}</select>;
   case 'date':return <input className={field} type="date" value={String(v).slice(0,10)} disabled={disabled} onChange={e=>onChange(e.target.value||null)}/>;
   case 'datetime':return <input className={field} type="datetime-local" value={String(v).slice(0,16)} disabled={disabled} onChange={e=>onChange(e.target.value||null)}/>;
-  case 'select':return <select className={field} value={String(v)} disabled={disabled} onChange={e=>onChange(e.target.value||null)}><option value="">Select…</option>{f.options!.map(o=><option key={o} value={o}>{o.charAt(0).toUpperCase()+o.slice(1)}</option>)}</select>;
+  case 'select':return <select className={field} value={String(v)} disabled={disabled} onChange={e=>onChange(e.target.value||null)}><option value="">Select…</option>{f.options!.map(o=><option key={o} value={o}>{o.includes('_')?humanStatus(o):o.charAt(0).toUpperCase()+o.slice(1)}</option>)}</select>;
   case 'boolean':return <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="size-5" checked={Boolean(Number(v))||v===true} disabled={disabled} onChange={e=>onChange(e.target.checked)}/>Yes</label>;
   case 'user':return <select className={field} value={String(v)} disabled={disabled} onChange={e=>onChange(e.target.value||null)}><option value="">Unassigned</option>{people.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select>;
   case 'relation':return <select className={field} value={String(v)} disabled={disabled} onChange={e=>onChange(e.target.value||null)}><option value="">None</option>{(relationOptions[f.relation!]||[]).map(o=><option key={o.id} value={o.id}>{String(o.title||o.name||o.id).slice(0,80)}</option>)}</select>;

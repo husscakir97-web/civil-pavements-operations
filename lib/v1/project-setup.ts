@@ -38,8 +38,10 @@ export function setupAreas(categories:Array<{category:string;items:ReadinessItem
 export function nextActionTarget(stage:string,nextAction:string|null):SetupTarget|null{
  if(!nextAction)return null;
  const text=nextAction.toLowerCase();
- if(stage==='setup')return text.includes('swms')?{kind:'tab',tab:'quality'}:{kind:'tab',tab:'setup'};
- if(stage==='ready')return {kind:'tab',tab:'delivery'};
+ // When the next action is the header's own transition (Mark ready, Start delivery) there is no
+ // separate place to go: the header button is the action.
+ if(stage==='setup')return text.includes('swms')?{kind:'tab',tab:'quality'}:text.startsWith('mark the project ready')?null:{kind:'tab',tab:'setup'};
+ if(stage==='ready')return null;
  if(stage==='active')return text.includes('variation')?{kind:'tab',tab:'commercial'}:{kind:'tab',tab:'delivery'};
  if(['practical_completion','closeout'].includes(stage))return {kind:'tab',tab:'closeout'};
  return null;

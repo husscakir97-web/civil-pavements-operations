@@ -64,7 +64,7 @@ export async function homeFeed(){
  if(on('dockets','docket.approve'))tasks.push((async()=>{const n=await count("SELECT COUNT(*) AS n FROM dockets WHERE organisation_id=? AND status IN ('review','matched','ready','uploaded','duplicate')",[org]);if(n)mine.push({key:'dockets',title:`Review ${plural(n,'docket')}`,detail:'Awaiting office review and approval',area:'Operations/Dockets',severity:'warning'});})());
  if(on('commercial','commercial.view'))tasks.push((async()=>{
   if(can(a.role,'variation.approve')){
-   const rows=await query<{id:string;reference:string|null;title:string;project_id:string}>("SELECT id,reference,title,project_id FROM project_variations WHERE organisation_id=? AND status='submitted' ORDER BY submitted_at IS NULL,submitted_at LIMIT 5",[org]);
+   const rows=await query<{id:string;reference:string|null;title:string;project_id:string}>("SELECT id,reference,title,project_id FROM project_variations WHERE organisation_id=? AND status='submitted' ORDER BY submitted_date IS NULL,submitted_date LIMIT 5",[org]);
    for(const v of rows)mine.push({key:`variation-${v.id}`,title:`Variation decision: ${v.reference||v.title}`,detail:v.reference?v.title:'Awaiting client approval',area:'Projects',target:{type:'project',id:v.project_id,tab:'commercial'},severity:'warning'});
   }
   if(can(a.role,'claim.approve')){

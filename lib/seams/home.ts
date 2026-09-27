@@ -84,5 +84,8 @@ export async function homeFeed(){
   }
  })());
  await Promise.all(tasks);
+ // Promise-backed feeds finish in different orders; keep the work queue stable and urgency-first on every refresh.
+ const rank={danger:0,warning:1,info:2} as const,order=(x:HomeItem,y:HomeItem)=>rank[x.severity]-rank[y.severity]||x.title.localeCompare(y.title);
+ mine.sort(order);attention.sort(order);
  return {date:today,myActions:mine,needsAttention:attention,today:todayItems};
 }

@@ -15,10 +15,14 @@ const TenderReviewAssistant=dynamic(()=>import('@/components/tender-review-assis
 
 export function OpportunitiesView(){
  const {navigate}=useNav();const {can}=useSession();const {busy,error,run}=useAction();
- return <div className="grid gap-4">
-  <PageHeader title="Opportunities" subtitle="Work you are chasing. Qualify it, then convert it to a tender — the tender keeps the link back to this opportunity."/>
+ const {data}=useApi<{records:Array<{id:string;stage:string;estimated_value?:number|null}>}>('/api/registers/opportunities');
+ const records=data?.records||[];
+ const stages=[['lead','Leads'],['qualified','Qualified'],['bidding','Bidding'],['converted','Converted'],['lost','Lost']] as const;
+ return <div className="grid gap-5">
+  <PageHeader title="Opportunities" subtitle="See where potential work sits, qualify it, then move it into the tender workflow without losing context." actions={<Btn variant="secondary" onClick={()=>navigate('Pipeline','Tenders')}>Open tenders<ArrowRight aria-hidden className="size-4"/></Btn>}/>
   <ErrorState error={error}/>
-  <RegisterView register="opportunities" rowActions={(r,refresh)=>{
+  <section aria-label="Opportunity pipeline summary" className="grid grid-cols-2 gap-3 md:grid-cols-5">{stages.map(([key,label])=>{const list=records.filter(r=>String(r.stage).toLowerCase()===key);const value=list.reduce((sum,r)=>sum+(Number(r.estimated_value)||0),0);return <div key={key} className="rounded-2xl border bg-white p-4 shadow-sm"><div className="flex items-center justify-between gap-2"><p className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-500">{label}</p><span className={`size-2 rounded-full ${key==='lost'?'bg-slate-300':key==='converted'?'bg-emerald-500':key==='bidding'?'bg-orange-500':key==='qualified'?'bg-sky-500':'bg-slate-400'}`}/></div><p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{list.length}</p><p className="mt-1 text-xs text-slate-500">{value>0?money(value):'No value recorded'}</p></div>;})}</section>
+  <RegisterView register="opportunities" title="Opportunity register" description="Open an opportunity to update its owner, value, closing date or stage. Qualified work can be converted directly to a tender." rowActions={(r,refresh)=>{
    if(r.tender_id)return <Btn variant="ghost" onClick={()=>navigate('Pipeline','Tenders',String(r.tender_id))}>Open tender<ArrowRight aria-hidden className="size-4"/></Btn>;
    if(['qualified','bidding'].includes(String(r.stage))&&can('pipeline.edit'))return <Btn variant="secondary" busy={busy} onClick={()=>void run(()=>api<{tenderId:string}>('/api/tenders/register',{method:'POST',body:{opportunityId:r.id}}),t=>{refresh();navigate('Pipeline','Tenders',t.tenderId);})}>Convert to tender</Btn>;
    return null;

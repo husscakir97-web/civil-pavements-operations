@@ -8,7 +8,7 @@
   "scripts": {
     "install:ci": "npm ci",
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "prebuild": "node --env-file-if-exists=.env scripts/migrate-on-build.mjs",
     "start": "node --env-file-if-exists=.env scripts/start.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",

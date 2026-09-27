@@ -22,6 +22,9 @@ export const POST=api({permission:'write',module:'operations',capability:'resour
  if(!(file instanceof File))fail(400,'Choose an .xlsx or .csv spreadsheet.');
  const updateExisting=String(form.get('updateExisting')??'true')!=='false';
  const mode=String(form.get('mode')||'preview');
- if(mode==='apply')return applyResourceSpreadsheet(file,kind,updateExisting);
- return previewResourceSpreadsheet(file,kind,updateExisting);
+ let mapping:Record<string,string>={};
+ const rawMapping=form.get('mapping');
+ if(typeof rawMapping==='string'&&rawMapping.trim()){try{const parsed=JSON.parse(rawMapping);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))fail(400,'Column mapping is invalid.');mapping=Object.fromEntries(Object.entries(parsed).filter(([,v])=>typeof v==='string').map(([k,v])=>[k,String(v)]));}catch(e){if(e instanceof SyntaxError)fail(400,'Column mapping is invalid JSON.');throw e;}}
+ if(mode==='apply')return applyResourceSpreadsheet(file,kind,updateExisting,mapping);
+ return previewResourceSpreadsheet(file,kind,updateExisting,mapping);
 });

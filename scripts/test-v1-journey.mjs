@@ -176,6 +176,36 @@ try{
  await db.execute("UPDATE users SET organisation_id=?,role='field' WHERE id=?",[memberA.organisation_id,C.user.id]);
  const workerId=`worker-${suffix}`;
  await db.execute('INSERT INTO workers (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)',[workerId,memberA.organisation_id,'Casey Field','active',JSON.stringify({role:'Pipe layer',hourlyRate:88,competencyExpiry:'2099-12-31',userId:C.user.id}),new Date().toISOString()]);
+ // Bulk spreadsheet migration: preview first, valid rows import while invalid rows are skipped, and reruns update stable matches.
+ step='D resource spreadsheet import';
+ const importCsv=async(kind,mode,csv,cookie=A.cookie,updateExisting=true)=>{const form=new FormData();form.set('kind',kind);form.set('mode',mode);form.set('updateExisting',String(updateExisting));form.set('file',new File([csv],`bulk-${kind}.csv`,{type:'text/csv'}));return call('/api/operations/resource-import','POST',form,cookie);};
+ const employeeNo=`EMP-BULK-${suffix}`,employeeEmail=`bulk-${suffix}@example.invalid`;
+ const employeeCsv=`Payroll ID,Full Name,Mobile,Trade,Employment Type,Depot,Status,Hourly Rate\n${employeeNo},Jordan Import,0412 345 678,Labourer,employee,Sydney,Active,72.50\nBAD-${suffix},Broken Rate,0400 000 001,Labourer,employee,Sydney,Active,not-a-rate`;
+ let importPreview=await json(await importCsv('workers','preview',employeeCsv),200,'employee import preview');
+ assert.equal(importPreview.summary.total,2);assert.equal(importPreview.summary.create,1);assert.equal(importPreview.summary.error,1,'bad rows are surfaced before import');
+ let importApplied=await json(await importCsv('workers','apply',employeeCsv),200,'employee import apply');
+ assert.equal(importApplied.summary.created,1);assert.equal(importApplied.summary.skipped,1,'invalid row is skipped while valid row imports');
+ let [[bulkWorker]]=await db.execute('SELECT id,name,employee_number,phone,role_title,hourly_rate,location FROM workers WHERE organisation_id=? AND employee_number=?',[memberA.organisation_id,employeeNo]);
+ assert.equal(bulkWorker.name,'Jordan Import');assert.equal(bulkWorker.phone,'0412 345 678');assert.equal(bulkWorker.role_title,'Labourer');assert.equal(Number(bulkWorker.hourly_rate),72.5);
+ const employeeUpdate=`Payroll ID,Full Name,Trade,Depot,Status\n${employeeNo},Jordan Import,Team Leader,Wollongong,Active`;
+ importPreview=await json(await importCsv('workers','preview',employeeUpdate),200,'employee rerun preview');assert.equal(importPreview.summary.update,1);assert.equal(importPreview.summary.create,0,'stable employee number matches the existing worker');
+ importApplied=await json(await importCsv('workers','apply',employeeUpdate),200,'employee rerun apply');assert.equal(importApplied.summary.updated,1);
+ [[bulkWorker]]=await db.execute('SELECT phone,role_title,location FROM workers WHERE organisation_id=? AND employee_number=?',[memberA.organisation_id,employeeNo]);
+ assert.equal(bulkWorker.phone,'0412 345 678','blank update cells preserve existing values');assert.equal(bulkWorker.role_title,'Team Leader');assert.equal(bulkWorker.location,'Wollongong');
+ const plantNo=`PL-BULK-${suffix}`,rego=`RG${suffix.slice(-5).toUpperCase()}`;
+ const plantCsv=`Asset Number,Rego,Equipment Name,Type,Make,Model,Ownership,Expiry Date,Depot,Status,Hourly Rate,Day Rate\n${plantNo},${rego},Excavator Import,Excavator,Kubota,U55-4,owned,31/12/2099,Sydney,Available,95,760`;
+ importPreview=await json(await importCsv('plant','preview',plantCsv),200,'plant import preview');assert.equal(importPreview.summary.create,1);
+ importApplied=await json(await importCsv('plant','apply',plantCsv),200,'plant import apply');assert.equal(importApplied.summary.created,1);
+ let [[bulkPlant]]=await db.execute('SELECT id,name,plant_number,registration,status,compliance_expiry FROM plant WHERE organisation_id=? AND plant_number=?',[memberA.organisation_id,plantNo]);
+ assert.equal(bulkPlant.registration,rego);assert.equal(bulkPlant.compliance_expiry,'2099-12-31');
+ const plantUpdate=`Asset Number,Equipment Name,Status,Depot\n${plantNo},Excavator Import,Maintenance,Unanderra`;
+ importApplied=await json(await importCsv('plant','apply',plantUpdate),200,'plant rerun apply');assert.equal(importApplied.summary.updated,1);
+ [[bulkPlant]]=await db.execute('SELECT registration,status,location FROM plant WHERE organisation_id=? AND plant_number=?',[memberA.organisation_id,plantNo]);
+ assert.equal(bulkPlant.registration,rego,'blank plant fields preserve existing values');assert.equal(bulkPlant.status,'Maintenance');assert.equal(bulkPlant.location,'Unanderra');
+ const template=await call('/api/operations/resource-import?kind=workers&template=1','GET',undefined,A.cookie);assert.equal(template.status,200);assert.match(template.headers.get('content-type')||'',/spreadsheetml/);assert((await template.arrayBuffer()).byteLength>1000,'employee template is a real XLSX workbook');
+ const foreignPreview=await json(await importCsv('workers','preview',employeeUpdate,B.cookie),200,'tenant import preview');assert.equal(foreignPreview.summary.create,1,'another organisation cannot match organisation A workers');
+ assert.equal((await importCsv('workers','preview',employeeUpdate,C.cookie)).status,403,'field users cannot bulk import resources');
+ console.log('PASS D import: XLSX template, CSV preview, partial valid import, employee/plant safe reruns, blank preservation, tenant isolation and role denial');
  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Australia/Sydney',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
  const shift=(await json(await call('/api/delivery','POST',{kind:'shifts',record:{id:'',name:'Pipe laying day 1',status:'Planned',metadata:{jobId:projectId,date:today,start:'07:00',finish:'15:30',scope:'Lay 40m of 375 RCP',instructions:'Shoring inspected before entry',assignments:[{resourceId:workerId,category:'workers',name:'Casey Field',role:'Pipe layer',hours:8,rate:88,payload:0,trips:0,userId:C.user.id}]}}},A.cookie),201)).record;
  // Planner availability check: read-only, same engine, tenant-scoped, write roles only.

@@ -11,11 +11,13 @@ export const WORKSPACES:Record<EngineKey,Workspace[]>={
   {label:'Estimates',description:'Build and approve discipline-neutral estimates before they become a project baseline.',sub:'Estimates',capability:'pipeline.view',module:'estimating'},
  ],
  'Prepare Work':[
+  {label:'Programme',description:'Plan dependencies, production and the two-week lookahead.',sub:'Programme',capability:'project.view',module:'projects'},
   {label:'Projects',description:'Set up awarded work, resolve readiness blockers and establish the controlled baseline.',sub:'Projects',capability:'project.view',module:'projects'},
   {label:'IMS & HSEQ',description:'Build and control risks, SWMS, ITPs and management-system requirements.',sub:'IMS & HSEQ',capability:'hseq.view',module:'ims'},
   {label:'Company Library',description:'Reuse policies, plans, evidence and standard company knowledge instead of recreating it.',sub:'Company Library',capability:'library.edit'},
  ],
  'Resource Work':[
+  {label:'Workshop',description:'Manage asset defects, repairs and verified return to service.',sub:'Workshop',capability:'workshop.view',module:'workshop'},
   {label:'Schedule',description:'Plan shifts against project demand and expose conflicts before work starts.',sub:'Schedule',capability:'schedule.view',module:'operations'},
   {label:'Resources',description:'Workers, competencies, crews, plant, suppliers and availability.',sub:'Resources',capability:'schedule.view',module:'operations'},
  ],

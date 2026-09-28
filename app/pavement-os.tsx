@@ -44,6 +44,8 @@ const TendersView = dynamic(() => loaders.pipeline().then(m => m.TendersView), {
 const EstimatesQuotes = dynamic(() => loaders.estimates().then(m => m.EstimatesQuotes), { loading });
 const ProjectsView = dynamic(() => loaders.projects().then(m => m.ProjectsView), { loading });
 const OperationsPage = dynamic(() => loaders.operations().then(m => m.OperationsPage), { loading });
+const Program = dynamic(() => import("@/components/v1/program").then(m => m.Program), { loading });
+const Workshop = dynamic(() => import("@/components/v1/workshop").then(m => m.Workshop), { loading });
 const JobsPlanning = dynamic(() => import("@/components/jobs-planning").then(m => m.JobsPlanning), { loading });
 const DocketDashboard = dynamic(() => loaders.dockets().then(m => m.DocketDashboard), { loading });
 const CommercialArea = dynamic(() => loaders.commercial().then(m => m.CommercialArea), { loading });
@@ -70,11 +72,13 @@ const AREAS: Area[] = [
   { key: "Prepare Work", label: "Prepare Work", icon: ClipboardCheck, engineNumber: 2, defaultSub: "Overview", subs: [
     { key: "Overview", anyOf: ["project.view","hseq.view","library.edit"] },
     { key: "Projects", module: "projects", capability: "project.view" },
+    { key: "Programme", module: "projects", capability: "project.view" },
     { key: "IMS & HSEQ", module: "ims", capability: "hseq.view" },
     { key: "Company Library", capability: "library.edit" },
   ], preload: loaders.engines },
   { key: "Resource Work", label: "Resource Work", icon: UsersRound, engineNumber: 3, defaultSub: "Overview", subs: [
-    { key: "Overview", anyOf: ["schedule.view","resources.edit"] },
+    { key: "Overview", anyOf: ["schedule.view","resources.edit","workshop.view"] },
+    { key: "Workshop", module: "workshop", capability: "workshop.view" },
     { key: "Schedule", module: "operations", capability: "schedule.view" },
     { key: "Resources", module: "operations", capability: "schedule.view" },
   ], preload: loaders.engines },
@@ -187,8 +191,10 @@ function WorkspaceShell() {
   if (k === "Search") content = <SearchV1 />;
   else if (k === "Home") content = <HomeV1 />;
   else if (k === "Win Work") content = sub === "Overview" ? <EngineOverview engine="Win Work" /> : sub === "Tenders" ? <TendersView /> : sub === "Estimates" ? <EstimatesQuotes key={route.id || "all"} initialEstimateId={route.id} /> : <OpportunitiesView />;
+  else if (k === "Prepare Work" && sub === "Programme") content = <Program />;
   else if (k === "Prepare Work") content = sub === "Overview" ? <EngineOverview engine="Prepare Work" /> : sub === "Projects" ? <ProjectsView /> : sub === "IMS & HSEQ" ? <HseqArea /> : <LibraryArea />;
-  else if (k === "Resource Work") content = sub === "Overview" ? <EngineOverview engine="Resource Work" /> : sub === "Resources" ? <ResourcesArea key="resources" other={<OperationsPage module="Resources" initialResource="crews" resourceTypes={otherResources} onNavigate={legacyNavigate} />} /> : <JobsPlanning key={`schedule-${route.id || "all"}`} page="Planning" initialJobId={route.id} onBack={route.id ? () => navigate("Prepare Work", "Projects", route.id) : undefined} />;
+  else if (k === "Resource Work") content = sub === "Overview" ? <EngineOverview engine="Resource Work" /> : sub === "Workshop" ? <Workshop /> : sub === "Resources" ? <ResourcesArea key="resources" other={<OperationsPage module="Resources" initialResource="crews" resourceTypes={otherResources} onNavigate={legacyNavigate} />} /> : <JobsPlanning key={`schedule-${route.id || "all"}`} page="Planning" initialJobId={route.id} onBack={route.id ? () => navigate("Prepare Work", "Projects", route.id) : undefined} />;
+  else if (k === "Deliver Work" && sub === "Programme") content = <Program />;
   else if (k === "Deliver Work") content = sub === "Overview" ? <EngineOverview engine="Deliver Work" /> : sub === "Dockets" ? <DocketDashboard /> : <ProjectsView />;
   else if (k === "Control Money") content = sub === "Overview" ? <EngineOverview engine="Control Money" /> : <CommercialArea />;
   else if (k === "Learn") content = sub === "Overview" ? <EngineOverview engine="Learn" /> : <ReportsV1 />;

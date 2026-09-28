@@ -76,7 +76,7 @@ export function availability(shift:ShiftInput,candidates:Array<{resourceType:str
 
 export const blocking=(status:string,conflicts:Conflict[])=>ENFORCED_STATUSES.includes(status)?conflicts.filter(c=>c.severity==='block'):[];
 
-type Legacy=LegacyRow&{active?:number|null;legacy_synced_at?:string|null;compliance_expiry?:string|null};
+type Legacy=LegacyRow&{safety_hold?:number;active?:number|null;legacy_synced_at?:string|null;compliance_expiry?:string|null};
 /** Loads the resources referenced by `ids` (typed where synced, mapped where not). Portable SQL. */
 export async function loadResources(db:Database,org:string,ids:Array<{resourceType:string;resourceId:string}>){
  const out=new Map<string,ResourceInfo>();
@@ -86,8 +86,8 @@ export async function loadResources(db:Database,org:string,ids:Array<{resourceTy
  for(const [type,list] of byType){
   const table=tableOf[type];if(!table||!list.length)continue;
   const unique=[...new Set(list)],marks=unique.map(()=>'?').join(',');
-  const cols=type==='worker'?',active,legacy_synced_at':type==='plant'?',active,legacy_synced_at,compliance_expiry':'';
-  const rows=(await db.prepare(`SELECT id,name,status,metadata${cols} FROM ${table} WHERE organisation_id=? AND id IN (${marks})`).bind(org,...unique).all<Legacy>()).results;
+
+  const rows=(await db.prepare(`SELECT * FROM ${table} WHERE organisation_id=? AND id IN (${marks})`).bind(org,...unique).all<Legacy>()).results;
   const comps=type==='worker'&&rows.length?(await db.prepare(`SELECT worker_id,competency_type,expiry_date,status FROM worker_competencies WHERE organisation_id=? AND worker_id IN (${rows.map(()=>'?').join(',')})`).bind(org,...rows.map(r=>r.id)).all<{worker_id:string;competency_type:string;expiry_date:string|null;status:string}>()).results:[];
   for(const r of rows){
    const info:ResourceInfo={id:r.id,type,name:r.name,status:r.status,active:isActiveStatus(r.status)};
@@ -96,6 +96,7 @@ export async function loadResources(db:Database,org:string,ids:Array<{resourceTy
     else info.competencies=mapWorker(r).competencies.map(c=>({type:c.competencyType,expiryDate:c.expiryDate,status:'current'}));
    }
    if(type==='plant'){
+    if(Number(r.safety_hold))info.status='Out of service';
     if(r.legacy_synced_at){info.active=Boolean(Number(r.active))&&info.active;info.complianceExpiry=r.compliance_expiry??null;}
     else info.complianceExpiry=mapPlant(r).columns.compliance_expiry;
    }

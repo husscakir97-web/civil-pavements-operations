@@ -1,3 +1,5 @@
+import {coverage,requirementsInput} from '@/lib/v1/shift-requirements';
+import {assignments} from '@/lib/planning';
 import {fieldDelivery,withoutMoney} from '@/lib/field-access';
 import {can} from '@/lib/platform/permissions';
 import {getEntitlements,usable} from '@/lib/platform/entitlements';
@@ -64,6 +66,14 @@ async function handlePOST(request:Request) {
       // competencies, plant compliance). Blocks apply to Planned / Ready / In Progress.
       const input=shiftInput({...saved,metadata});
       conflicts=evaluateShift(input,await loadResources(db,ORG(),input.assignments),await loadNearbyShifts(db,ORG(),input.date));
+      if(metadata.requirements!==undefined){
+        const parsed=requirementsInput.safeParse(metadata.requirements);
+        if(!parsed.success)return jsonError('Check resource requirements: choose a category and positive whole quantity.');
+        metadata.requirements=parsed.data;
+        for(const r of coverage(parsed.data,assignments(saved)))if(r.missing)conflicts.push({code:'REQUIREMENT_SHORTAGE',severity:'block',message:r.category+' '+(r.role||'resources')+': '+r.filled+'/'+r.quantity+' filled.'});
+        sync.push({sql:'DELETE FROM shift_requirements WHERE organisation_id=? AND shift_id=?',params:[ORG(),id]});
+        for(const r of parsed.data)sync.push({sql:'INSERT INTO shift_requirements (id,organisation_id,shift_id,category,role,quantity,status,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,1,?,?,?)',params:[crypto.randomUUID(),ORG(),id,r.category,r.role,r.quantity,'active',actor.userId,new Date().toISOString(),new Date().toISOString()]});
+      }
       const blocks=blocking(record.status,conflicts);
       if(blocks.length) return jsonError(`Resolve ${blocks.length===1?'this scheduling conflict':`these ${blocks.length} scheduling conflicts`} or save the shift as Draft.`,409,{conflicts,warnings});
       const known={jobIds:new Set(jobs.map(j=>j.id)),resources:new Map(byTable.flatMap((rows,i)=>rows.map(r=>[r.id,tables[i+2]] as [string,string])))};

@@ -100,6 +100,12 @@ try{
  const lib=reg('library',A.cookie);
  const libItem=(await json(await lib.create(null,{category:'Insurance',title:'Public liability $20m',document_id:insuranceDoc.id,expiry_date:'2099-06-30',owner_name:'Office'}),201)).record;
  await json(await lib.move(libItem.id,'current'),200);
+ const libWords=await json(await lib.create(null,{category:'Insurance',title:'Public & Products Liability Insurance',owner_name:'Office'}),201);
+ const liabilitySearch=await json(await call('/api/search?q='+encodeURIComponent('public liability'),'GET',undefined,A.cookie),200);
+ assert(liabilitySearch.results.some(r=>r.id===libWords.record.id),'search matches each word, not only the exact phrase');
+ assert(liabilitySearch.results.some(r=>r.id===libItem.id),'exact phrase still found');
+ const foreignLiability=await json(await call('/api/search?q='+encodeURIComponent('public liability'),'GET',undefined,B.cookie),200);
+ assert(!foreignLiability.results.some(r=>[libWords.record.id,libItem.id].includes(r.id)),'library search stays in the organisation');
  const opps=reg('opportunities',A.cookie);
  const opp=(await json(await opps.create(null,{name:'Riverside drainage upgrade',client_name:'Riverside Council',estimated_value:850000,probability:60,closing_date:'2099-01-15'}),201)).record;
  assert.equal(opp.stage,'lead');

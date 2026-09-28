@@ -16,12 +16,14 @@ export const canEditClients=(role:string)=>can(role,'pipeline.edit')||can(role,'
 function needView(){if(!canViewClients(actor().role))fail(403,'You are not authorised to view clients.');}
 function needEdit(){if(!canEditClients(actor().role))fail(403,'You are not authorised to change clients.');}
 
-export type ClientSummary={id:string;name:string;legalName:string|null;abn:string|null;contactName:string;email:string;phone:string;status:string;revision:number;sites:SiteSummary[]};
+export type ClientSummary={id:string;name:string;legalName:string|null;abn:string|null;contactName:string;email:string;phone:string;status:string;revision:number;sites:SiteSummary[];contacts:ContactSummary[]};
 export type SiteSummary={id:string;clientId:string|null;name:string;address:string|null;label:string};
+export type ContactSummary={id:string;clientId:string;name:string;roleTitle:string|null;email:string|null;phone:string|null;mobile:string|null;notes:string|null;status:string;revision:number};
 
 export const siteLabel=(s:{name:string;address?:string|null;suburb?:string|null})=>[s.name,s.address&&s.address!==s.name?s.address:null,s.suburb].filter(Boolean).join(', ');
 const site=(r:Row):SiteSummary=>({id:r.id,clientId:r.client_id??null,name:r.name,address:r.address??null,label:siteLabel(r as {name:string})});
-const client=(r:Row,sites:SiteSummary[]):ClientSummary=>({id:r.id,name:r.name,legalName:r.legal_name??null,abn:r.abn??null,contactName:r.contact_name||'',email:r.email||'',phone:r.phone||'',status:r.status||'active',revision:Number(r.revision||1),sites});
+const contact=(r:Row):ContactSummary=>({id:r.id,clientId:r.client_id,name:r.name,roleTitle:r.role_title??null,email:r.email??null,phone:r.phone??null,mobile:r.mobile??null,notes:r.notes??null,status:r.status||'active',revision:Number(r.revision||1)});
+const client=(r:Row,sites:SiteSummary[],contacts:ContactSummary[]=[]):ClientSummary=>({id:r.id,name:r.name,legalName:r.legal_name??null,abn:r.abn??null,contactName:r.contact_name||'',email:r.email||'',phone:r.phone||'',status:r.status||'active',revision:Number(r.revision||1),sites,contacts});
 const like=(q:string)=>`%${q.replace(/[\\%_]/g,m=>'\\'+m)}%`;
 
 /** Searchable client list with each client's sites. Small registers are returned whole for instant client-side filtering. */
@@ -32,7 +34,8 @@ export async function listClients(q=''){
  const rows=await query(`SELECT * FROM clients WHERE organisation_id=?${where} ORDER BY status='active' DESC,name LIMIT 500`,[org,...(term?Array(5).fill(like(term)):[])]);
  const ids=rows.map(r=>r.id);
  const sites=ids.length?await query("SELECT * FROM client_sites WHERE organisation_id=? AND client_id IN (?) AND status='active' ORDER BY name",[org,ids]):[];
- return {clients:rows.map(r=>client(r,sites.filter(s=>s.client_id===r.id).map(site)))};
+ const contacts=ids.length?await query("SELECT * FROM client_contacts WHERE organisation_id=? AND client_id IN (?) AND status='active' ORDER BY name",[org,ids]):[];
+ return {clients:rows.map(r=>client(r,sites.filter(s=>s.client_id===r.id).map(site),contacts.filter(c=>c.client_id===r.id).map(contact)))};
 }
 
 export async function getClient(id:string,conn:Conn=getPool()){
@@ -40,7 +43,8 @@ export async function getClient(id:string,conn:Conn=getPool()){
  const r=await one('SELECT * FROM clients WHERE organisation_id=? AND id=?',[org,id],conn);
  if(!r)return null;
  const sites=await query("SELECT * FROM client_sites WHERE organisation_id=? AND client_id=? AND status='active' ORDER BY name",[org,id],conn);
- return client(r,sites.map(site));
+ const contacts=await query("SELECT * FROM client_contacts WHERE organisation_id=? AND client_id=? AND status='active' ORDER BY name",[org,id],conn);
+ return client(r,sites.map(site),contacts.map(contact));
 }
 
 export const clientInput=z.object({
@@ -108,6 +112,67 @@ async function insertSite(v:z.infer<typeof siteInput>,conn:Conn){
  return site((await one('SELECT * FROM client_sites WHERE id=?',[id],conn))!);
 }
 export async function createSite(input:z.infer<typeof siteInput>){needEdit();const v=siteInput.parse(input);return tx(async conn=>({site:await insertSite(v,conn)}));}
+
+// ---------------------------------------------------------------- client contacts
+export const contactInput=z.object({
+ clientId:z.string().trim().min(1,'Choose a client first.').max(191),
+ name:z.string().trim().min(1,'Contact name is required.').max(160),
+ roleTitle:z.string().trim().max(160).nullish(),
+ email:z.string().trim().max(254).nullish(),
+ phone:z.string().trim().max(60).nullish(),
+ mobile:z.string().trim().max(60).nullish(),
+ notes:z.string().trim().max(5000).nullish(),
+});
+
+export async function listContacts(clientId:string){
+ needView();
+ const org=actor().organisationId;
+ const rows=await query("SELECT * FROM client_contacts WHERE organisation_id=? AND client_id=? AND status='active' ORDER BY name",[org,clientId]);
+ return {contacts:rows.map(contact)};
+}
+
+export async function createContact(input:z.infer<typeof contactInput>){
+ needEdit();
+ const a=actor(),v=contactInput.parse(input);
+ return tx(async conn=>{
+  if(!await one('SELECT id FROM clients WHERE organisation_id=? AND id=?',[a.organisationId,v.clientId],conn))fail(400,'Client not found.');
+  const id=uuid(),now=nowIso();
+  await exec('INSERT INTO client_contacts (id,organisation_id,client_id,name,role_title,email,phone,mobile,notes,status,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+   [id,a.organisationId,v.clientId,v.name,v.roleTitle||null,v.email||null,v.phone||null,v.mobile||null,v.notes||null,'active',1,a.userId,now,now],conn);
+  await audit({event:'client_contact.created',entityType:'client_contact',entityId:id,summary:`Contact added: ${v.name}`,after:v},conn);
+  return {contact:contact((await one('SELECT * FROM client_contacts WHERE id=?',[id],conn))!)};
+ });
+}
+
+export async function updateContact(id:string,revision:number,input:Partial<z.infer<typeof contactInput>>&{status?:'active'|'inactive'}){
+ needEdit();
+ const a=actor(),v=contactInput.partial().extend({status:z.enum(['active','inactive']).optional()}).parse(input);
+ const map:Record<string,string>={name:'name',roleTitle:'role_title',email:'email',phone:'phone',mobile:'mobile',notes:'notes',status:'status'};
+ return tx(async conn=>{
+  const row=await one('SELECT * FROM client_contacts WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,id],conn);
+  if(!row)fail(404,'Contact not found.');
+  if(Number(row!.revision||1)!==Number(revision))fail(409,'This contact was changed by someone else. Refresh to see the latest version.');
+  const set:Row={};
+  for(const [k,col] of Object.entries(map))if(k in v&&(v as Row)[k]!==undefined)set[col]=(v as Row)[k]??null;
+  if(set.name!==undefined&&!String(set.name).trim())fail(400,'Contact name is required.');
+  const cols=Object.keys(set);
+  if(cols.length){
+   await exec(`UPDATE client_contacts SET ${cols.map(c=>`${c}=?`).join(',')},revision=COALESCE(revision,1)+1,updated_at=? WHERE organisation_id=? AND id=?`,[...cols.map(c=>set[c]),nowIso(),a.organisationId,id],conn);
+   await audit({event:'client_contact.updated',entityType:'client_contact',entityId:id,summary:`Contact updated: ${String(set.name??row!.name).slice(0,120)}`,before:Object.fromEntries(cols.map(c=>[c,row![c]])),after:set},conn);
+  }
+  return {contact:contact((await one('SELECT * FROM client_contacts WHERE id=?',[id],conn))!)};
+ });
+}
+
+/** Validates a contact reference and returns its snapshot text; a contact must belong to the given client. */
+export async function resolveContact(contactId:string|null|undefined,clientId:string|null|undefined,conn:Conn=getPool()){
+ if(!contactId)return {contactId:null as string|null};
+ const org=actor().organisationId;
+ const c=await one('SELECT * FROM client_contacts WHERE organisation_id=? AND id=?',[org,contactId],conn);
+ if(!c)fail(400,'Contact not found. Choose a contact from the list.');
+ if(clientId&&c!.client_id!==clientId)fail(400,'That contact belongs to a different client.');
+ return {contactId:c!.id as string};
+}
 
 /**
  * Validates client/site references for a write and returns the snapshot text to

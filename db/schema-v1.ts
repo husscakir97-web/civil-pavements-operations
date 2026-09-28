@@ -133,6 +133,21 @@ export const clientSites=mysqlTable('client_sites',{
  ...lifecycle(),
 },t=>[index('idx_client_sites_org').on(t.organisationId),index('idx_client_sites_org_client').on(t.organisationId,t.clientId)]);
 
+// Contacts for a client (0007). Multiple per client; selected alongside the
+// client on opportunities/tenders/projects (tenders.contact_id, jobs.contact_id).
+export const clientContacts=mysqlTable('client_contacts',{
+ id:id(),organisationId:org(),
+ clientId:ref('client_id').notNull(),
+ name:varchar('name',{length:160}).notNull(),
+ roleTitle:varchar('role_title',{length:160}),
+ email:varchar('email',{length:254}),
+ phone:varchar('phone',{length:60}),
+ mobile:varchar('mobile',{length:60}),
+ notes:text('notes'),
+ status:varchar('status',{length:20}).notNull().default('active'),
+ ...lifecycle(),
+},t=>[index('idx_client_contacts_org').on(t.organisationId),index('idx_client_contacts_org_client').on(t.organisationId,t.clientId)]);
+
 // ---------------------------------------------------------------- pipeline
 export const tenders=mysqlTable('tenders',{
  id:id(),organisationId:org(),

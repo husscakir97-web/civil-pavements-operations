@@ -58,7 +58,8 @@ export function Lookup({label,items,value,onChange,placeholder,disabled,loading,
 
 // ---------------------------------------------------------------- clients & sites
 export type Site={id:string;clientId:string|null;name:string;address:string|null;label:string};
-export type Client={id:string;name:string;legalName:string|null;abn:string|null;contactName:string;email:string;phone:string;status:string;revision:number;sites:Site[]};
+export type Contact={id:string;clientId:string;name:string;roleTitle:string|null;email:string|null;phone:string|null;mobile:string|null;notes:string|null;status:string;revision:number};
+export type Client={id:string;name:string;legalName:string|null;abn:string|null;contactName:string;email:string;phone:string;status:string;revision:number;sites:Site[];contacts:Contact[]};
 
 let clientsCache:Promise<Client[]>|null=null;
 const listeners=new Set<(c:Client[])=>void>();
@@ -99,4 +100,16 @@ export function SitePicker({clientId,value,onChange,disabled,label='Site'}:{clie
  return <Lookup label={label} items={items} value={value} loading={loading} disabled={disabled} placeholder={clientId?'Search this client’s sites…':'Search sites…'} emptyText={clientId?'No sites recorded for this client. Type an address to add one.':'Choose a client first to add a site.'}
   onChange={i=>onChange(i?sites.find(s=>s.id===i.id)||null:null)}
   createLabel={q=>`Add site “${q}”`} onCreate={canCreate&&clientId?async q=>{const r=await api<{site:Site}>('/api/platform/clients',{method:'POST',body:{action:'createSite',site:{clientId:clientId||null,address:q}}});publish();onChange(r.site);return {id:r.site.id,label:r.site.name};}:undefined}/>;
+}
+
+/** Contacts for the chosen client, with inline add by name. A client must be chosen first. */
+export function ContactPicker({clientId,value,onChange,disabled,label='Contact'}:{clientId:string|null|undefined;value:string|null|undefined;onChange:(c:Contact|null)=>void;disabled?:boolean;label?:string}){
+ const {clients,loading}=useClients(),session=useSession();
+ const canCreate=session.can('pipeline.edit')||session.can('project.edit');
+ const contacts=useMemo(()=>clientId?clients.find(c=>c.id===clientId)?.contacts||[]:[],[clients,clientId]);
+ const items=useMemo(()=>contacts.map(c=>({id:c.id,label:c.name,detail:[c.roleTitle,c.email,c.phone||c.mobile].filter(Boolean).join(' · ')||null,search:[c.name,c.roleTitle,c.email,c.phone,c.mobile]})),[contacts]);
+ return <Lookup label={label} items={items} value={value} loading={loading} disabled={disabled||!clientId} placeholder={clientId?'Search this client’s contacts…':'Choose a client first…'}
+  emptyText={clientId?'No contacts recorded for this client. Type a name to add one.':'Choose a client first to add a contact.'}
+  onChange={i=>onChange(i?contacts.find(c=>c.id===i.id)||null:null)}
+  createLabel={q=>`Add contact “${q}”`} onCreate={canCreate&&clientId?async q=>{const r=await api<{contact:Contact}>('/api/platform/clients',{method:'POST',body:{action:'createContact',contact:{clientId,name:q}}});publish();onChange(r.contact);return {id:r.contact.id,label:r.contact.name};}:undefined}/>;
 }

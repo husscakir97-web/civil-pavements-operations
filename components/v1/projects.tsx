@@ -5,6 +5,7 @@ import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sh
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,PageHeader,NextAction,Progress,Tabs,Stat,money,pct,dateText,Pill,humanStatus,ReasonDialog} from './kit';
 import {RegisterView,usePeople} from './register-view';
 import {SwmsPanel} from './swms';
+import {KnowledgeCheckPanel} from './knowledge-checks';
 import {ProjectCommercial,presetClaimLine} from './commercial';
 import {ActivityLog} from './admin';
 import {useNav} from './nav';
@@ -114,7 +115,7 @@ function AttentionList({items,empty}:{items:Attention[];empty:string}){
 type Rec=Record<string,string>;
 function Overview({d,onTab,goTarget}:{d:Detail;onTab:(k:TabKey)=>void;goTarget:(t:SetupTarget)=>void}){
  const p=d.project;const {can,module}=useSession();const {navigate}=useNav();
- const hseq=can('hseq.view')&&module('ims'),money_=can('commercial.view')&&module('commercial');
+ const hseq=can('hseq.view')&&module('ims'),money_=can('commercial.view')&&module('commercial'),knowledge=can('knowledge.view');
  const risks=useApi<{records:Rec[]}>(hseq?`/api/registers/risks?parentId=${p.id}`:null);
  const swms=useApi<{swms:Array<{id:string;reference:string;title:string;status:string}>}>(hseq?`/api/hseq/swms?projectId=${p.id}`:null);
  const ncrs=useApi<{records:Rec[]}>(hseq?`/api/registers/ncrs?parentId=${p.id}`:null);
@@ -143,6 +144,7 @@ function Overview({d,onTab,goTarget}:{d:Detail;onTab:(k:TabKey)=>void;goTarget:(
  const upcoming=(hub.data?.shifts||[]).filter(s=>(s.metadata.date||'')>=today&&!['Cancelled','Archived'].includes(s.status)).sort((a,b)=>`${a.metadata.date}${a.metadata.start}`.localeCompare(`${b.metadata.date}${b.metadata.start}`)).slice(0,5);
  return <div className="grid gap-4">
   <Section title="Needs attention" description={items.length?`${items.length} item${items.length===1?'':'s'} for this project`:undefined}><AttentionList items={items} empty="Nothing needs attention on this project right now."/></Section>
+  {knowledge&&<KnowledgeCheckPanel title="Civil knowledge checks" topics={['project','contract','construction','hseq','pavements','asphalt','concrete','earthworks','drainage','traffic','plant','workforce']} scope={{projectId:p.id}} context={{project:{id:p.id,name:p.name,stage:p.stage,clientName:p.clientName,contractType:p.contractType,siteAddress:p.siteAddress,startDate:p.startDate,finishDate:p.finishDate,scope:p.scope,assumptions:p.assumptions,exclusions:p.exclusions,clientRequirements:p.clientRequirements,mobilisationNotes:p.mobilisationNotes}}}/>} 
   <div className="grid gap-4 lg:grid-cols-2">
    <Section title="Today and upcoming" actions={<Btn variant="ghost" onClick={()=>onTab('delivery')}>Delivery<ArrowRight aria-hidden className="size-4"/></Btn>}>{hub.loading&&!hub.data?<Loading/>:upcoming.length?<ul className="divide-y text-sm">{upcoming.map(s=><li key={s.id} className="flex flex-wrap items-center justify-between gap-2 py-2"><span><span className="font-medium">{s.metadata.date===today?'Today':dateText(s.metadata.date)}</span> · {s.name}<span className="block text-xs text-slate-500">{[s.metadata.start&&`${s.metadata.start}–${s.metadata.finish}`,s.metadata.supervisor].filter(Boolean).join(' · ')}</span></span><Pill>{s.status}</Pill></li>)}</ul>:<EmptyState title="No upcoming work is scheduled for this project." action={can('schedule.edit')?<Btn variant="secondary" onClick={()=>navigate('Operations','Schedule',p.id)}><CalendarDays aria-hidden className="size-4"/>Plan a shift</Btn>:undefined}/>}</Section>
    {money_&&f?<Section title="Financial snapshot" actions={<Btn variant="ghost" onClick={()=>onTab('commercial')}>Commercial<ArrowRight aria-hidden className="size-4"/></Btn>}><div className="grid grid-cols-2 gap-3"><Stat label="Current contract" value={money(f.currentContract)}/><Stat label="Forecast margin" value={pct(f.forecastMarginPct)} tone={f.forecastMarginPct==null?undefined:f.forecastMarginPct<0?'bad':f.forecastMarginPct<5?'warn':'good'} hint={`${money(f.forecastProfit)} profit`}/><Stat label="Actual cost" value={money(f.actual)} hint={`of ${money(f.currentBudget)} budget`}/><Stat label="Claimed" value={money(f.claimed)} hint={`${money(f.unbilled)} unbilled`}/></div></Section>

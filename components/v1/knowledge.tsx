@@ -157,24 +157,6 @@ function RuleEditor({pack,sources,rule,onSaved}:{pack:Pack;sources:Source[];rule
 function RuleSandbox(){
  const [raw,setRaw]=useState('{"asphalt":{"mix":"AC14","compactedDepthMm":50},"project":{"specification":""}}');
  const [topics,setTopics]=useState('asphalt,pavements,materials');
- const [projectId,setProjectId]=useState('');
- const [assetId,setAssetId]=useState('');
- const [context,setContext]=useState<Record<string,unknown>|null>(null);
- const [parseError,setParseError]=useState<string|null>(null);
- const run=()=>{try{const parsed=JSON.parse(raw);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('Scenario must be a JSON object.');setContext(parsed as Record<string,unknown>);setParseError(null);}catch(e){setContext(null);setParseError(e instanceof Error?e.message:'Invalid JSON.');}};
- return <Section title="Rule sandbox" description="Test controlled knowledge against a structured scenario before relying on it in estimates, projects, scheduling, workshop or field workflows.">
-  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
-   <Field label="Scenario JSON"><textarea className={field+' min-h-36 font-mono text-xs'} value={raw} onChange={e=>setRaw(e.target.value)}/></Field>
-   <div className="grid content-start gap-3"><Field label="Topics"><input className={field} value={topics} onChange={e=>setTopics(e.target.value)} placeholder="asphalt, concrete, drainage"/></Field><Field label="Project ID (optional)"><input className={field} value={projectId} onChange={e=>setProjectId(e.target.value)}/></Field><Field label="Asset ID (optional)"><input className={field} value={assetId} onChange={e=>setAssetId(e.target.value)}/></Field><Btn onClick={run}>Run controlled checks</Btn>{parseError&&<p className="text-xs text-red-700">{parseError}</p>}</div>
-  </div>
-  {context&&<KnowledgeCheckPanel className="mt-4" title="Sandbox results" topics={topics.split(',').map(x=>x.trim()).filter(Boolean)} scope={{projectId:projectId||undefined,assetId:assetId||undefined}} context={context}/>}
- </Section>;
-}
-
-
-function RuleSandbox(){
- const [raw,setRaw]=useState('{"asphalt":{"mix":"AC14","compactedDepthMm":50},"project":{"specification":""}}');
- const [topics,setTopics]=useState('asphalt,pavements,materials');
  const [scopeType,setScopeType]=useState<'none'|'projectId'|'tenderId'|'clientId'|'assetId'|'assetCategory'>('none');
  const [scopeId,setScopeId]=useState('');
  const [onDate,setOnDate]=useState('');

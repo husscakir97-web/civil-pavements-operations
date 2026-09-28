@@ -7,7 +7,9 @@
 import {connect} from './mysql-config.mjs';
 
 const TEST_DATABASE='u840559204_infra_test';
-if(process.env.MYSQL_DATABASE!==TEST_DATABASE){console.log('Test data seed skipped (not the test database).');process.exit(0);}
+if(process.env.MYSQL_DATABASE!==TEST_DATABASE)console.log('Test data seed skipped (not the test database).');
+
+async function seed(){
 
 const now=new Date().toISOString(),today=now.slice(0,10);
 const inDays=n=>new Date(Date.now()+n*86400000).toISOString().slice(0,10);
@@ -64,3 +66,6 @@ try{
  }
  console.log(`Test data seeded for ${orgs.length} organisation(s).`);
 }finally{await db.end();}
+}
+
+if(process.env.MYSQL_DATABASE===TEST_DATABASE)await seed();

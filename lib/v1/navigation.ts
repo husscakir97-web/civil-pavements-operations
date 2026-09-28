@@ -9,6 +9,7 @@ export const ADMIN_SUBS:NavItem[]=[
  {key:'Plant',anyOf:['resources.edit']},
  {key:'Rates',anyOf:['rates.edit','estimate.edit'],module:'estimating'},
  {key:'Company Library',anyOf:['library.edit']},
+ {key:'Civil Knowledge',anyOf:['knowledge.edit']},
  {key:'Team & Permissions',anyOf:['team.admin']},
  {key:'Integrations',anyOf:['org.admin']},
  {key:'Settings',anyOf:['org.admin','entitlements.manage']},

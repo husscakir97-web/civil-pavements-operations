@@ -36,7 +36,7 @@ export function EstimateItemsEditor({form,setForm,disabled}:{form:EstimateData;s
 
 type Revision={id:string;revisionNumber:number;status:string;submittedAt:string|null;approvedAt:string|null;decisionNotes:string|null;sellPrice?:number;directCost?:number;grossMarginPct?:number};
 export function EstimateApprovalPanel({estimateId,onChanged,dirty,version=0}:{estimateId:string|null;onChanged?:()=>void;dirty?:boolean;version?:number}){
- const {can}=useSession();
+ const {can,writable}=useSession();
  const {data,error,loading,refresh}=useApi<{state:string;approvedRevisionId:string|null;awarded:boolean;revisions:Revision[]}>(estimateId?`/api/estimates/approval?estimateId=${estimateId}${version?`&v=${version}`:''}`:null);
  const {busy,error:actionError,run}=useAction();
  const [deciding,setDeciding]=useState<'approve'|'reject'|null>(null);
@@ -46,8 +46,8 @@ export function EstimateApprovalPanel({estimateId,onChanged,dirty,version=0}:{es
  return <section className="no-print rounded-xl border bg-white p-4 shadow-sm sm:p-5">
   <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="flex items-center gap-2 font-semibold">Estimate approval {data&&<StatusBadge machine="estimate" state={data.state}/>}</h3><p className="mt-1 text-sm text-slate-500">Approved revisions are frozen — including their rates. Editing after approval starts a new draft that must be approved again. Only an approved revision can be awarded.</p></div>
    <div className="flex flex-wrap gap-2">
-    {data?.state!=='review'&&!data?.awarded&&can('estimate.edit')&&<Btn busy={busy} disabled={dirty} title={dirty?'Save your changes first':undefined} onClick={()=>void act('submit')}>Submit for review</Btn>}
-    {data?.state==='review'&&can('estimate.approve')&&<><Btn busy={busy} onClick={()=>setDeciding('approve')}>Approve revision</Btn><Btn variant="danger" busy={busy} onClick={()=>setDeciding('reject')}>Return for changes</Btn></>}
+    {data?.state!=='review'&&!data?.awarded&&writable('estimating')&&can('estimate.edit')&&<Btn busy={busy} disabled={dirty} title={dirty?'Save your changes first':undefined} onClick={()=>void act('submit')}>Submit for review</Btn>}
+    {data?.state==='review'&&writable('estimating')&&can('estimate.approve')&&<><Btn busy={busy} onClick={()=>setDeciding('approve')}>Approve revision</Btn><Btn variant="danger" busy={busy} onClick={()=>setDeciding('reject')}>Return for changes</Btn></>}
    </div></div>
   <ReasonDialog open={deciding==='approve'} title="Approve estimate revision" description="The approved revision is frozen, including its rates, and becomes the revision the tender can submit and award." label="Approval notes" confirmLabel="Approve revision" busy={busy} onCancel={()=>setDeciding(null)} onConfirm={n=>{setDeciding(null);void act('approve',n);}}/>
   <ReasonDialog open={deciding==='reject'} title="Return estimate for changes" description="The revision goes back to draft so the estimator can revise it and submit again." label="What needs to change?" required danger confirmLabel="Return for changes" busy={busy} onCancel={()=>setDeciding(null)} onConfirm={n=>{setDeciding(null);void act('reject',n);}}/>

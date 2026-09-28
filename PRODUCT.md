@@ -33,6 +33,7 @@ Infrastruct is a modular, white-label operating system for civil and infrastruct
 - Do not reproduce copyrighted standards or licensed publications unless the organisation/platform has the right to store and use that content. Prefer encoded requirements plus source references and links to governing sources.
 - Live consumers include Estimating and Project Setup/Overview. The same check API is the canonical rules surface for HSEQ, Scheduling, Workshop, Prestarts, Field capture and future Ask Infrastruct / fast-entry validation.
 - Admin → Civil Knowledge includes a rule sandbox so controlled scenarios can be tested before a rule pack is relied on operationally.
+- Shared Infrastruct knowledge is maintained through vetted JSON rule packs and the transactional `knowledge:import-platform` operator command. Imports are Draft by default; live activation requires an explicit flag and a pack marked verified.
 
 # Release testing requirement
 

@@ -13,7 +13,9 @@ export const dynamic = 'force-dynamic';
 const tables = ['jobs','shifts','workers','crews','plant','suppliers','subcontractors'] as const;
 async function load(db: Database, table: string): Promise<DeliveryRecord[]> {
   const r = await db.prepare(`SELECT * FROM ${table} WHERE organisation_id = ? ORDER BY created_at DESC`).bind(ORG()).all<Record<string,unknown>>();
-  return r.results.map(r => ({id:String(r.id), name:String(r.name), status:String(r.status), metadata:safeJson<Meta>(r.metadata,{}), createdAt:String(r.created_at)}));
+  // Typed identifiers (0004) fill gaps in legacy metadata so the planner can search by plant number, rego or employee number.
+  const typed=(row:Record<string,unknown>)=>Object.fromEntries(Object.entries({plantNumber:row.plant_number,rego:row.registration,category:row.category,make:row.make,model:row.model,employeeNumber:row.employee_number,roleTitle:row.role_title}).filter(([,v])=>v!=null&&v!==''));
+  return r.results.map(r => ({id:String(r.id), name:String(r.name), status:String(r.status), metadata:{...typed(r),...safeJson<Meta>(r.metadata,{})}, createdAt:String(r.created_at)}));
 }
 async function handleGET(request: Request) {
   try { const db=requireEstimateDb(); const actor=await requireActor(request, db, 'field-read'); if(actor.role==='field'){const [jobs,shifts]=await Promise.all([load(db,'jobs'),load(db,'shifts')]);return Response.json({jobs:jobs.map(r=>fieldDelivery(r,'jobs')),shifts:shifts.map(r=>fieldDelivery(r,'shifts')),workers:[],crews:[],plant:[],suppliers:[],subcontractors:[]},{headers:{'Cache-Control':'private, no-store'}});} const rows=await Promise.all(tables.map(t=>load(db,t))); const money=can(actor.role,'commercial.view'); return Response.json(Object.fromEntries(tables.map((t,i)=>[t,money?rows[i]:rows[i].map(withoutMoney)])),{headers:{'Cache-Control':'private, no-store'}}); }

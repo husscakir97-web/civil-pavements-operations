@@ -1,6 +1,6 @@
 'use client';
 
-import {useEffect,useState,type FormEvent} from 'react';
+import {useState,type FormEvent} from 'react';
 import {Plus,TriangleAlert} from 'lucide-react';
 import {api,Btn,EmptyState,ErrorState,Field,Loading,PageHeader,Pill,Section,field,useAction,useApi,useSession} from './kit';
 
@@ -29,11 +29,14 @@ const showValue=(v:unknown)=>Array.isArray(v)?v.join(', '):v==null?'':String(v);
 export function KnowledgeAdmin(){
  const session=useSession();
  const [selected,setSelected]=useState<string|null>(null);
- const endpoint=selected?'/api/platform/knowledge?packId='+encodeURIComponent(selected):'/api/platform/knowledge';
- const state=useApi<Data>(endpoint);
- const {data,error,loading,refresh}=state;
- useEffect(()=>{if(!selected&&data?.packs.length)setSelected(data.packs[0].id);},[data,selected]);
- const active=data?.packs.find(p=>p.id===selected)||null;
+ const listState=useApi<Data>('/api/platform/knowledge');
+ const effectiveSelected=selected||listState.data?.packs[0]?.id||null;
+ const detailState=useApi<Data>(effectiveSelected?'/api/platform/knowledge?packId='+encodeURIComponent(effectiveSelected):null);
+ const data=detailState.data||listState.data;
+ const error=detailState.error||listState.error;
+ const loading=(listState.loading&&!listState.data)||(Boolean(effectiveSelected)&&detailState.loading&&!detailState.data);
+ const refresh=()=>{listState.refresh();detailState.refresh();};
+ const active=data?.packs.find(p=>p.id===effectiveSelected)||null;
  return <div className="grid gap-4">
   <PageHeader title="Civil Knowledge" subtitle="Controlled, versioned rules with source provenance. Infrastruct validates against these rules; it does not invent standards." badges={<Pill>Core</Pill>}/>
   <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
@@ -42,7 +45,7 @@ export function KnowledgeAdmin(){
   <ErrorState error={error} onRetry={refresh}/>
   {loading&&!data?<Loading/>:<div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
    <Section title="Knowledge packs" description="Organisation or context-specific rule sets." actions={session.can('knowledge.edit')?<PackEditor onSaved={id=>{setSelected(id);refresh();}}/>:undefined}>
-    {!data?.packs.length?<EmptyState title="No knowledge packs yet." detail="Create a pack, add an authoritative source, then add deterministic rules."/>:<div className="grid gap-2">{data.packs.map(p=><button key={p.id} onClick={()=>setSelected(p.id)} className={'rounded-xl border p-3 text-left '+(selected===p.id?'border-orange-300 bg-orange-50':'bg-white hover:bg-slate-50')}><div className="flex items-start justify-between gap-2"><span className="font-semibold">{p.name}</span><Pill tone={tone(p.status)}>{p.status}</Pill></div><p className="mt-1 text-xs text-slate-500">{[p.discipline,p.jurisdiction,p.version_label].filter(Boolean).join(' · ')||'General knowledge'}</p><p className="mt-2 text-[11px] text-slate-400">{p.source_count} source{Number(p.source_count)===1?'':'s'} · {p.rule_count} rule{Number(p.rule_count)===1?'':'s'}</p></button>)}</div>}
+    {!data?.packs.length?<EmptyState title="No knowledge packs yet." detail="Create a pack, add an authoritative source, then add deterministic rules."/>:<div className="grid gap-2">{data.packs.map(p=><button key={p.id} onClick={()=>setSelected(p.id)} className={'rounded-xl border p-3 text-left '+(effectiveSelected===p.id?'border-orange-300 bg-orange-50':'bg-white hover:bg-slate-50')}><div className="flex items-start justify-between gap-2"><span className="font-semibold">{p.name}</span><Pill tone={tone(p.status)}>{p.status}</Pill></div><p className="mt-1 text-xs text-slate-500">{[p.discipline,p.jurisdiction,p.version_label].filter(Boolean).join(' · ')||'General knowledge'}</p><p className="mt-2 text-[11px] text-slate-400">{p.source_count} source{Number(p.source_count)===1?'':'s'} · {p.rule_count} rule{Number(p.rule_count)===1?'':'s'}</p></button>)}</div>}
    </Section>
    {!active?<Section title="Knowledge pack"><EmptyState title="Choose or create a knowledge pack."/></Section>:<PackWorkspace pack={active} sources={data?.sources||[]} rules={data?.rules||[]} refresh={refresh}/>}
   </div>}

@@ -7,6 +7,7 @@ import {exec,nowIso,one,query,tx,uuid,type Row,type Conn} from '@/lib/platform/s
 import {conditionSetSchema,evaluateKnowledgeRule,knowledgeSummary,predicateSchema,type KnowledgeRuleForCheck} from '@/lib/platform/knowledge-rules';
 
 const actor=()=>actorContext.getStore()!;
+export const PLATFORM_KNOWLEDGE_ORG='__infrastruct_platform__';
 const text=(max:number)=>z.preprocess(v=>v===''?null:v,z.string().trim().max(max).nullable().optional());
 const day=z.preprocess(v=>v===''?null:v,z.string().regex(/^\d{4}-\d{2}-\d{2}$/,'Use YYYY-MM-DD.').nullable().optional());
 
@@ -47,21 +48,23 @@ const parseJson=<T>(value:unknown,fallback:T):T=>{try{return typeof value==='str
 
 export async function listKnowledge(packId?:string|null){
  const a=viewer();
- const packs=await query(`SELECT p.*,COUNT(DISTINCT s.id) source_count,COUNT(DISTINCT r.id) rule_count
+ const packs=(await query(`SELECT p.*,COUNT(DISTINCT s.id) source_count,COUNT(DISTINCT r.id) rule_count
   FROM knowledge_packs p
   LEFT JOIN knowledge_sources s ON s.organisation_id=p.organisation_id AND s.pack_id=p.id
   LEFT JOIN knowledge_rules r ON r.organisation_id=p.organisation_id AND r.pack_id=p.id
-  WHERE p.organisation_id=? GROUP BY p.id ORDER BY p.status='current' DESC,p.name`,[a.organisationId]);
+  WHERE p.organisation_id IN (?,?) GROUP BY p.id ORDER BY p.organisation_id=? DESC,p.status='current' DESC,p.name`,[a.organisationId,PLATFORM_KNOWLEDGE_ORG,a.organisationId]))
+  .map(p=>({...p,origin:p.organisation_id===PLATFORM_KNOWLEDGE_ORG?'platform':'organisation'}));
  if(!packId)return {packs,sources:[],rules:[]};
  const pack=packs.find(p=>p.id===packId);if(!pack)fail(404,'Knowledge pack not found.');
+ const ownerOrg=String(pack.organisation_id);
  const [sources,rules]=await Promise.all([
-  query('SELECT * FROM knowledge_sources WHERE organisation_id=? AND pack_id=? ORDER BY status=\'current\' DESC,title',[a.organisationId,packId]),
+  query('SELECT * FROM knowledge_sources WHERE organisation_id=? AND pack_id=? ORDER BY status=\'current\' DESC,title',[ownerOrg,packId]),
   query(`SELECT r.*,s.title source_title,s.authority source_authority,s.reference_code source_reference_code,s.revision_label source_revision_label,
-   s.jurisdiction source_jurisdiction,s.status source_status
+   s.jurisdiction source_jurisdiction,s.status source_status,s.source_type source_type,s.source_url source_url,s.document_id source_document_id
    FROM knowledge_rules r JOIN knowledge_sources s ON s.organisation_id=r.organisation_id AND s.id=r.source_id
-   WHERE r.organisation_id=? AND r.pack_id=? ORDER BY r.status='current' DESC,r.topic,r.title`,[a.organisationId,packId]),
+   WHERE r.organisation_id=? AND r.pack_id=? ORDER BY r.status='current' DESC,r.topic,r.title`,[ownerOrg,packId]),
  ]);
- return {packs,sources,rules:rules.map(r=>({...r,applies_when:parseJson(r.applies_when,{all:[],any:[]}),assertion:parseJson(r.assertion,null)}))};
+ return {packs,sources:sources.map(s=>({...s,origin:ownerOrg===PLATFORM_KNOWLEDGE_ORG?'platform':'organisation'})),rules:rules.map(r=>({...r,origin:ownerOrg===PLATFORM_KNOWLEDGE_ORG?'platform':'organisation',applies_when:parseJson(r.applies_when,{all:[],any:[]}),assertion:parseJson(r.assertion,null)}))};
 }
 
 export async function saveKnowledgePack(id:string|null,revision:number|null,raw:unknown){
@@ -161,21 +164,22 @@ export async function checkKnowledge(raw:unknown){
  const a=viewer(),v=checkInput.parse(raw),onDate=v.onDate||nowIso().slice(0,10);
  const rows=await query(`SELECT r.*,p.context_type,p.context_id,p.name pack_name,
   s.title source_title,s.authority source_authority,s.reference_code source_reference_code,s.revision_label source_revision_label,
-  s.jurisdiction source_jurisdiction,s.effective_from source_effective_from,s.effective_to source_effective_to
+  s.jurisdiction source_jurisdiction,s.effective_from source_effective_from,s.effective_to source_effective_to,
+  s.source_type source_type,s.source_url source_url,s.document_id source_document_id
   FROM knowledge_rules r
   JOIN knowledge_packs p ON p.organisation_id=r.organisation_id AND p.id=r.pack_id
   JOIN knowledge_sources s ON s.organisation_id=r.organisation_id AND s.id=r.source_id
-  WHERE r.organisation_id=? AND r.status='current' AND p.status='current' AND s.status='current'
+  WHERE r.organisation_id IN (?,?) AND r.status='current' AND p.status='current' AND s.status='current'
   AND (r.effective_from IS NULL OR r.effective_from<=?) AND (r.effective_to IS NULL OR r.effective_to>=?)
   AND (s.effective_from IS NULL OR s.effective_from<=?) AND (s.effective_to IS NULL OR s.effective_to>=?)
-  ORDER BY r.topic,r.title`,[a.organisationId,onDate,onDate,onDate,onDate]);
+  ORDER BY r.topic,r.title`,[a.organisationId,PLATFORM_KNOWLEDGE_ORG,onDate,onDate,onDate,onDate]);
  const topics=new Set((v.topics||[]).map(x=>x.toLowerCase()));
  const rules:KnowledgeRuleForCheck[]=rows.filter(r=>contextMatch(r,v.scope)&&(!topics.size||topics.has(String(r.topic).toLowerCase()))).map(r=>({
   id:r.id,ruleCode:r.rule_code,title:r.title,topic:r.topic,ruleType:r.rule_type,
   appliesWhen:conditionSetSchema.parse(parseJson(r.applies_when,{all:[],any:[]})),
   assertion:r.assertion?predicateSchema.parse(parseJson(r.assertion,null)):null,
   severity:r.severity,message:r.message,
-  source:{id:r.source_id,title:r.source_title,authority:r.source_authority,referenceCode:r.source_reference_code,revisionLabel:r.source_revision_label,jurisdiction:r.source_jurisdiction,sourceClause:r.source_clause,sourcePage:r.source_page,effectiveFrom:r.source_effective_from,effectiveTo:r.source_effective_to},
+  source:{id:r.source_id,title:r.source_title,authority:r.source_authority,referenceCode:r.source_reference_code,revisionLabel:r.source_revision_label,jurisdiction:r.source_jurisdiction,sourceClause:r.source_clause,sourcePage:r.source_page,effectiveFrom:r.source_effective_from,effectiveTo:r.source_effective_to,sourceType:r.source_type,sourceUrl:r.source_url,documentId:r.source_document_id,origin:r.organisation_id===PLATFORM_KNOWLEDGE_ORG?'platform':'organisation'},
  }));
  const results=rules.map(r=>evaluateKnowledgeRule(r,v.context)).filter(r=>r.applicability!=='not_applicable');
  return {onDate,summary:knowledgeSummary(results),results};

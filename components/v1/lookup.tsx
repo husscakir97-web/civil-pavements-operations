@@ -134,3 +134,15 @@ export function ClientContacts({clientId}:{clientId:string}){
   <ErrorState error={error}/>
  </div>;
 }
+
+/** Read-only client contact card for tender and project pages (the context already knows the client). */
+export function ClientContactCard({clientId}:{clientId:string|null|undefined}){
+ const {clients}=useClients();
+ const c=clientId?clients.find(x=>x.id===clientId):null;
+ if(!c)return null;
+ const people=[...(c.contactName?[{id:'main',name:c.contactName,role:'Main contact',email:c.email||null,phone:c.phone||null,mobile:null,isPrimary:!(c.contacts||[]).some(x=>x.isPrimary)}]:[]),...(c.contacts||[])];
+ if(!people.length)return null;
+ return <div className="rounded-lg border bg-slate-50 p-3 text-sm"><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{c.name} contacts</p>
+  <ul className="grid gap-2 sm:grid-cols-2">{people.map(x=><li key={x.id} className="min-w-0"><span className="font-medium">{x.name}</span>{x.isPrimary&&<span className="ml-2 rounded bg-amber-50 px-1.5 text-xs text-amber-900">Primary</span>}<span className="block truncate text-xs text-slate-600">{[x.role,x.email&&<a key="e" className="underline" href={`mailto:${x.email}`}>{x.email}</a>,x.phone&&<a key="p" className="underline" href={`tel:${x.phone}`}>{x.phone}</a>].filter(Boolean).reduce<ReactNode[]>((a,v,i)=>i?[...a,' · ',v]:[v],[])}</span></li>)}</ul>
+ </div>;
+}

@@ -61,7 +61,8 @@ function Input({f,value,onChange,disabled,people,relationOptions,documentContext
   case 'user':return <PersonPicker label={f.label} people={people} value={v?String(v):null} disabled={disabled} onChange={onChange}/>;
   case 'relation':return <select className={field} value={String(v)} disabled={disabled} onChange={e=>onChange(e.target.value||null)}><option value="">None</option>{(relationOptions[f.relation!]||[]).map(o=><option key={o.id} value={o.id}>{String(o.title||o.name||o.id).slice(0,80)}</option>)}</select>;
   case 'document':return <DocumentInput value={String(v)} onChange={onChange} disabled={disabled} {...documentContext}/>;
-  default:return <input className={field} value={String(v)} disabled={disabled} maxLength={f.max} onChange={e=>onChange(e.target.value)}/>;
+  default:if(f.suggestPeople){const list=`people-${f.key}`;return <><input className={field} list={list} autoComplete="off" value={String(v)} disabled={disabled} maxLength={f.max} placeholder="Type a name or pick a team member" onChange={e=>onChange(e.target.value)}/><datalist id={list}>{people.map(p=><option key={p.id} value={p.name}/>)}</datalist></>;}
+   return <input className={field} value={String(v)} disabled={disabled} maxLength={f.max} onChange={e=>onChange(e.target.value)}/>;
  }
 }
 

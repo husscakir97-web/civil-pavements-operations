@@ -3,6 +3,7 @@ import {useState,type ReactNode} from 'react';
 import {ArrowRight,CalendarDays,CheckCircle2,Plus,Upload} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,PageHeader,NextAction,Progress,Tabs,Stat,money,pct,dateText,Pill,humanStatus,ReasonDialog} from './kit';
+import {ProgrammePanel} from './program';
 import {RegisterView,usePeople} from './register-view';
 import {SwmsPanel} from './swms';
 import {KnowledgeCheckPanel} from './knowledge-checks';
@@ -55,8 +56,8 @@ function NewProjectForm({onDone}:{onDone:(id?:string)=>void}){
  </form>;
 }
 
-type TabKey='overview'|'setup'|'delivery'|'quality'|'commercial'|'documents'|'closeout';
-const TAB_LABEL:Record<TabKey,string>={overview:'Overview',setup:'Setup',delivery:'Delivery',quality:'Quality & HSEQ',commercial:'Commercial',documents:'Documents',closeout:'Closeout'};
+type TabKey='overview'|'setup'|'programme'|'delivery'|'quality'|'commercial'|'documents'|'closeout';
+const TAB_LABEL:Record<TabKey,string>={overview:'Overview',setup:'Setup',programme:'Programme',delivery:'Delivery',quality:'Quality & HSEQ',commercial:'Commercial',documents:'Documents',closeout:'Closeout'};
 function ProjectWorkspace({id,tab,area,onBack}:{id:string;tab?:string;area:'Prepare Work'|'Deliver Work';onBack:()=>void}){
  const {navigate}=useNav();const session=useSession();const {busy,error:actionError,run}=useAction();
  const active=(tab||'overview') as TabKey;
@@ -80,7 +81,7 @@ function ProjectWorkspace({id,tab,area,onBack}:{id:string;tab?:string;area:'Prep
  };
  const nextTarget=nextActionTarget(p.stage,p.nextAction);
  const nextGo=nextTarget&&!(nextTarget.kind==='tab'&&nextTarget.tab===active)?()=>goTarget(nextTarget):undefined;
- const tabs:Array<{key:TabKey;label:string;badge?:ReactNode;hidden?:boolean}>=[{key:'overview',label:'Overview'},{key:'setup',label:'Setup',badge:d.readiness.blockers.length&&p.stage==='setup'?<Pill tone="warning">{d.readiness.blockers.length}</Pill>:undefined},{key:'delivery',label:'Delivery'},{key:'quality',label:'Quality & HSEQ',hidden:!session.module('ims')},{key:'commercial',label:'Commercial',hidden:!session.can('commercial.view')||!session.module('commercial')},{key:'documents',label:'Documents'},{key:'closeout',label:'Closeout'}];
+ const tabs:Array<{key:TabKey;label:string;badge?:ReactNode;hidden?:boolean}>=[{key:'overview',label:'Overview'},{key:'setup',label:'Setup',badge:d.readiness.blockers.length&&p.stage==='setup'?<Pill tone="warning">{d.readiness.blockers.length}</Pill>:undefined},{key:'programme',label:'Programme'},{key:'delivery',label:'Delivery'},{key:'quality',label:'Quality & HSEQ',hidden:!session.module('ims')},{key:'commercial',label:'Commercial',hidden:!session.can('commercial.view')||!session.module('commercial')},{key:'documents',label:'Documents'},{key:'closeout',label:'Closeout'}];
  const blockedReady=d.readiness.blockers.length>0,blockedClose=Boolean(d.closeout?.blockers.length);
  return <div>
   <div className="-mx-4 mb-4 border-b bg-[#f6f7f9]/95 px-4 pb-3 pt-1 backdrop-blur sm:sticky sm:top-[72px] sm:z-10 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
@@ -97,6 +98,7 @@ function ProjectWorkspace({id,tab,area,onBack}:{id:string;tab?:string;area:'Prep
   <div className="hidden sm:block"><Tabs label="Project workspace" tabs={tabs} active={active} onChange={k=>navigate(area,'Projects',id,k)}/></div>
   {active==='overview'&&<Overview d={d} onTab={k=>navigate(area,'Projects',id,k)} goTarget={goTarget}/>}
   {active==='setup'&&<Setup d={d} onChanged={refresh} goTarget={goTarget} focus={checklistFocus} setFocus={setChecklistFocus}/>}
+  {active==='programme'&&<ProgrammePanel projectId={id}/>}
   {active==='delivery'&&<Delivery projectId={id} area={area}/>}
   {active==='quality'&&<Quality projectId={id} closed={closed} onChanged={refresh}/>}
   {active==='commercial'&&<ProjectCommercial projectId={id} closed={closed} onChanged={refresh}/>}

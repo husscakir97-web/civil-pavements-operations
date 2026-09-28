@@ -190,6 +190,20 @@ try{
  await json(await call('/api/projects/program?projectId='+projectId,'GET',undefined,B.cookie),404,'foreign programme hidden');
  await json(await call('/api/projects/program','POST',{...activity,id:pa.id,revision:1},B.cookie),404,'foreign programme write refused');
  console.log('PASS programme dependency projection, cycle refusal, stale revision and tenant isolation');
+ // Quick programme edits: order, inline change, duplicate — same graph, revision and tenant rules.
+ const listed=async()=>(await json(await call('/api/projects/program?projectId='+projectId,'GET',undefined,A.cookie),200)).activities;
+ let acts=await listed();assert.deepEqual(acts.map(a=>a.id),[pa.id,pb.id],'new activities keep entry order');
+ await json(await call('/api/projects/program','PATCH',{action:'reorder',projectId,ids:[pb.id,pa.id]},A.cookie),200);
+ acts=await listed();assert.deepEqual(acts.map(a=>a.id),[pb.id,pa.id],'reordered');
+ await json(await call('/api/projects/program','PATCH',{action:'reorder',projectId,ids:[pa.id]},A.cookie),409,'partial reorder refused');
+ await json(await call('/api/projects/program','PATCH',{action:'reorder',projectId,ids:[pa.id,pb.id]},B.cookie),404,'foreign reorder refused');
+ const a1=acts.find(a=>a.id===pa.id);
+ await json(await call('/api/projects/program','PATCH',{action:'update',projectId,id:pa.id,revision:a1.revision,changes:{startDate:'2026-10-06',status:'in_progress'}},A.cookie),200);
+ await json(await call('/api/projects/program','PATCH',{action:'update',projectId,id:pa.id,revision:a1.revision,changes:{durationDays:2}},A.cookie),409,'stale inline edit refused');
+ acts=await listed();assert.equal(acts.find(a=>a.id===pa.id).start_date,'2026-10-06');assert.equal(acts.find(a=>a.id===pb.id).start,'2026-10-09','dependant moved by inline date change');
+ const dup=await json(await call('/api/projects/program','PATCH',{action:'duplicate',projectId,id:pb.id},A.cookie),200);
+ acts=await listed();assert.deepEqual(acts.map(a=>a.id),[pb.id,dup.id,pa.id],'duplicate sits after its source');assert.equal(acts[1].status,'planned');
+ console.log('PASS programme reorder, inline edit with dependency move, stale refusal, duplicate and tenant isolation');
  const again=await json(await call('/api/tenders/workspace','POST',{action:'award',id:tenderId},A.cookie),200);assert.equal(again.alreadyAwarded,true,'award is idempotent');
  const estSearch=await json(await call('/api/search?q=Riverside','GET',undefined,A.cookie),200);
  assert.equal(estSearch.results.find(r=>r.type==='Estimate')?.tenderId,tenderId,'search links an estimate to its tender so it opens in the tender workspace');

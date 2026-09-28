@@ -1,10 +1,10 @@
 const ts=require('typescript'),fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const cache={};
 function load(file){file=path.resolve(file);if(cache[file])return cache[file].exports;const m={exports:{}};cache[file]=m;new Function('require','module','exports',ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText)(n=>n.startsWith('.')?load(path.resolve(path.dirname(file),n)+'.ts'):require(n),m,m.exports);return m.exports;}
-const {projectProgram}=load('lib/v1/program.ts'),{coverage,copyShift,requirementsInput}=load('lib/v1/shift-requirements.ts');
+const {projectProgram,moveActivity,orderActivities}=load('lib/v1/program.ts'),{coverage,copyShift,requirementsInput}=load('lib/v1/shift-requirements.ts');
 const a={id:'a',name:'Excavate',start_date:'2026-10-01',duration_days:3,predecessor_id:null,status:'planned'},b={...a,id:'b',name:'Drainage',duration_days:2,predecessor_id:'a'};
 assert.equal(projectProgram([a,b])[1].start,'2026-10-04');assert.equal(projectProgram([a,b])[1].finish,'2026-10-05');
-assert.equal(projectProgram([a,b])[1].delayDays,3);assert.throws(()=>projectProgram([{...a,predecessor_id:'b'},b]),/cycle/);assert.throws(()=>projectProgram([{...a,predecessor_id:'foreign'}]),/belong/);
+assert.equal(projectProgram([a,b])[1].delayDays,3);assert.deepEqual(moveActivity(['a','b','c'],'c',-1),['a','c','b']);assert.deepEqual(moveActivity(['a','b','c'],'a',-1),['a','b','c']);assert.deepEqual(moveActivity(['a','b','c'],'a',5),['b','c','a']);assert.deepEqual(orderActivities([{sequence:null,start_date:'2026-01-01',name:'x'},{sequence:2,start_date:'2026-02-01',name:'y'},{sequence:1,start_date:'2026-03-01',name:'z'}]).map(r=>r.name),['z','y','x']);assert.throws(()=>projectProgram([{...a,predecessor_id:'b'},b]),/cycle/);assert.throws(()=>projectProgram([{...a,predecessor_id:'foreign'}]),/belong/);
 const requirements=[{category:'workers',role:'',quantity:1},{category:'workers',role:'Supervisor',quantity:1}];
 assert.deepEqual(coverage(requirements,[{category:'workers',role:'Supervisor',resourceId:'w'}]).map(r=>r.missing),[1,0]);
 assert(!requirementsInput.safeParse([{category:'plant',role:'Paver',quantity:-1}]).success);

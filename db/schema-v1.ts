@@ -718,7 +718,9 @@ export const programActivities=mysqlTable('program_activities',{
  responsible:varchar('responsible',{length:180}),workPackage:varchar('work_package',{length:180}),
  resourceRequirement:text('resource_requirement'),plannedQuantity:decimal('planned_quantity',{precision:15,scale:2}),
  quantityUnit:varchar('quantity_unit',{length:40}),productionPerDay:decimal('production_per_day',{precision:15,scale:2}),
- status:varchar('status',{length:30}).notNull().default('planned'),...lifecycle(),
+ status:varchar('status',{length:30}).notNull().default('planned'),
+ // 0012: user-controlled order (quick reorder); dates still come from start/duration/dependencies.
+ sequence:int('sequence'),...lifecycle(),
 },t=>[index('program_activities_org_idx').on(t.organisationId),index('program_activities_project_idx').on(t.organisationId,t.projectId)]);
 
 export const shiftRequirements=mysqlTable('shift_requirements',{

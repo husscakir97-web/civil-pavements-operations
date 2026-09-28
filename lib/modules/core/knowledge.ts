@@ -48,12 +48,12 @@ const parseJson=<T>(value:unknown,fallback:T):T=>{try{return typeof value==='str
 
 export async function listKnowledge(packId?:string|null){
  const a=viewer();
- const packs=(await query(`SELECT p.*,COUNT(DISTINCT s.id) source_count,COUNT(DISTINCT r.id) rule_count
+ const packs:Array<Row&{origin:'platform'|'organisation'}>=(await query<Row>(`SELECT p.*,COUNT(DISTINCT s.id) source_count,COUNT(DISTINCT r.id) rule_count
   FROM knowledge_packs p
   LEFT JOIN knowledge_sources s ON s.organisation_id=p.organisation_id AND s.pack_id=p.id
   LEFT JOIN knowledge_rules r ON r.organisation_id=p.organisation_id AND r.pack_id=p.id
   WHERE p.organisation_id IN (?,?) GROUP BY p.id ORDER BY p.organisation_id=? DESC,p.status='current' DESC,p.name`,[a.organisationId,PLATFORM_KNOWLEDGE_ORG,a.organisationId]))
-  .map(p=>({...p,origin:p.organisation_id===PLATFORM_KNOWLEDGE_ORG?'platform':'organisation'}));
+  .map(p=>({...p,origin:p.organisation_id===PLATFORM_KNOWLEDGE_ORG?'platform' as const:'organisation' as const}));
  if(!packId)return {packs,sources:[],rules:[]};
  const pack=packs.find(p=>p.id===packId);if(!pack)fail(404,'Knowledge pack not found.');
  const ownerOrg=String(pack.organisation_id);

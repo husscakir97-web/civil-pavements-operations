@@ -2,9 +2,10 @@
 // Extensions to the existing estimating engine UI: discipline-neutral work
 // items (labour, plant, material, subcontract, other) and the revision
 // approval workflow (draft → review → approved → superseded).
-import {Plus,Trash2} from 'lucide-react';
+import {ClipboardPaste,Copy,Plus,Trash2} from 'lucide-react';
 import {useState,type Dispatch,type SetStateAction} from 'react';
 import {COST_CATEGORIES,itemAmount,itemHours,type EstimateData,type EstimateItem} from '@/lib/estimate-calculations';
+import {parsePastedItems} from '@/lib/v1/estimate-paste';
 import {api,useApi,useAction,useSession,StatusBadge,ErrorState,Loading,Btn,money,dateText,field,ReasonDialog} from './kit';
 
 export function EstimateItemsEditor({form,setForm,disabled}:{form:EstimateData;setForm:Dispatch<SetStateAction<EstimateData>>;disabled?:boolean}){
@@ -12,6 +13,9 @@ export function EstimateItemsEditor({form,setForm,disabled}:{form:EstimateData;s
  const update=(i:number,patch:Partial<EstimateItem>)=>setForm(f=>({...f,items:(f.items||[]).map((it,j)=>j===i?{...it,...patch}:it)}));
  const add=()=>setForm(f=>({...f,items:[...(f.items||[]),{id:`item-${Date.now()}`,section:items.at(-1)?.section||'General',costCode:'',category:'labour',description:'',quantity:0,unit:'item',productivity:0,rateBasis:'unit',rate:0}]}));
  const total=items.reduce((n,i)=>n+itemAmount(i),0);
+ const duplicate=(i:number)=>setForm(f=>{const list=[...(f.items||[])];list.splice(i+1,0,{...list[i],id:`item-${Date.now()}`});return {...f,items:list};});
+ const [pasting,setPasting]=useState(false),[pasteText,setPasteText]=useState(''),[pasteNote,setPasteNote]=useState('');
+ const applyPaste=()=>{const r=parsePastedItems(pasteText,items.at(-1)?.section||'General');setForm(f=>({...f,items:[...(f.items||[]),...r.items]}));setPasteNote(`${r.items.length} item${r.items.length===1?'':'s'} added${r.skipped.length?` · rows ${r.skipped.join(', ')} skipped (need description, quantity and rate)`:''}.`);setPasteText('');setPasting(false);};
  return <section className="no-print rounded-xl border bg-white p-4 shadow-sm sm:p-5">
   <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">Work sections and priced items</h3><p className="mt-1 text-sm text-slate-500">Any discipline: quantity × rate, or hours × rate where hours = quantity ÷ productivity. Items are included in direct cost.</p></div>
    <label className="flex min-h-10 items-center gap-2 text-sm"><input type="checkbox" className="size-5" checked={form.includePaving!==false} disabled={disabled} onChange={e=>setForm(f=>({...f,includePaving:e.target.checked}))}/>Include asphalt / paving quantity build-up</label></div>
@@ -28,9 +32,11 @@ export function EstimateItemsEditor({form,setForm,disabled}:{form:EstimateData;s
     <td className="pr-2 pt-3 text-slate-600">{it.rateBasis==='hour'?itemHours(it).toFixed(1):'—'}</td>
     <td className="pr-2"><input aria-label="Rate" type="number" step="0.01" className={`${field} w-24`} disabled={disabled} value={it.rate} onChange={e=>update(i,{rate:Number(e.target.value)||0})}/></td>
     <td className="pr-2 pt-3 text-right font-medium">{money(itemAmount(it),true)}</td>
-    <td>{!disabled&&<button aria-label="Remove item" className="p-2 text-slate-400 hover:text-red-600" onClick={()=>setForm(f=>({...f,items:(f.items||[]).filter((_,j)=>j!==i)}))}><Trash2 className="size-4"/></button>}</td>
+    <td className="whitespace-nowrap">{!disabled&&<button aria-label="Duplicate item" className="p-2 text-slate-400 hover:text-slate-700" onClick={()=>duplicate(i)}><Copy className="size-4"/></button>}{!disabled&&<button aria-label="Remove item" className="p-2 text-slate-400 hover:text-red-600" onClick={()=>setForm(f=>({...f,items:(f.items||[]).filter((_,j)=>j!==i)}))}><Trash2 className="size-4"/></button>}</td>
    </tr>)}</tbody></table></div>}
-  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">{!disabled&&<Btn variant="secondary" onClick={add}><Plus aria-hidden className="size-4"/>Add item</Btn>}<p className="text-sm">Items subtotal <strong>{money(total,true)}</strong></p></div>
+  {pasting&&!disabled&&<div className="mt-3 grid gap-2 rounded-lg border bg-slate-50 p-3"><label className="grid gap-1 text-sm"><span className="font-medium text-slate-700">Paste rows: Description, Quantity, Unit, Rate (optional Category, Section)</span><textarea className={`${field} min-h-28 font-mono`} value={pasteText} onChange={e=>setPasteText(e.target.value)} placeholder={'Profile 50mm\t1200\tm2\t4.50\nAC14 wearing course\t180\tt\t165\tmaterial'}/></label><div className="flex gap-2"><Btn disabled={!pasteText.trim()} onClick={applyPaste}>Add rows</Btn><Btn variant="ghost" onClick={()=>setPasting(false)}>Cancel</Btn></div></div>}
+  {pasteNote&&<p role="status" className="mt-2 text-sm text-slate-600">{pasteNote}</p>}
+  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">{!disabled&&<span className="flex flex-wrap gap-2"><Btn variant="secondary" onClick={add}><Plus aria-hidden className="size-4"/>Add item</Btn><Btn variant="secondary" aria-expanded={pasting} onClick={()=>setPasting(p=>!p)}><ClipboardPaste aria-hidden className="size-4"/>Paste from spreadsheet</Btn></span>}<p className="text-sm">Items subtotal <strong>{money(total,true)}</strong></p></div>
  </section>;
 }
 

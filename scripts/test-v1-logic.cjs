@@ -302,4 +302,8 @@ assert.deepEqual(rm.mapWorker({id:'w',name:'Sam',status:'Active',metadata:{compe
  assert.equal(bill.billingConfigured({BILLING_PROVIDER:'x'}),false);assert.equal(bill.isPlatformOperator('Ops@Example.com',{PLATFORM_OPERATOR_EMAILS:'ops@example.com, x@y.z'}),true);assert.equal(bill.isPlatformOperator('a@b.c',{}),false);
  console.log('PASS adapters: ABR parse/adapter (not-configured/invalid/found/not-found/errors), AI gates (key alone never enables), provider call shape, billing signatures/tolerance/entitlement mapping');
 })().catch(e=>{console.error(e);process.exitCode=1;});
+const {parsePastedItems}=load('lib/v1/estimate-paste.ts');
+const pasted=parsePastedItems('Description\tQty\tUnit\tRate\nProfile 50mm\t1,200\tm2\t$4.50\nAC14\t180\tt\t165\tmaterial\tWearing\nbad row\tx\tm\t1',  'General',i=>'i'+i);
+assert.equal(pasted.items.length,2);assert.equal(pasted.items[0].quantity,1200);assert.equal(pasted.items[0].rate,4.5);assert.equal(pasted.items[0].category,'other');assert.equal(pasted.items[1].category,'material');assert.equal(pasted.items[1].section,'Wearing');assert.deepEqual(pasted.skipped,[4]);
+console.log('PASS estimate paste: header skipped, $ and thousands parsed, category/section, bad rows reported');
 console.log('PASS V1 logic: lifecycle guards, capability matrix and nine-role route gate, ABN checksum, forecast/claim/GST/retention arithmetic, risk ratings, register identifiers, estimate items, docket cost lines, legacy stage mapping, scheduling conflict engine, legacy resource mapping');

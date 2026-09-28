@@ -23,7 +23,7 @@ The test suites referred to:
 
 ## Schema
 
-Two migrations, both append-only.
+Three V1 migrations plus one Core knowledge migration, all append-only.
 
 - **`0003_v1_platform`**: 28 new typed tables, plus typed columns on `estimates`, `jobs`, `opportunities` and `tender_requirements`.
 - **`0004_v1_resources_retention`**: 10 new typed tables:
@@ -32,6 +32,11 @@ Two migrations, both append-only.
   - `billing_customers`, `billing_subscriptions`, `billing_events`.
 
   It also adds typed columns to 7 existing tables: `workers`, `plant`, `shifts`, `jobs`, `progress_claims`, `organisation_profiles` and `organisation_invitations`. Every new table has `organisation_id` and an index on it.
+
+- **`0005_civil_knowledge_engine`**: 3 organisation-scoped tables:
+  - `knowledge_packs`, `knowledge_sources`, `knowledge_rules`;
+  - controlled source/version/clause provenance, context scoping and deterministic rule assertions;
+  - no external standards content is seeded by the migration.
 
 This supersedes the earlier "24 new typed tables" statement: 0003 created 28.
 
@@ -61,6 +66,7 @@ This supersedes the earlier "24 new typed tables" statement: 0003 created 28.
 | AI orchestration and features | COMPLETE — external credential required to activate (`AI_ENABLED`, `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, plus the `ai` entitlement and the organisation admin switch) | Five gates and an idempotent ledger. Suggestions only, source-linked. Features: tender requirements, non-price responses, SWMS assist, IMS drafting. The legacy tender analysis no longer runs on a key alone | logic, journey H (fixture provider) |
 | AI tender features end-to-end with real documents | PARTIAL | Guard paths and the orchestration are tested. The requirement and response features are not driven end-to-end with uploaded tender documents in the journey | journey H (guards) |
 | Billing foundation | COMPLETE — external credential required to activate (`BILLING_PROVIDER`, `BILLING_WEBHOOK_SECRET`, plus a provider adapter emitting the normalised signed events) | Signature check, idempotent events, plan → entitlements, payment grace period, cancellation → read-only, operator-only manual path. No prices in code | logic, journey H |
+| Civil Knowledge Engine | COMPLETE — foundation / first consumer | Core knowledge packs, authoritative sources and machine-readable rules. Only current/effective records affect checks; rules retain source/revision/clause provenance. Admin → Civil Knowledge manages organisation knowledge. Estimates apply live asphalt/material checks through the shared API. No Australian Standard/TfNSW rule content is bundled by default | logic, journey, mysql/build |
 | Reports, search, home | COMPLETE | | journey |
 | Accessibility | PARTIAL | Contrast tokens raised to WCAG AA, labels added. axe shows no serious/critical findings on the scanned office pages. Screen-reader walkthroughs were not done | browser (axe) |
 | Performance | PARTIAL | Office pages settle in about 0.5 s locally. No load testing | browser timings |

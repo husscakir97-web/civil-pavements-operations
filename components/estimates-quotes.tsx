@@ -464,7 +464,7 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
             </div>
           </Section>
 
-          <div className={estimateStep==="Scope & Quantities"?"":"hidden"}><EstimateItemsEditor form={form} setForm={setForm} disabled={currentStatus === "Awarded"} /></div>
+          <div className={estimateStep==="Scope & Quantities"?"":"hidden"}><EstimateItemsEditor form={form} setForm={setForm} disabled={currentStatus === "Awarded"} library={activeLibrary} /></div>
           <Section className={estimateStep==="Scope & Quantities"&&form.includePaving!==false?"":"hidden"} icon={Calculator} title="Quantity & material build-up" description="Tonnage uses area × compacted depth × density, including waste. Length × width is available as a cross-check.">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <Field label="Area (m²)" hint={form.lengthM > 0 && form.widthM > 0 ? `Length × width = ${decimal.format(form.lengthM * form.widthM)} m²` : "Use area or length × width."}><Input type="number" min="0" step="0.1" value={form.areaM2} onChange={(event) => setNumberField("areaM2", event.target.value)} /></Field>

@@ -26,7 +26,7 @@ export type KnowledgeRuleForCheck={
  assertion:KnowledgePredicate|null;
  severity:'block'|'warning'|'advisory';
  message:string;
- source:{id:string;title:string;authority:string|null;referenceCode:string|null;revisionLabel:string|null;jurisdiction:string|null;sourceClause:string|null;sourcePage:string|null;effectiveFrom:string|null;effectiveTo:string|null};
+ source:{id:string;title:string;authority:string|null;referenceCode:string|null;revisionLabel:string|null;jurisdiction:string|null;sourceClause:string|null;sourcePage:string|null;effectiveFrom:string|null;effectiveTo:string|null;sourceType:string|null;sourceUrl:string|null;documentId:string|null;origin:'platform'|'organisation'};
 };
 
 export type KnowledgeCheckResult={

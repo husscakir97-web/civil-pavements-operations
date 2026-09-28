@@ -2,6 +2,7 @@
 
 import { EstimateItemsEditor, EstimateApprovalPanel } from "@/components/v1/estimating";
 import { StatusBadge as WorkflowBadge } from "@/components/v1/kit";
+import { KnowledgeCheckPanel } from "@/components/v1/knowledge-checks";
 import { useWorkspaceBrand } from "@/components/workspace-brand";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -482,6 +483,7 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
               <Field label="Truck payload (t)"><Input type="number" min="0" step="0.1" value={form.truckPayloadT} onChange={(event) => setNumberField("truckPayloadT", event.target.value)} /></Field>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-3"><Metric label="Raw tonnes" value={decimal.format(totals.rawTonnes)} note="Before waste" tone="blue" /><Metric label="Total tonnes" value={decimal.format(totals.totalTonnes)} note={`${form.wastePct}% waste included`} tone="orange" /><Metric label="Required truck trips" value={totals.requiredTrips} note={`${form.truckPayloadT || 0} t payload`} /></div>
+            <KnowledgeCheckPanel className="mt-4" title="Civil knowledge checks" topics={["asphalt","pavements","materials"]} context={{project:{workType:form.workType,specification:form.specification,site:form.site},asphalt:{mix:form.asphaltMix,compactedDepthMm:form.compactedDepthMm,densityTPerM3:form.materialDensityTPerM3,areaM2:totals.effectiveAreaM2},estimate:{shiftType:form.shiftType}}}/>
           </Section>
 
           <Section className={estimateStep==="Production & Resources"?"":"hidden"} icon={Truck} title="Shift plan & delivery resources" description="Shift duration, production capacity and crew/plant rates drive the estimated shift count and delivery cost.">

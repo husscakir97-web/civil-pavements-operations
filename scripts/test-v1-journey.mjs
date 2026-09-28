@@ -68,6 +68,22 @@ try{
  const abn=await json(await call('/api/platform/abn?abn=51824753556','GET',undefined,A.cookie),200);assert.equal(abn.valid,true);assert.equal(abn.registry,null,'the register is only queried on request');
  console.log('PASS A: signup, organisation + membership, beta entitlements, onboarding with ABN checksum, company profile, independent second organisation');
 
+ // ---------------------------------------------------------------- Civil Knowledge Engine
+ step='A civil knowledge';
+ const pack=(await json(await call('/api/platform/knowledge','POST',{action:'savePack',pack:{packKey:'fixture-pavements',name:'Fixture Pavement Knowledge',description:'Journey test only',discipline:'Pavements',jurisdiction:'NSW',contextType:'organisation',contextId:'',versionLabel:'R1'}},A.cookie),200)).id;
+ const source=(await json(await call('/api/platform/knowledge','POST',{action:'saveSource',source:{packId:pack,title:'Fixture client specification',authority:'Example Client',sourceType:'client',referenceCode:'SPEC-TEST',revisionLabel:'R1',jurisdiction:'NSW',effectiveFrom:'2026-01-01',effectiveTo:'',sourceUrl:'https://example.invalid/spec-test',documentId:'',licenceNote:'Synthetic test fixture'}},A.cookie),200)).id;
+ await json(await call('/api/platform/knowledge','POST',{action:'transition',entity:'source',id:source,status:'current'},A.cookie),200);
+ await json(await call('/api/platform/knowledge','POST',{action:'transition',entity:'pack',id:pack,status:'current'},A.cookie),200);
+ const rule=(await json(await call('/api/platform/knowledge','POST',{action:'saveRule',rule:{packId:pack,sourceId:source,ruleCode:'fixture.test14.minimum',title:'Fixture TEST14 minimum',discipline:'Pavements',topic:'asphalt',ruleType:'minimum',appliesWhen:{all:[{field:'asphalt.mix',op:'eq',value:'TEST14'}],any:[]},assertion:{field:'asphalt.compactedDepthMm',op:'gte',value:40},severity:'block',message:'Synthetic fixture requires at least 40 mm.',sourceClause:'4.2',sourcePage:'18',effectiveFrom:'2026-01-01',effectiveTo:''}},A.cookie),200)).id;
+ await json(await call('/api/platform/knowledge','POST',{action:'transition',entity:'rule',id:rule,status:'current'},A.cookie),200);
+ let kc=await json(await call('/api/platform/knowledge/check','POST',{topics:['asphalt'],context:{asphalt:{mix:'TEST14',compactedDepthMm:35}}},A.cookie),200);
+ assert.deepEqual([kc.summary.failed,kc.summary.blocking,kc.results[0].actual,kc.results[0].expected],[1,1,35,40]);
+ assert.equal(kc.results[0].source.referenceCode,'SPEC-TEST');
+ kc=await json(await call('/api/platform/knowledge/check','POST',{topics:['asphalt'],context:{asphalt:{mix:'TEST14',compactedDepthMm:50}}},A.cookie),200);assert.equal(kc.summary.passed,1);
+ const foreignKnowledge=await json(await call('/api/platform/knowledge','GET',undefined,B.cookie),200);assert.equal(foreignKnowledge.packs.length,0,'knowledge is tenant isolated');
+ const foreignKnowledgeCheck=await json(await call('/api/platform/knowledge/check','POST',{topics:['asphalt'],context:{asphalt:{mix:'TEST14',compactedDepthMm:35}}},B.cookie),200);assert.equal(foreignKnowledgeCheck.results.length,0,'another organisation cannot use organisation A rules');
+ console.log('PASS knowledge: controlled source + pack + rule lifecycle, deterministic pass/fail, provenance and tenant isolation');
+
  // ---------------------------------------------------------------- Scenario B
  step='B win work';
  const upload=async(cookie,fields,name='evidence.pdf',content='%PDF-1.4 fixture')=>{const f=new FormData();for(const [k,v] of Object.entries(fields))f.set(k,v);f.set('file',new File([content],name,{type:'application/pdf'}));return call('/api/documents','POST',f,cookie);};
@@ -420,7 +436,7 @@ try{
  const noRates=async(role)=>{await as(role);const d=await json(await call('/api/delivery','GET',undefined,R.cookie),200);assert(!/"(rate|hourlyRate|approvedBudget|contractValue|materialCost)"/.test(JSON.stringify(d)),role+' sees no rates in the schedule');};
  await expect('office',[['GET','/api/commercial/claims?projectId='+projectId,200],['GET','/api/team',403],['GET','/api/estimates/rates',200]]);
  await expect('estimator',[['GET','/api/tenders/register',200],['GET','/api/estimates',200],['GET','/api/commercial/claims?projectId='+projectId,200],['GET','/api/operations/resources?kind=workers',200],['POST','/api/operations/resources',403,{action:'savePlant',plant:{name:'x',status:'Available'}}],['GET','/api/team',403],['POST','/api/estimates/approval',403,{estimateId,action:'approve'}]]);
- await expect('scheduler',[['GET','/api/operations/resources?kind=workers',200],['GET','/api/commercial/claims?projectId='+projectId,403],['GET','/api/estimates',403],['GET','/api/tenders/register',403],['GET','/api/dockets',403]]);await noRates('scheduler');
+ await expect('scheduler',[['GET','/api/operations/resources?kind=workers',200],['GET','/api/commercial/claims?projectId='+projectId,403],['GET','/api/estimates',403],['GET','/api/tenders/register',403],['GET','/api/dockets',403],['GET','/api/platform/knowledge',200],['POST','/api/platform/knowledge',403,{action:'savePack',pack:{}}]]);await noRates('scheduler');
  const sched=await json(await call('/api/operations/resources?kind=workers','GET',undefined,R.cookie),200);assert(sched.workers.every(w=>!('hourly_rate' in w)),'scheduler never receives worker rates');
  await expect('project_manager',[['GET',`/api/projects/control?id=${projectId}`,200],['GET','/api/commercial/claims?projectId='+projectId,200],['POST','/api/estimates/approval',403,{estimateId,action:'approve'}],['GET','/api/team',403],['GET','/api/tenders/register',200]]);
  await expect('supervisor',[['GET','/api/field/today',200],['GET','/api/commercial/claims?projectId='+projectId,403],['GET','/api/dockets',403],['GET','/api/estimates',403]]);await noRates('supervisor');

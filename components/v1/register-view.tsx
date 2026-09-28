@@ -7,7 +7,7 @@ import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sh
 import {REGISTERS,type RegisterDef,type FieldDef,type RegisterKey} from '@/lib/v1/registers';
 import {allowedTransitions,MACHINES} from '@/lib/platform/workflow';
 import {filterLookup} from '@/lib/v1/lookup';
-import {ClientPicker,SitePicker} from './lookup';
+import {ClientPicker,SitePicker,PersonPicker} from './lookup';
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,money,dateText,Section,humanStatus} from './kit';
 
 type Rec=Record<string,unknown>&{id:string;revision?:number};
@@ -58,7 +58,7 @@ function Input({f,value,onChange,disabled,people,relationOptions,documentContext
   case 'datetime':return <input className={field} type="datetime-local" value={String(v).slice(0,16)} disabled={disabled} onChange={e=>onChange(e.target.value||null)}/>;
   case 'select':return <select className={field} value={String(v)} disabled={disabled} onChange={e=>onChange(e.target.value||null)}><option value="">Select…</option>{f.options!.map(o=><option key={o} value={o}>{o.includes('_')?humanStatus(o):o.charAt(0).toUpperCase()+o.slice(1)}</option>)}</select>;
   case 'boolean':return <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="size-5" checked={Boolean(Number(v))||v===true} disabled={disabled} onChange={e=>onChange(e.target.checked)}/>Yes</label>;
-  case 'user':return <select className={field} value={String(v)} disabled={disabled} onChange={e=>onChange(e.target.value||null)}><option value="">Unassigned</option>{people.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select>;
+  case 'user':return <PersonPicker label={f.label} people={people} value={v?String(v):null} disabled={disabled} onChange={onChange}/>;
   case 'relation':return <select className={field} value={String(v)} disabled={disabled} onChange={e=>onChange(e.target.value||null)}><option value="">None</option>{(relationOptions[f.relation!]||[]).map(o=><option key={o.id} value={o.id}>{String(o.title||o.name||o.id).slice(0,80)}</option>)}</select>;
   case 'document':return <DocumentInput value={String(v)} onChange={onChange} disabled={disabled} {...documentContext}/>;
   default:return <input className={field} value={String(v)} disabled={disabled} maxLength={f.max} onChange={e=>onChange(e.target.value)}/>;
@@ -133,7 +133,7 @@ function RecordForm({def,record,parentId,defaults,people,relationOptions,docCtx,
  return <div className="grid gap-4 p-5">
   {record&&def.machine&&<div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-slate-500">Status</span><StatusBadge machine={def.machine} state={state!}/>{typeof record.reference==='string'&&<span className="text-slate-500">· {record.reference}</span>}{typeof record.origin==='string'&&record.origin!=='manual'&&<span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-900">Source: {String(record.origin)}{record.confidence!=null?` · confidence ${Number(record.confidence).toFixed(0)}%`:''}</span>}</div>}
   {locked&&<p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">This record is {state} and can no longer be edited.</p>}
-  {visible.filter(f=>(!f.derived||record)&&!(f.derived&&def.fields.some(x=>x.type==='client'&&x.snapshot===f.key))).map(f=>{if(!f.derived&&(f.type==='client'||f.type==='site'))return <div key={f.key}><Input f={f} value={values[f.key]} disabled={!editable(f)||busy} onChange={v=>setValues(s=>({...s,[f.key]:v}))} people={people} relationOptions={relationOptions} documentContext={docCtx} form={{def,values,set:patch=>setValues(s=>({...s,...patch}))}}/></div>;
+  {visible.filter(f=>(!f.derived||record)&&!(f.derived&&def.fields.some(x=>x.type==='client'&&x.snapshot===f.key))).map(f=>{if(!f.derived&&(f.type==='client'||f.type==='site'||f.type==='user'))return <div key={f.key}><Input f={f} value={values[f.key]} disabled={!editable(f)||busy} onChange={v=>setValues(s=>({...s,[f.key]:v}))} people={people} relationOptions={relationOptions} documentContext={docCtx} form={{def,values,set:patch=>setValues(s=>({...s,...patch}))}}/></div>;
    const Wrap=['boolean','document'].includes(f.type)||f.derived?FieldGroup:Field;return <Wrap key={f.key} label={f.label} hint={f.help}>{f.derived?<div className="text-sm text-slate-700">{display(f,values[f.key],people)}</div>:<Input f={f} value={values[f.key]} disabled={!editable(f)||busy} onChange={v=>setValues(s=>({...s,[f.key]:v}))} people={people} relationOptions={relationOptions} documentContext={docCtx} form={{def,values,set:patch=>setValues(s=>({...s,...patch}))}}/>}</Wrap>;})}
   <ErrorState error={error}/>
   <div className="flex flex-wrap gap-2 border-t pt-4">

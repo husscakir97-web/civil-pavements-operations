@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import {ArrowRight,Plus,Trophy} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,Section,PageHeader,NextAction,Progress,Stat,money,dateText,humanStatus} from './kit';
-import {ClientPicker,SitePicker} from './lookup';
+import {ClientPicker,SitePicker,PersonPicker} from './lookup';
 import {AiAssist} from './ai';
 import {RegisterView,usePeople,DocumentInput} from './register-view';
 import {EstimateApprovalPanel} from './estimating';
@@ -85,7 +85,7 @@ function TenderForm({tender,onDone}:{tender?:Tender;onDone:(id?:string)=>void}){
   <Field label="Tender title" required><input className={field} required value={v.title} onChange={e=>set('title',e.target.value)}/></Field>
   <div className="grid gap-4 sm:grid-cols-2"><ClientPicker value={v.clientId} legacyName={v.clientId?null:tender?.clientName} onChange={c=>setV(s=>({...s,clientId:c?.id??null,clientName:c?.name??s.clientName,siteId:c?.sites.length===1?c.sites[0].id:c&&c.sites.some(x=>x.id===s.siteId)?s.siteId:null,location:c?.sites.length===1&&!s.location?c.sites[0].label:s.location}))}/><Field label="Client reference"><input className={field} value={v.reference} onChange={e=>set('reference',e.target.value)}/></Field>
   <Field label="Closing date"><input className={field} type="date" value={v.dueDate} onChange={e=>set('dueDate',e.target.value)}/></Field>{can('commercial.view')&&<Field label="Estimated value"><input className={field} type="number" value={String(v.estimatedValue)} onChange={e=>set('estimatedValue',e.target.value)}/></Field>}
-  <Field label="Owner"><select className={field} value={v.ownerUserId} onChange={e=>set('ownerUserId',e.target.value)}><option value="">Unassigned</option>{people.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>{v.clientId&&<SitePicker clientId={v.clientId} value={v.siteId} onChange={x=>setV(s=>({...s,siteId:x?.id??null,location:x?x.label:s.location}))}/>}<Field label="Location"><input className={field} value={v.location} onChange={e=>set('location',e.target.value)}/></Field></div>
+  <PersonPicker label="Owner" people={people} value={v.ownerUserId} onChange={id=>set('ownerUserId',id||'')}/>{v.clientId&&<SitePicker clientId={v.clientId} value={v.siteId} onChange={x=>setV(s=>({...s,siteId:x?.id??null,location:x?x.label:s.location}))}/>}<Field label="Location"><input className={field} value={v.location} onChange={e=>set('location',e.target.value)}/></Field></div>
   <Field label="Scope summary"><textarea className={`${field} min-h-24`} value={v.scopeSummary} onChange={e=>set('scopeSummary',e.target.value)}/></Field>
   <ErrorState error={error}/>
   <div className="flex gap-2"><Btn busy={busy} type="submit">{tender?'Save':'Create tender'}</Btn><Btn variant="secondary" type="button" onClick={()=>onDone()}>Cancel</Btn></div>

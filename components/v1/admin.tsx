@@ -79,7 +79,7 @@ export function AdminArea({sub,onNavigate}:{sub:string;onNavigate:(label:never)=
  void onNavigate;
  if(sub==='Company')return <CompanyProfile/>;
  if(sub==='Rates')return <RatesAdmin/>;
- if(sub==='Company Library')return <div className="grid gap-4"><RegisterView key={libraryTick} register="library" description="Reusable company knowledge. Tender returnables and project setup link to these items instead of duplicating them."/><ImsDraftAssist onApplied={()=>setLibraryTick(t=>t+1)}/></div>;
+ if(sub==='Company Library')return <div className="grid gap-4"><RegisterView key={libraryTick} register="library" focus={{label:'Expired or expiring',test:r=>{const d=String(r.expiry_date||'');return Boolean(d)&&d<=new Date(Date.now()+30*86400000).toISOString().slice(0,10);},empty:'Nothing in the Library has expired or expires in the next 30 days.'}} description="Reusable company knowledge. Tender returnables and project setup link to these items instead of duplicating them."/><ImsDraftAssist onApplied={()=>setLibraryTick(t=>t+1)}/></div>;
  if(sub==='Civil Knowledge')return <KnowledgeAdmin/>;
  if(sub==='Team & Permissions')return <TeamAdmin/>;
  if(sub==='Integrations')return can('org.admin')?<div className="grid gap-4"><IntegrationsAdmin/><AiAdmin/>{can('entitlements.manage')&&<BillingAdmin/>}</div>:<EmptyState title="Integrations are managed by administrators."/>;

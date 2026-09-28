@@ -4,7 +4,7 @@
 // does not exist yet. Clients, sites, workers and plant all use this.
 import {useEffect,useId,useMemo,useRef,useState,type ReactNode} from 'react';
 import {Check,Plus,Search,X} from 'lucide-react';
-import {api,field,useSession} from './kit';
+import {api,field,useSession,humanStatus} from './kit';
 import {filterLookup,type LookupValue} from '@/lib/v1/lookup';
 
 export type LookupItem={id:string;label:string;detail?:string|null;badge?:ReactNode;search?:LookupValue[];ids?:LookupValue[]};
@@ -99,4 +99,10 @@ export function SitePicker({clientId,value,onChange,disabled,label='Site'}:{clie
  return <Lookup label={label} items={items} value={value} loading={loading} disabled={disabled} placeholder={clientId?'Search this client’s sites…':'Search sites…'} emptyText={clientId?'No sites recorded for this client. Type an address to add one.':'Choose a client first to add a site.'}
   onChange={i=>onChange(i?sites.find(s=>s.id===i.id)||null:null)}
   createLabel={q=>`Add site “${q}”`} onCreate={canCreate&&clientId?async q=>{const r=await api<{site:Site}>('/api/platform/clients',{method:'POST',body:{action:'createSite',site:{clientId:clientId||null,address:q}}});publish();onChange(r.site);return {id:r.site.id,label:r.site.name};}:undefined}/>;
+}
+
+/** Searchable member picker (owner, project manager, responsible person). */
+export function PersonPicker({people,value,onChange,label,disabled,emptyLabel}:{people:Array<{id:string;name:string;role?:string}>;value:string|null|undefined;onChange:(id:string|null)=>void;label:string;disabled?:boolean;emptyLabel?:string}){
+ const items=useMemo(()=>people.map(p=>({id:p.id,label:p.name,detail:p.role?humanStatus(p.role):null})),[people]);
+ return <Lookup label={label} items={items} value={value||null} disabled={disabled} placeholder="Search people…" emptyText={emptyLabel||'No members found.'} onChange={i=>onChange(i?.id??null)}/>;
 }

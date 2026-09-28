@@ -33,8 +33,10 @@ Three V1 migrations plus one Core knowledge migration, all append-only.
 
   It also adds typed columns to 7 existing tables: `workers`, `plant`, `shifts`, `jobs`, `progress_claims`, `organisation_profiles` and `organisation_invitations`. Every new table has `organisation_id` and an index on it.
 
-- **`0005_civil_knowledge_engine`**: 3 organisation-scoped tables:
+- **`0005_civil_knowledge_engine`**: 3 knowledge tables:
   - `knowledge_packs`, `knowledge_sources`, `knowledge_rules`;
+  - customer records remain organisation-scoped;
+  - the reserved owner `__infrastruct_platform__` provides shared read-only platform knowledge without copying the same rule set into each tenant;
   - controlled source/version/clause provenance, context scoping and deterministic rule assertions;
   - no external standards content is seeded by the migration.
 

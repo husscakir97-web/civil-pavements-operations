@@ -3,6 +3,7 @@
 import {useState,type FormEvent} from 'react';
 import {Plus,TriangleAlert} from 'lucide-react';
 import {api,Btn,EmptyState,ErrorState,Field,Loading,PageHeader,Pill,Section,field,useAction,useApi,useSession} from './kit';
+import {KnowledgeCheckPanel} from './knowledge-checks';
 
 type Pack={id:string;pack_key:string;name:string;description:string|null;discipline:string|null;jurisdiction:string|null;context_type:string;context_id:string|null;version_label:string|null;status:string;locked:number;revision:number;source_count:number;rule_count:number;origin?:'platform'|'organisation'};
 type Source={id:string;pack_id:string;title:string;authority:string|null;source_type:string;reference_code:string|null;revision_label:string|null;jurisdiction:string|null;effective_from:string|null;effective_to:string|null;source_url:string|null;document_id:string|null;licence_note:string|null;status:string;revision:number;origin?:'platform'|'organisation'};
@@ -43,6 +44,7 @@ export function KnowledgeAdmin(){
    <div className="flex gap-3"><TriangleAlert className="mt-0.5 size-5 shrink-0"/><div><p className="font-semibold">Authoritative content only</p><p className="mt-1 text-xs leading-5 text-amber-800">Do not copy copyrighted standards into Infrastruct unless your organisation has the right to do so. Record the source, revision and clause, then encode only the controlled requirement your organisation is authorised to use.</p></div></div>
   </div>
   <ErrorState error={error} onRetry={refresh}/>
+  <RuleSandbox/>
   {loading&&!data?<Loading/>:<div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
    <Section title="Knowledge packs" description="Organisation or context-specific rule sets." actions={session.can('knowledge.edit')?<PackEditor onSaved={id=>{setSelected(id);refresh();}}/>:undefined}>
     {!data?.packs.length?<EmptyState title="No knowledge packs yet." detail="Create a pack, add an authoritative source, then add deterministic rules."/>:<div className="grid gap-2">{data.packs.map(p=><button key={p.id} onClick={()=>setSelected(p.id)} className={'rounded-xl border p-3 text-left '+(effectiveSelected===p.id?'border-orange-300 bg-orange-50':'bg-white hover:bg-slate-50')}><div className="flex items-start justify-between gap-2"><span className="font-semibold">{p.name}</span><span className="flex items-center gap-1.5">{p.origin==='platform'&&<Pill tone="info">Infrastruct</Pill>}<Pill tone={tone(p.status)}>{p.status}</Pill></span></div><p className="mt-1 text-xs text-slate-500">{[p.discipline,p.jurisdiction,p.version_label].filter(Boolean).join(' · ')||'General knowledge'}</p><p className="mt-2 text-[11px] text-slate-400">{p.source_count} source{Number(p.source_count)===1?'':'s'} · {p.rule_count} rule{Number(p.rule_count)===1?'':'s'}</p></button>)}</div>}
@@ -149,6 +151,23 @@ function RuleEditor({pack,sources,rule,onSaved}:{pack:Pack;sources:Source[];rule
   {error&&<p className="text-sm text-red-700">{error}</p>}
   <div className="flex gap-2"><Btn type="submit" busy={busy}>Save rule</Btn><Btn type="button" variant="ghost" onClick={()=>setOpen(false)}>Cancel</Btn></div>
  </form>;
+}
+
+function RuleSandbox(){
+ const [raw,setRaw]=useState('{"asphalt":{"mix":"AC14","compactedDepthMm":50},"project":{"specification":""}}');
+ const [topics,setTopics]=useState('asphalt,pavements,materials');
+ const [projectId,setProjectId]=useState('');
+ const [assetId,setAssetId]=useState('');
+ const [context,setContext]=useState<Record<string,unknown>|null>(null);
+ const [parseError,setParseError]=useState<string|null>(null);
+ const run=()=>{try{const parsed=JSON.parse(raw);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('Scenario must be a JSON object.');setContext(parsed as Record<string,unknown>);setParseError(null);}catch(e){setContext(null);setParseError(e instanceof Error?e.message:'Invalid JSON.');}};
+ return <Section title="Rule sandbox" description="Test controlled knowledge against a structured scenario before relying on it in estimates, projects, scheduling, workshop or field workflows.">
+  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
+   <Field label="Scenario JSON"><textarea className={field+' min-h-36 font-mono text-xs'} value={raw} onChange={e=>setRaw(e.target.value)}/></Field>
+   <div className="grid content-start gap-3"><Field label="Topics"><input className={field} value={topics} onChange={e=>setTopics(e.target.value)} placeholder="asphalt, concrete, drainage"/></Field><Field label="Project ID (optional)"><input className={field} value={projectId} onChange={e=>setProjectId(e.target.value)}/></Field><Field label="Asset ID (optional)"><input className={field} value={assetId} onChange={e=>setAssetId(e.target.value)}/></Field><Btn onClick={run}>Run controlled checks</Btn>{parseError&&<p className="text-xs text-red-700">{parseError}</p>}</div>
+  </div>
+  {context&&<KnowledgeCheckPanel className="mt-4" title="Sandbox results" topics={topics.split(',').map(x=>x.trim()).filter(Boolean)} scope={{projectId:projectId||undefined,assetId:assetId||undefined}} context={context}/>}
+ </Section>;
 }
 
 function Info({label,value}:{label:string;value:string}){return <div className="rounded-xl border bg-slate-50 p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{label}</p><p className="mt-1 text-sm font-medium text-slate-800">{value}</p></div>;}

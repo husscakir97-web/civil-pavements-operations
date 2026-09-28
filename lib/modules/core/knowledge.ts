@@ -52,17 +52,18 @@ export async function listKnowledge(packId?:string|null){
   FROM knowledge_packs p
   LEFT JOIN knowledge_sources s ON s.organisation_id=p.organisation_id AND s.pack_id=p.id
   LEFT JOIN knowledge_rules r ON r.organisation_id=p.organisation_id AND r.pack_id=p.id
-  WHERE p.organisation_id IN (?,?) GROUP BY p.id ORDER BY p.organisation_id=? DESC,p.status='current' DESC,p.name`,[a.organisationId,PLATFORM_KNOWLEDGE_ORG,a.organisationId]))
+  WHERE (p.organisation_id=? OR (p.organisation_id=? AND p.status='current')) GROUP BY p.id ORDER BY p.organisation_id=? DESC,p.status='current' DESC,p.name`,[a.organisationId,PLATFORM_KNOWLEDGE_ORG,a.organisationId]))
   .map(p=>({...p,origin:p.organisation_id===PLATFORM_KNOWLEDGE_ORG?'platform' as const:'organisation' as const}));
  if(!packId)return {packs,sources:[],rules:[]};
  const pack=packs.find(p=>p.id===packId);if(!pack)fail(404,'Knowledge pack not found.');
  const ownerOrg=String(pack.organisation_id);
+ const platform=ownerOrg===PLATFORM_KNOWLEDGE_ORG;
  const [sources,rules]=await Promise.all([
-  query('SELECT * FROM knowledge_sources WHERE organisation_id=? AND pack_id=? ORDER BY status=\'current\' DESC,title',[ownerOrg,packId]),
+  query(`SELECT * FROM knowledge_sources WHERE organisation_id=? AND pack_id=?${platform?" AND status='current'":''} ORDER BY status='current' DESC,title`,[ownerOrg,packId]),
   query(`SELECT r.*,s.title source_title,s.authority source_authority,s.reference_code source_reference_code,s.revision_label source_revision_label,
    s.jurisdiction source_jurisdiction,s.status source_status,s.source_type source_type,s.source_url source_url,s.document_id source_document_id
    FROM knowledge_rules r JOIN knowledge_sources s ON s.organisation_id=r.organisation_id AND s.id=r.source_id
-   WHERE r.organisation_id=? AND r.pack_id=? ORDER BY r.status='current' DESC,r.topic,r.title`,[ownerOrg,packId]),
+   WHERE r.organisation_id=? AND r.pack_id=?${platform?" AND r.status='current' AND s.status='current'":''} ORDER BY r.status='current' DESC,r.topic,r.title`,[ownerOrg,packId]),
  ]);
  return {packs,sources:sources.map(s=>({...s,origin:ownerOrg===PLATFORM_KNOWLEDGE_ORG?'platform':'organisation'})),rules:rules.map(r=>({...r,origin:ownerOrg===PLATFORM_KNOWLEDGE_ORG?'platform':'organisation',applies_when:parseJson(r.applies_when,{all:[],any:[]}),assertion:parseJson(r.assertion,null)}))};
 }
@@ -182,6 +183,8 @@ export async function checkKnowledge(raw:unknown){
   severity:r.severity,message:r.message,
   source:{id:r.source_id,title:r.source_title,authority:r.source_authority,referenceCode:r.source_reference_code,revisionLabel:r.source_revision_label,jurisdiction:r.source_jurisdiction,sourceClause:r.source_clause,sourcePage:r.source_page,effectiveFrom:r.source_effective_from,effectiveTo:r.source_effective_to,sourceType:r.source_type,sourceUrl:r.source_url,documentId:r.source_document_id,origin:r.organisation_id===PLATFORM_KNOWLEDGE_ORG?'platform':'organisation'},
  }));
- const results=rules.map(r=>evaluateKnowledgeRule(r,v.context)).filter(r=>r.applicability!=='not_applicable');
+ const rank=(r:KnowledgeRuleForCheck)=>r.scope.type==='organisation'?(r.source.origin==='platform'?2:1):0;
+ const ordered=[...rules].sort((a,b)=>rank(a)-rank(b)||a.topic.localeCompare(b.topic)||a.title.localeCompare(b.title));
+ const results=ordered.map(r=>evaluateKnowledgeRule(r,v.context)).filter(r=>r.applicability!=='not_applicable');
  return {onDate,summary:knowledgeSummary(results),results};
 }

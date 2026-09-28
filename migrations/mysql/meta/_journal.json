@@ -92,6 +92,13 @@
       "when": 1790572083886,
       "tag": "0012_programme_sequence",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1790572143886,
+      "tag": "0006_core_clients_sites",
+      "breakpoints": true
     }
   ]
 }

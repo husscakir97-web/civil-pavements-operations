@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic';
 import {ArrowRight,Plus,Trophy} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,Section,PageHeader,NextAction,Progress,Stat,money,dateText,humanStatus} from './kit';
+import {ClientPicker,SitePicker} from './lookup';
 import {AiAssist} from './ai';
 import {RegisterView,usePeople,DocumentInput} from './register-view';
 import {EstimateApprovalPanel} from './estimating';
@@ -30,7 +31,7 @@ export function OpportunitiesView(){
  </div>;
 }
 
-type Tender={awardBlockers?:string[];id:string;opportunityId:string;reference:string|null;title:string;clientName:string|null;ownerUserId:string|null;ownerName:string|null;stage:string;stageLabel:string;dueDate:string|null;location:string|null;scopeSummary:string|null;estimateId:string|null;approvalStatus:string;approvedAt:string|null;approvalNotes:string|null;submittedAt:string|null;submissionMethod:string|null;submissionVersion:string|null;submissionNotes:string|null;submissionOverrideReason:string|null;outcomeAt:string|null;outcomeReason:string|null;projectId:string|null;revision:number;estimatedValue?:number|null;approvedSellPrice?:number|null;approvedMarginPct?:number|null;completion:number;nextAction:string|null;checks:Array<{key:string;label:string;ok:boolean;detail:string|null}>;stats:{documents:number;requirements:number;suggested:number;mandatoryOpen:number;returnables:number;returnablesMandatoryOpen:number;clarificationsOpen:number;nextClarificationDue:string|null;estimateState:string|null;bidDecision:string;approvedRevisionNumber:number|null}};
+type Tender={awardBlockers?:string[];id:string;opportunityId:string;reference:string|null;title:string;clientName:string|null;clientId?:string|null;siteId?:string|null;ownerUserId:string|null;ownerName:string|null;stage:string;stageLabel:string;dueDate:string|null;location:string|null;scopeSummary:string|null;estimateId:string|null;approvalStatus:string;approvedAt:string|null;approvalNotes:string|null;submittedAt:string|null;submissionMethod:string|null;submissionVersion:string|null;submissionNotes:string|null;submissionOverrideReason:string|null;outcomeAt:string|null;outcomeReason:string|null;projectId:string|null;revision:number;estimatedValue?:number|null;approvedSellPrice?:number|null;approvedMarginPct?:number|null;completion:number;nextAction:string|null;checks:Array<{key:string;label:string;ok:boolean;detail:string|null}>;stats:{documents:number;requirements:number;suggested:number;mandatoryOpen:number;returnables:number;returnablesMandatoryOpen:number;clarificationsOpen:number;nextClarificationDue:string|null;estimateState:string|null;bidDecision:string;approvedRevisionNumber:number|null}};
 
 export function TendersView(){
  const {route,navigate}=useNav();
@@ -77,14 +78,14 @@ function TenderRegister(){
 
 function TenderForm({tender,onDone}:{tender?:Tender;onDone:(id?:string)=>void}){
  const people=usePeople();const {can}=useSession();const {busy,error,run}=useAction();
- const [v,setV]=useState({title:tender?.title||'',clientName:tender?.clientName||'',reference:tender?.reference||'',dueDate:tender?.dueDate?.slice(0,10)||'',estimatedValue:tender?.estimatedValue??'',ownerUserId:tender?.ownerUserId||'',location:tender?.location||'',scopeSummary:tender?.scopeSummary||''});
- const set=(k:string,val:string)=>setV(s=>({...s,[k]:val}));
+ const [v,setV]=useState({title:tender?.title||'',clientName:tender?.clientName||'',clientId:tender?.clientId||null as string|null,siteId:tender?.siteId||null as string|null,reference:tender?.reference||'',dueDate:tender?.dueDate?.slice(0,10)||'',estimatedValue:tender?.estimatedValue??'',ownerUserId:tender?.ownerUserId||'',location:tender?.location||'',scopeSummary:tender?.scopeSummary||''});
+ const set=(k:string,val:string|null)=>setV(s=>({...s,[k]:val}));
  const body={...v,estimatedValue:v.estimatedValue===''?null:Number(v.estimatedValue),dueDate:v.dueDate||null,ownerUserId:v.ownerUserId||null};
  return <form className="grid gap-4 p-5" onSubmit={e=>{e.preventDefault();void run(async()=>tender?(await api('/api/tenders/workspace',{method:'PATCH',body:{...body,id:tender.id,revision:tender.revision}}),tender.id):(await api<{tenderId:string}>('/api/tenders/register',{method:'POST',body})).tenderId,id=>onDone(id));}}>
   <Field label="Tender title" required><input className={field} required value={v.title} onChange={e=>set('title',e.target.value)}/></Field>
-  <div className="grid gap-4 sm:grid-cols-2"><Field label="Client"><input className={field} value={v.clientName} onChange={e=>set('clientName',e.target.value)}/></Field><Field label="Client reference"><input className={field} value={v.reference} onChange={e=>set('reference',e.target.value)}/></Field>
+  <div className="grid gap-4 sm:grid-cols-2"><ClientPicker value={v.clientId} legacyName={v.clientId?null:tender?.clientName} onChange={c=>setV(s=>({...s,clientId:c?.id??null,clientName:c?.name??s.clientName,siteId:c?.sites.length===1?c.sites[0].id:c&&c.sites.some(x=>x.id===s.siteId)?s.siteId:null,location:c?.sites.length===1&&!s.location?c.sites[0].label:s.location}))}/><Field label="Client reference"><input className={field} value={v.reference} onChange={e=>set('reference',e.target.value)}/></Field>
   <Field label="Closing date"><input className={field} type="date" value={v.dueDate} onChange={e=>set('dueDate',e.target.value)}/></Field>{can('commercial.view')&&<Field label="Estimated value"><input className={field} type="number" value={String(v.estimatedValue)} onChange={e=>set('estimatedValue',e.target.value)}/></Field>}
-  <Field label="Owner"><select className={field} value={v.ownerUserId} onChange={e=>set('ownerUserId',e.target.value)}><option value="">Unassigned</option>{people.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field><Field label="Location"><input className={field} value={v.location} onChange={e=>set('location',e.target.value)}/></Field></div>
+  <Field label="Owner"><select className={field} value={v.ownerUserId} onChange={e=>set('ownerUserId',e.target.value)}><option value="">Unassigned</option>{people.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>{v.clientId&&<SitePicker clientId={v.clientId} value={v.siteId} onChange={x=>setV(s=>({...s,siteId:x?.id??null,location:x?x.label:s.location}))}/>}<Field label="Location"><input className={field} value={v.location} onChange={e=>set('location',e.target.value)}/></Field></div>
   <Field label="Scope summary"><textarea className={`${field} min-h-24`} value={v.scopeSummary} onChange={e=>set('scopeSummary',e.target.value)}/></Field>
   <ErrorState error={error}/>
   <div className="flex gap-2"><Btn busy={busy} type="submit">{tender?'Save':'Create tender'}</Btn><Btn variant="secondary" type="button" onClick={()=>onDone()}>Cancel</Btn></div>

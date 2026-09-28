@@ -5,7 +5,7 @@ import type {Capability} from '@/lib/platform/permissions';
 import type {MachineKey} from '@/lib/platform/workflow';
 import type {ModuleKey} from '@/lib/platform/modules';
 
-export type FieldType='text'|'textarea'|'number'|'money'|'date'|'datetime'|'select'|'boolean'|'user'|'rating'|'document'|'relation';
+export type FieldType='text'|'textarea'|'number'|'money'|'date'|'datetime'|'select'|'boolean'|'user'|'rating'|'document'|'relation'|'client'|'site';
 export type FieldDef={
  key:string;label:string;type:FieldType;column?:string;
  options?:readonly string[];required?:boolean;max?:number;min?:number;help?:string;
@@ -18,6 +18,8 @@ export type FieldDef={
  relation?:string;
  /** Field users may set this field (only on registers they can write). */
  fieldWritable?:boolean;
+ /** client/site pickers: the text column that keeps a readable snapshot of the choice. */
+ snapshot?:string;
 };
 export type Scope='org'|'project'|'tender'|'itp'|'optional-project';
 export type RegisterDef={
@@ -53,7 +55,7 @@ export const RISK_CATEGORIES=['safety','environmental','quality','commercial','p
 export const REGISTERS={
  opportunities:{key:'opportunities',table:'opportunities',label:'Opportunities',singular:'Opportunity',module:'pipeline',scope:'org',titleField:'name',machine:'opportunity',stateColumn:'stage',view:'pipeline.view',edit:'pipeline.edit',
   empty:'No opportunities are in your pipeline yet. Record the work you are chasing so it can be qualified and tendered.',createLabel:'New opportunity',
-  fields:[text('name','Opportunity',{required:true,list:true}),text('client_name','Client',{list:true}),user('owner_user_id','Owner',{list:true}),money('estimated_value','Estimated value',{list:true}),{key:'probability',label:'Probability %',type:'number',min:0,max:100,list:true},date('closing_date','Closing date',{list:true}),text('location','Location'),area('notes','Notes'),area('lost_reason','Lost reason')]},
+  fields:[text('name','Opportunity',{required:true,list:true}),{key:'client_id',label:'Client',type:'client',snapshot:'client_name'},{key:'client_name',label:'Client',type:'text',derived:true,list:true},user('owner_user_id','Owner',{list:true}),money('estimated_value','Estimated value',{list:true}),{key:'probability',label:'Probability %',type:'number',min:0,max:100,list:true},date('closing_date','Closing date',{list:true}),{key:'site_id',label:'Site',type:'site',snapshot:'location'},text('location','Location',{help:'Filled from the site when one is chosen.'}),area('notes','Notes'),area('lost_reason','Lost reason')]},
  library:{key:'library',table:'library_items',label:'Company Library',singular:'Library item',module:'core',scope:'org',titleField:'title',machine:'library',view:'project.view',edit:'library.edit',
   empty:'The Company Library is empty. Add policies, insurances, licences, CVs and standard tender responses once so tenders and projects can reuse them.',createLabel:'Add library item',
   fields:[select('category','Category',LIBRARY_CATEGORIES,{required:true,list:true}),text('title','Title',{required:true,list:true}),area('description','Description'),area('content','Standard content / response text',{max:200000}),doc('document_id','File'),date('expiry_date','Expiry date',{list:true}),text('owner_name','Owner',{list:true}),{key:'version',label:'Version',type:'number',derived:true,list:true}]},

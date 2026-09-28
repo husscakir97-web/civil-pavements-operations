@@ -77,7 +77,7 @@ export async function saveKnowledgePack(id:string|null,revision:number|null,raw:
    const current=await one('SELECT * FROM knowledge_packs WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,id],conn);if(!current)fail(404,'Knowledge pack not found.');
    if(Number(current.locked))fail(409,'This knowledge pack is locked and cannot be edited.');
    if(revision!=null&&Number(current.revision)!==revision)fail(409,'This knowledge pack was changed by someone else. Refresh and retry.');
-   await exec('UPDATE knowledge_packs SET pack_key=?,name=?,description=?,discipline=?,jurisdiction=?,context_type=?,context_id=?,version_label=?,revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?',[v.packKey,v.name,v.description??null,v.discipline??null,v.jurisdiction??null,v.contextType,v.contextId??null,v.versionLabel??null,now,a.organisationId,id],conn);
+   await exec('UPDATE knowledge_packs SET pack_key=?,name=?,description=?,discipline=?,jurisdiction=?,context_type=?,context_id=?,version_label=?,status=IF(status=\'current\',\'draft\',status),revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?',[v.packKey,v.name,v.description??null,v.discipline??null,v.jurisdiction??null,v.contextType,v.contextId??null,v.versionLabel??null,now,a.organisationId,id],conn);
    await audit({event:'knowledge.pack.updated',entityType:'knowledge_pack',entityId:id,summary:`Knowledge pack updated: ${v.name}`,before:current,after:v},conn);
   }
   return {id};
@@ -100,7 +100,7 @@ export async function saveKnowledgeSource(id:string|null,revision:number|null,ra
   }else{
    const current=await one('SELECT * FROM knowledge_sources WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,id],conn);if(!current)fail(404,'Knowledge source not found.');
    if(revision!=null&&Number(current.revision)!==revision)fail(409,'This knowledge source changed. Refresh and retry.');
-   await exec('UPDATE knowledge_sources SET pack_id=?,title=?,authority=?,source_type=?,reference_code=?,revision_label=?,jurisdiction=?,effective_from=?,effective_to=?,source_url=?,document_id=?,licence_note=?,revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?',[v.packId,v.title,v.authority??null,v.sourceType,v.referenceCode??null,v.revisionLabel??null,v.jurisdiction??null,v.effectiveFrom??null,v.effectiveTo??null,v.sourceUrl??null,v.documentId??null,v.licenceNote??null,now,a.organisationId,id],conn);
+   await exec('UPDATE knowledge_sources SET pack_id=?,title=?,authority=?,source_type=?,reference_code=?,revision_label=?,jurisdiction=?,effective_from=?,effective_to=?,source_url=?,document_id=?,licence_note=?,status=IF(status=\'current\',\'draft\',status),verified_by=NULL,verified_at=NULL,revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?',[v.packId,v.title,v.authority??null,v.sourceType,v.referenceCode??null,v.revisionLabel??null,v.jurisdiction??null,v.effectiveFrom??null,v.effectiveTo??null,v.sourceUrl??null,v.documentId??null,v.licenceNote??null,now,a.organisationId,id],conn);
    await audit({event:'knowledge.source.updated',entityType:'knowledge_source',entityId:id,summary:`Knowledge source updated: ${v.title}`,before:current,after:v},conn);
   }return {id};
  });
@@ -120,7 +120,7 @@ export async function saveKnowledgeRule(id:string|null,revision:number|null,raw:
   }else{
    const current=await one('SELECT * FROM knowledge_rules WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,id],conn);if(!current)fail(404,'Knowledge rule not found.');
    if(revision!=null&&Number(current.revision)!==revision)fail(409,'This knowledge rule changed. Refresh and retry.');
-   await exec('UPDATE knowledge_rules SET pack_id=?,source_id=?,rule_code=?,title=?,discipline=?,topic=?,rule_type=?,applies_when=?,assertion=?,severity=?,message=?,source_clause=?,source_page=?,effective_from=?,effective_to=?,revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?',[v.packId,v.sourceId,v.ruleCode,v.title,v.discipline??null,v.topic,v.ruleType,applies,assertion,v.severity,v.message,v.sourceClause??null,v.sourcePage??null,v.effectiveFrom??null,v.effectiveTo??null,now,a.organisationId,id],conn);
+   await exec('UPDATE knowledge_rules SET pack_id=?,source_id=?,rule_code=?,title=?,discipline=?,topic=?,rule_type=?,applies_when=?,assertion=?,severity=?,message=?,source_clause=?,source_page=?,effective_from=?,effective_to=?,status=IF(status=\'current\',\'draft\',status),revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?',[v.packId,v.sourceId,v.ruleCode,v.title,v.discipline??null,v.topic,v.ruleType,applies,assertion,v.severity,v.message,v.sourceClause??null,v.sourcePage??null,v.effectiveFrom??null,v.effectiveTo??null,now,a.organisationId,id],conn);
    await audit({event:'knowledge.rule.updated',entityType:'knowledge_rule',entityId:id,summary:`Knowledge rule updated: ${v.title}`,before:current,after:v},conn);
   }return {id};
  });

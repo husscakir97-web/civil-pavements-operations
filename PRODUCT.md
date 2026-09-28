@@ -26,9 +26,9 @@ Infrastruct is a modular, white-label operating system for civil and infrastruct
 - Every enforceable knowledge rule must retain provenance: source/authority, reference, revision, effective dates where relevant, and clause/page when available.
 - Only Current packs, Current sources and Current rules may affect live checks. Draft, superseded and retired knowledge remains historical only.
 - Knowledge is deterministic code/data, not an AI answer. AI may help interpret or draft, but the platform rules engine is the authority for automated checks.
-- Organisation and project/client-specific knowledge can coexist. Do not silently decide contractual precedence when requirements conflict; surface the applicable sources for human resolution.
+- Shared Infrastruct platform knowledge and organisation/project/client/asset-specific knowledge can coexist. Platform packs are read-only to customers; customer packs remain tenant-isolated. Do not silently decide contractual precedence when requirements conflict; surface the applicable sources and scope for human resolution.
 - Do not reproduce copyrighted standards or licensed publications unless the organisation/platform has the right to store and use that content. Prefer encoded requirements plus source references.
-- The first live consumer is Estimating; the same check API is designed for Project Setup, HSEQ, Scheduling, Workshop, Prestarts and Field capture.
+- Live consumers include Estimating and Project Setup/Overview. The same check API is designed for HSEQ, Scheduling, Workshop, Prestarts and Field capture.
 
 # Release testing requirement
 

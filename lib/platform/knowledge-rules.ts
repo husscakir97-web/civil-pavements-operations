@@ -26,7 +26,8 @@ export type KnowledgeRuleForCheck={
  assertion:KnowledgePredicate|null;
  severity:'block'|'warning'|'advisory';
  message:string;
- source:{id:string;title:string;authority:string|null;referenceCode:string|null;revisionLabel:string|null;jurisdiction:string|null;sourceClause:string|null;sourcePage:string|null;effectiveFrom:string|null;effectiveTo:string|null};
+ source:{id:string;title:string;authority:string|null;referenceCode:string|null;revisionLabel:string|null;jurisdiction:string|null;sourceClause:string|null;sourcePage:string|null;effectiveFrom:string|null;effectiveTo:string|null;sourceType:string|null;sourceUrl:string|null;documentId:string|null;origin:'platform'|'organisation'};
+ scope:{type:string;id:string|null};
 };
 
 export type KnowledgeCheckResult={
@@ -42,6 +43,7 @@ export type KnowledgeCheckResult={
  actual:unknown;
  expected:unknown;
  source:KnowledgeRuleForCheck['source'];
+ scope:KnowledgeRuleForCheck['scope'];
 };
 
 const getPath=(input:unknown,path:string)=>{
@@ -111,7 +113,7 @@ export function evaluateConditions(set:KnowledgeConditionSet,input:unknown):true
 
 export function evaluateKnowledgeRule(rule:KnowledgeRuleForCheck,input:unknown):KnowledgeCheckResult{
  const applicable=evaluateConditions(rule.appliesWhen,input);
- const base={ruleId:rule.id,ruleCode:rule.ruleCode,title:rule.title,topic:rule.topic,severity:rule.severity,message:rule.message,source:rule.source};
+ const base={ruleId:rule.id,ruleCode:rule.ruleCode,title:rule.title,topic:rule.topic,severity:rule.severity,message:rule.message,source:rule.source,scope:rule.scope};
  if(applicable===false)return {...base,applicability:'not_applicable',result:'pass',field:rule.assertion?.field??null,actual:undefined,expected:rule.assertion?.value} as KnowledgeCheckResult;
  if(applicable===null)return {...base,applicability:'unknown',result:'needs_context',field:rule.assertion?.field??null,actual:undefined,expected:rule.assertion?.value} as KnowledgeCheckResult;
  if(!rule.assertion)return {...base,applicability:'applicable',result:'advisory',field:null,actual:undefined,expected:undefined};

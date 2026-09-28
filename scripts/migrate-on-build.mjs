@@ -3,6 +3,8 @@
 // Offline builds without database configuration remain supported.
 if (['MYSQL_HOST', 'MYSQL_DATABASE', 'MYSQL_USER', 'MYSQL_PASSWORD'].some(name => process.env[name])) {
   await import('./migrate.mjs');
+  // Test site only (guarded inside): synthetic data for UX testing; never blocks a build.
+  try { await import('./seed-test-data.mjs'); } catch (error) { console.warn('Test data seed failed:', error instanceof Error ? error.message : error); }
 } else {
   console.log('Offline build: database migrations will run on npm start.');
 }

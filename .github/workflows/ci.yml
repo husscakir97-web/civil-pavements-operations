@@ -42,6 +42,7 @@ jobs:
         run: |
           npm run test:fresh
           npm run db:migrate
+          npm run knowledge:import-platform -- knowledge/platform/example.synthetic.json
           npm run test:backfill
           npm run test:mysql
           npm run test:v1

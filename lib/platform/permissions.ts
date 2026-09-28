@@ -39,7 +39,7 @@ export const ROLE_CAPABILITIES:Record<Role,readonly Capability[]>={
  admin:CAPABILITIES,
  office:OFFICE,
  estimator:[...READ,'pipeline.edit','estimate.edit','tender.submit','library.edit','document.upload','audit.view','variation.edit'],
- scheduler:['project.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','document.upload'],
+ scheduler:['project.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','knowledge.view','document.upload'],
  project_manager:[...READ,'project.edit','project.baseline','project.close','schedule.edit','resources.edit','hseq.edit','hseq.report','swms.approve','document.approve','docket.approve','variation.edit','claim.edit','document.upload','itp.complete','audit.view'],
  supervisor:[...FIELD,'project.view','schedule.view','hseq.view','hseq.edit','knowledge.view'],
  field:[...FIELD,'knowledge.view'],

@@ -55,3 +55,34 @@ Schema generation was run. The prior release had no 0005 snapshot, so Drizzle
 also proposed recreating the existing knowledge tables. That duplicate SQL was
 excluded: 0006 contains only the new journal. The generated 0006 snapshot now
 captures the current schema for subsequent generation; no applied SQL was edited.
+
+
+## Validation — 28 September 2026
+
+Local runtime: Node 22.22.0, disposable MySQL 8.4.11 bound to loopback.
+No production database, email, AI, billing or storage credentials were used.
+
+| Gate | Result |
+| --- | --- |
+| Lint | PASS, no warnings |
+| Typecheck | PASS |
+| Full npm test suite | PASS, including new test-modularity.cjs |
+| Production webpack build | PASS |
+| MySQL migrations | PASS, 0000 through additive 0006 |
+| Resource backfill | PASS, tenant isolation, rerun and rollback |
+| MySQL HTTP integration | PASS, real sessions and local SMTP/S3 fixtures |
+| V1 production journey | PASS A–H/R, new module/event scenarios included |
+| Fresh startup | PASS, automatic/recoverable migrations and checksum refusal |
+| Browser QA | PARTIAL: real login, full-suite Home, six-engine navigation and company branding observed |
+
+The browser used the already-running V1 integration server. That short-lived
+server exited before engine detail and the remaining workflows could be checked.
+Automatic approval review rejected launching the separate long-running QA server
+with “blocked by policy”; no more specific reason was supplied. Browser checks
+still required: reduced-module Home/navigation, scheduler, project manager,
+supervisor/field mobile, offline behaviour and document export. Workshop is not
+implemented in this tranche, so no Workshop-only QA claim is made.
+
+Release state: draft PR only; no merge, production migration or deployment.
+The repository's CLAUDE.md also reserves merging main for the human maintainer.
+

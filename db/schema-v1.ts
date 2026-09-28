@@ -691,3 +691,11 @@ export const knowledgeRules=mysqlTable('knowledge_rules',{
  status:varchar('status',{length:20}).notNull().default('draft'),
  ...lifecycle(),
 },t=>[uniqueIndex('idx_knowledge_rules_org_code').on(t.organisationId,t.packId,t.ruleCode),index('idx_knowledge_rules_org_topic').on(t.organisationId,t.topic,t.status),index('idx_knowledge_rules_org_pack').on(t.organisationId,t.packId,t.status)]);
+
+// Append-only source events, committed atomically with the source transaction.
+export const domainEvents=mysqlTable('domain_events',{
+ id:id(),organisationId:org(),eventType:varchar('event_type',{length:80}).notNull(),
+ eventVersion:int('event_version').notNull().default(1),module:varchar('module',{length:40}).notNull(),
+ entityType:varchar('entity_type',{length:40}).notNull(),entityId:ref('entity_id').notNull(),
+ occurrenceId:ref('occurrence_id').notNull(),actorUserId:ref('actor_user_id').notNull(),createdAt:stamp('created_at').notNull(),
+},t=>[uniqueIndex('idx_domain_event_occurrence').on(t.organisationId,t.eventType,t.occurrenceId),index('idx_domain_events_org_time').on(t.organisationId,t.createdAt,t.id)]);

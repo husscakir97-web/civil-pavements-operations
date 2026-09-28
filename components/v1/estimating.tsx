@@ -4,15 +4,21 @@
 // approval workflow (draft → review → approved → superseded).
 import {ClipboardPaste,Copy,Plus,Trash2} from 'lucide-react';
 import {useState,type Dispatch,type SetStateAction} from 'react';
-import {COST_CATEGORIES,itemAmount,itemHours,type EstimateData,type EstimateItem} from '@/lib/estimate-calculations';
+import {COST_CATEGORIES,itemAmount,itemHours,type EstimateData,type EstimateItem,type RateLibrary} from '@/lib/estimate-calculations';
+import {Lookup} from './lookup';
 import {parsePastedItems} from '@/lib/v1/estimate-paste';
 import {api,useApi,useAction,useSession,StatusBadge,ErrorState,Loading,Btn,money,dateText,field,ReasonDialog} from './kit';
 
-export function EstimateItemsEditor({form,setForm,disabled}:{form:EstimateData;setForm:Dispatch<SetStateAction<EstimateData>>;disabled?:boolean}){
+// Rate library groups map onto estimate cost categories.
+const LIBRARY_GROUPS:Array<[keyof RateLibrary,EstimateItem['category'],string]>=[['labour','labour','Labour'],['plant','plant','Plant'],['materials','material','Material'],['traffic','subcontract','Traffic'],['subcontractors','subcontract','Subcontract'],['allowances','other','Allowance']];
+export function EstimateItemsEditor({form,setForm,disabled,library}:{form:EstimateData;setForm:Dispatch<SetStateAction<EstimateData>>;disabled?:boolean;library?:RateLibrary}){
  const items=form.items||[];
  const update=(i:number,patch:Partial<EstimateItem>)=>setForm(f=>({...f,items:(f.items||[]).map((it,j)=>j===i?{...it,...patch}:it)}));
  const add=()=>setForm(f=>({...f,items:[...(f.items||[]),{id:`item-${Date.now()}`,section:items.at(-1)?.section||'General',costCode:'',category:'labour',description:'',quantity:0,unit:'item',productivity:0,rateBasis:'unit',rate:0}]}));
  const total=items.reduce((n,i)=>n+itemAmount(i),0);
+ // Pick a library rate instead of retyping it: adds a row with description, unit, rate and category.
+ const rates=(library?LIBRARY_GROUPS.flatMap(([group,category,label])=>((library[group] as Array<{id:string;name:string;unit:string;rate:number}>|undefined)||[]).map(r=>({id:`${String(group)}:${r.id}`,label:r.name,detail:`${label} · $${r.rate}/${r.unit}`,search:[r.name,label,r.unit],r,category}))):[]);
+ const addRate=(id:string)=>{const hit=rates.find(x=>x.id===id);if(!hit)return;setForm(f=>({...f,items:[...(f.items||[]),{id:`item-${Date.now()}`,section:(f.items||[]).at(-1)?.section||'General',costCode:'',category:hit.category,description:hit.r.name,quantity:0,unit:hit.r.unit,productivity:0,rateBasis:'unit',rate:hit.r.rate}]}));};
  const duplicate=(i:number)=>setForm(f=>{const list=[...(f.items||[])];list.splice(i+1,0,{...list[i],id:`item-${Date.now()}`});return {...f,items:list};});
  const [pasting,setPasting]=useState(false),[pasteText,setPasteText]=useState(''),[pasteNote,setPasteNote]=useState('');
  const applyPaste=()=>{const r=parsePastedItems(pasteText,items.at(-1)?.section||'General');setForm(f=>({...f,items:[...(f.items||[]),...r.items]}));setPasteNote(`${r.items.length} item${r.items.length===1?'':'s'} added${r.skipped.length?` · rows ${r.skipped.join(', ')} skipped (need description, quantity and rate)`:''}.`);setPasteText('');setPasting(false);};
@@ -34,6 +40,7 @@ export function EstimateItemsEditor({form,setForm,disabled}:{form:EstimateData;s
     <td className="pr-2 pt-3 text-right font-medium">{money(itemAmount(it),true)}</td>
     <td className="whitespace-nowrap">{!disabled&&<button aria-label="Duplicate item" className="p-2 text-slate-400 hover:text-slate-700" onClick={()=>duplicate(i)}><Copy className="size-4"/></button>}{!disabled&&<button aria-label="Remove item" className="p-2 text-slate-400 hover:text-red-600" onClick={()=>setForm(f=>({...f,items:(f.items||[]).filter((_,j)=>j!==i)}))}><Trash2 className="size-4"/></button>}</td>
    </tr>)}</tbody></table></div>}
+  {!disabled&&rates.length>0&&<div className="mt-3 max-w-md"><Lookup label="Add from rate library" items={rates} value={null} allowClear={false} placeholder={`Search ${library?.name||'rates'}…`} emptyText="No rates in this library." onChange={i=>{if(i)addRate(i.id);}}/></div>}
   {pasting&&!disabled&&<div className="mt-3 grid gap-2 rounded-lg border bg-slate-50 p-3"><label className="grid gap-1 text-sm"><span className="font-medium text-slate-700">Paste rows: Description, Quantity, Unit, Rate (optional Category, Section)</span><textarea className={`${field} min-h-28 font-mono`} value={pasteText} onChange={e=>setPasteText(e.target.value)} placeholder={'Profile 50mm\t1200\tm2\t4.50\nAC14 wearing course\t180\tt\t165\tmaterial'}/></label><div className="flex gap-2"><Btn disabled={!pasteText.trim()} onClick={applyPaste}>Add rows</Btn><Btn variant="ghost" onClick={()=>setPasting(false)}>Cancel</Btn></div></div>}
   {pasteNote&&<p role="status" className="mt-2 text-sm text-slate-600">{pasteNote}</p>}
   <div className="mt-3 flex flex-wrap items-center justify-between gap-2">{!disabled&&<span className="flex flex-wrap gap-2"><Btn variant="secondary" onClick={add}><Plus aria-hidden className="size-4"/>Add item</Btn><Btn variant="secondary" aria-expanded={pasting} onClick={()=>setPasting(p=>!p)}><ClipboardPaste aria-hidden className="size-4"/>Paste from spreadsheet</Btn></span>}<p className="text-sm">Items subtotal <strong>{money(total,true)}</strong></p></div>

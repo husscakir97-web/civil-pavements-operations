@@ -50,3 +50,8 @@ controlled actions automatically when a module is re-enabled.
 
 Do not deploy until lint, typecheck, regressions, build, MySQL/V1 integration and
 authenticated browser QA pass. Validation results are recorded below after execution.
+
+Schema generation was run. The prior release had no 0005 snapshot, so Drizzle
+also proposed recreating the existing knowledge tables. That duplicate SQL was
+excluded: 0006 contains only the new journal. The generated 0006 snapshot now
+captures the current schema for subsequent generation; no applied SQL was edited.

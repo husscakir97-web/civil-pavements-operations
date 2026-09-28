@@ -146,6 +146,7 @@ try{
  const sameClient=await json(await clientsApi({action:'create',client:{name:'  riverside council '}}),201);
  assert.equal(sameClient.client.id,riverside.id);assert.equal(sameClient.existing,true,'exact name returns the existing client');
  await json(await reg('clients',A.cookie).create(null,{name:'Riverside Council'}),409,'register refuses a duplicate client name');
+ assert((await json(await call('/api/search?q=riverside%20council','GET',undefined,A.cookie),200)).results.some(r=>r.type==='Client'&&r.id===riverside.id),'global search is case-insensitive on legacy tables');
  const listed=(await json(await call('/api/platform/clients?q=river','GET',undefined,A.cookie),200)).clients;assert(listed.some(c=>c.id===riverside.id),'client search by partial name');
  assert(!(await json(await call('/api/platform/clients?q=river','GET',undefined,B.cookie),200)).clients.some(c=>c.id===riverside.id),'clients stay in their organisation');
  await json(await clientsApi({action:'createSite',site:{clientId:riverside.id,address:'Foreign site'}},B.cookie),400,'foreign client cannot receive sites');

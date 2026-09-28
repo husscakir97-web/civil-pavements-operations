@@ -28,8 +28,9 @@ const like=(q:string)=>`%${q.replace(/[\\%_]/g,m=>'\\'+m)}%`;
 export async function listClients(q=''){
  needView();
  const org=actor().organisationId,term=q.trim().slice(0,120);
- const where=term?' AND (name LIKE ? OR legal_name LIKE ? OR abn LIKE ? OR contact_name LIKE ? OR account_reference LIKE ?)':'';
- const rows=await query(`SELECT * FROM clients WHERE organisation_id=?${where} ORDER BY status='active' DESC,name LIMIT 500`,[org,...(term?Array(5).fill(like(term)):[])]);
+ // Legacy clients columns are utf8mb4_bin (case-sensitive), so compare lower-cased.
+ const where=term?' AND (LOWER(name) LIKE ? OR LOWER(legal_name) LIKE ? OR LOWER(abn) LIKE ? OR LOWER(contact_name) LIKE ? OR LOWER(account_reference) LIKE ?)':'';
+ const rows=await query(`SELECT * FROM clients WHERE organisation_id=?${where} ORDER BY status='active' DESC,name LIMIT 500`,[org,...(term?Array(5).fill(like(term.toLowerCase())):[])]);
  const ids=rows.map(r=>r.id);
  const sites=ids.length?await query("SELECT * FROM client_sites WHERE organisation_id=? AND client_id IN (?) AND status='active' ORDER BY name",[org,ids]):[];
  return {clients:rows.map(r=>client(r,sites.filter(s=>s.client_id===r.id).map(site)))};

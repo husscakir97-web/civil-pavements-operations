@@ -133,6 +133,22 @@ export const clientSites=mysqlTable('client_sites',{
  ...lifecycle(),
 },t=>[index('idx_client_sites_org').on(t.organisationId),index('idx_client_sites_org_client').on(t.organisationId,t.clientId)]);
 
+// Contacts belong to a client (0007). The client's legacy contact_name/email/phone stay as
+// its quick primary contact; this table holds everyone else.
+export const clientContacts=mysqlTable('client_contacts',{
+ id:id(),organisationId:org(),
+ clientId:ref('client_id').notNull(),
+ name:varchar('name',{length:160}).notNull(),
+ role:varchar('role',{length:120}),
+ email:varchar('email',{length:254}),
+ phone:varchar('phone',{length:60}),
+ mobile:varchar('mobile',{length:60}),
+ isPrimary:int('is_primary').notNull().default(0),
+ notes:text('notes'),
+ status:varchar('status',{length:20}).notNull().default('active'),
+ ...lifecycle(),
+},t=>[index('idx_client_contacts_org').on(t.organisationId),index('idx_client_contacts_org_client').on(t.organisationId,t.clientId)]);
+
 // ---------------------------------------------------------------- pipeline
 export const tenders=mysqlTable('tenders',{
  id:id(),organisationId:org(),

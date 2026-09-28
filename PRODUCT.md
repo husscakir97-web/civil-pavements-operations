@@ -23,12 +23,16 @@ Infrastruct is a modular, white-label operating system for civil and infrastruct
 ## Civil Knowledge Engine
 
 - Infrastruct may validate work against controlled civil knowledge, but it must never invent an engineering, legal, employment or specification requirement.
-- Every enforceable knowledge rule must retain provenance: source/authority, reference, revision, effective dates where relevant, and clause/page when available.
+- Every enforceable knowledge rule must retain provenance: source/authority, reference, revision, effective dates where relevant, clause/page when available, source type and whether the rule is platform or organisation owned.
 - Only Current packs, Current sources and Current rules may affect live checks. Draft, superseded and retired knowledge remains historical only.
-- Knowledge is deterministic code/data, not an AI answer. AI may help interpret or draft, but the platform rules engine is the authority for automated checks.
-- Shared Infrastruct platform knowledge and organisation/project/client/asset-specific knowledge can coexist. Platform packs are read-only to customers; customer packs remain tenant-isolated. Do not silently decide contractual precedence when requirements conflict; surface the applicable sources and scope for human resolution.
-- Do not reproduce copyrighted standards or licensed publications unless the organisation/platform has the right to store and use that content. Prefer encoded requirements plus source references.
-- Live consumers include Estimating and Project Setup/Overview. The same check API is designed for HSEQ, Scheduling, Workshop, Prestarts and Field capture.
+- Knowledge is deterministic code/data, not an AI answer. AI may help interpret, locate or draft candidate rules, but the controlled rules engine remains the authority for automated checks.
+- The resolver combines two layers: shared **Infrastruct platform knowledge**, maintained once and exposed read-only across organisations; and tenant-owned knowledge scoped to organisation, project, tender, client, asset or asset category.
+- Platform knowledge must never expose draft/superseded records to tenants. Organisation knowledge remains tenant-isolated.
+- Context-specific and general rules may both apply. Do not silently decide contractual precedence when requirements conflict; surface the applicable source, origin and scope for competent-person resolution.
+- Missing input produces **Needs context**, never an assumed pass.
+- Do not reproduce copyrighted standards or licensed publications unless the organisation/platform has the right to store and use that content. Prefer encoded requirements plus source references and links to governing sources.
+- Live consumers include Estimating and Project Setup/Overview. The same check API is the canonical rules surface for HSEQ, Scheduling, Workshop, Prestarts, Field capture and future Ask Infrastruct / fast-entry validation.
+- Admin → Civil Knowledge includes a rule sandbox so controlled scenarios can be tested before a rule pack is relied on operationally.
 
 # Release testing requirement
 

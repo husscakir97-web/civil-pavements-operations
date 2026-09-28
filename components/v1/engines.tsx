@@ -3,8 +3,8 @@
 import {ArrowRight,BarChart3,BriefcaseBusiness,ClipboardCheck,DollarSign,RefreshCw,Truck,UsersRound} from 'lucide-react';
 import {useNav} from './nav';
 import {Btn,EmptyState,ErrorState,Loading,NextAction,PageHeader,Pill,Section,Stat,money,pct,useApi,useSession} from './kit';
-import {ENGINES,ENGINE_ROUTE_OUTPUTS,engineMeta,type EngineKey} from '@/lib/v1/engines';
-import type {Capability} from '@/lib/platform/permissions';
+import {ENGINE_ROUTE_OUTPUTS,engineMeta,type EngineKey} from '@/lib/v1/engines';
+import {workspacesFor,enginesFor,engineLabelFor} from '@/lib/v1/workspaces';
 
 type Reports={
  generatedAt:string;
@@ -16,35 +16,6 @@ type Reports={
  operations?:{upcomingShifts14d:number;completedShifts30d:number;plannedHoursByCategory:Record<string,number>;fieldRecords30d:number;tonnesRecorded30d:number};
  dockets?:Record<string,{count:number;value?:number}>;
  hseq?:{openActions:number;overdueActions:number;incidents:Array<{type:string;status:string;count:number}>;ncrs:Record<string,number>;swms:Record<string,number>;itpItems:Record<string,number>};
-};
-
-type Workspace={label:string;description:string;sub:string;capability?:Capability;module?:string};
-
-const WORKSPACES:Record<EngineKey,Workspace[]>={
- 'Win Work':[
-  {label:'Opportunities',description:'Qualify work worth chasing and preserve the client/opportunity lineage.',sub:'Opportunities',capability:'pipeline.view',module:'pipeline'},
-  {label:'Tenders',description:'Requirements, bid review, returnables, approvals, submission and award in one workspace.',sub:'Tenders',capability:'pipeline.view',module:'pipeline'},
-  {label:'Estimates',description:'Build and approve discipline-neutral estimates before they become a project baseline.',sub:'Estimates',capability:'pipeline.view',module:'estimating'},
- ],
- 'Prepare Work':[
-  {label:'Projects',description:'Set up awarded work, resolve readiness blockers and establish the controlled baseline.',sub:'Projects',capability:'project.view',module:'projects'},
-  {label:'IMS & HSEQ',description:'Build and control risks, SWMS, ITPs and management-system requirements.',sub:'IMS & HSEQ',capability:'hseq.view',module:'ims'},
-  {label:'Company Library',description:'Reuse policies, plans, evidence and standard company knowledge instead of recreating it.',sub:'Company Library',capability:'library.edit'},
- ],
- 'Resource Work':[
-  {label:'Schedule',description:'Plan shifts against project demand and expose conflicts before work starts.',sub:'Schedule',capability:'schedule.view',module:'operations'},
-  {label:'Resources',description:'Workers, competencies, crews, plant, suppliers and availability.',sub:'Resources',capability:'schedule.view',module:'operations'},
- ],
- 'Deliver Work':[
-  {label:'Projects',description:'Run active projects and keep field context attached to the job.',sub:'Projects',capability:'project.view',module:'projects'},
-  {label:'Dockets',description:'Review captured work before it becomes actual cost and claim data.',sub:'Dockets',capability:'docket.approve',module:'dockets'},
- ],
- 'Control Money':[
-  {label:'Commercial',description:'Control contract value, actual cost, variations, claims, invoices, payments and forecast margin.',sub:'Commercial',capability:'commercial.view',module:'commercial'},
- ],
- 'Learn':[
-  {label:'Reports',description:'Compare estimate, delivery and commercial actuals so future decisions use real performance.',sub:'Reports',capability:'reports.view',module:'reports'},
- ],
 };
 
 const ICONS:Record<EngineKey,typeof BriefcaseBusiness>={
@@ -139,20 +110,31 @@ export function EngineOverview({engine}:{engine:EngineKey}){
  const Icon=ICONS[engine];
  const {navigate}=useNav();
  const session=useSession();
- const {data,error,loading,refresh}=useApi<Reports>('/api/reports/v1');
- const visible=WORKSPACES[engine].filter(w=>(!w.module||session.module(w.module))&&(!w.capability||session.can(w.capability)));
+ const {data,error,loading,refresh}=useApi<Reports>('/api/platform/overview');
+ const visible=workspacesFor(engine,session);
  const out=ENGINE_ROUTE_OUTPUTS[engine];
- const action=data?actionFor(engine,data):null;
+ const suggested=data?actionFor(engine,data):null;
+ const action=suggested&&visible.some(w=>w.sub===suggested.sub)?suggested:visible[0]?{text:visible[0].description,sub:visible[0].sub,label:`Open ${visible[0].label}`}:null;
+ const engines=enginesFor(session);
+ const metricSources:Record<EngineKey,Array<keyof Reports>>={
+  'Win Work':['pipeline','pipeline','pipeline','pipeline'],
+  'Prepare Work':['projects','projects','hseq','hseq'],
+  'Resource Work':['operations','operations','operations','projects'],
+  'Deliver Work':['operations','operations','dockets','hseq'],
+  'Control Money':['commercial','commercial','commercial','commercial'],
+  'Learn':['learn','learn','learn','learn'],
+ };
+ const handoff=engines.some(e=>e.key===out.target[0])&&(!out.target[1]||out.target[1]==='Overview'||workspacesFor(out.target[0] as EngineKey,session).some(w=>w.sub===out.target[1]));
  return <div className="grid gap-5">
-  <PageHeader title={meta.key} subtitle={meta.purpose} badges={<Pill>Engine {meta.number} of 6</Pill>} actions={<Btn variant="secondary" onClick={refresh}><RefreshCw aria-hidden className="size-4"/>Refresh</Btn>}/>
-  <section aria-label="Operating engine flow" className="-mx-4 flex snap-x gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-6 sm:overflow-visible sm:px-0">{ENGINES.map(e=>{const EIcon=ICONS[e.key];const active=e.key===engine;return <button key={e.key} onClick={()=>navigate(e.key,'Overview')} aria-current={active?'step':undefined} className={'min-w-[132px] snap-start rounded-2xl border p-3 text-left transition-colors sm:min-w-0 '+(active?'border-orange-300 bg-orange-50 shadow-sm':'bg-white hover:bg-slate-50')}><span className={'flex size-8 items-center justify-center rounded-xl '+(active?'bg-primary text-white':'bg-slate-100 text-slate-500')}><EIcon aria-hidden className="size-4"/></span><span className="mt-2 block text-[10px] font-bold uppercase tracking-[0.08em] text-slate-400">Engine {e.number}</span><span className="block text-sm font-semibold text-slate-900">{e.key}</span></button>;})}</section>
+  <PageHeader title={engineLabelFor(engine,session)} subtitle={meta.purpose} badges={<Pill>Engine {meta.number} of 6</Pill>} actions={<Btn variant="secondary" onClick={refresh}><RefreshCw aria-hidden className="size-4"/>Refresh</Btn>}/>
+  <section aria-label="Operating engine flow" className="-mx-4 flex snap-x gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-6 sm:overflow-visible sm:px-0">{engines.map(e=>{const EIcon=ICONS[e.key];const active=e.key===engine;return <button key={e.key} onClick={()=>navigate(e.key,'Overview')} aria-current={active?'step':undefined} className={'min-w-[132px] snap-start rounded-2xl border p-3 text-left transition-colors sm:min-w-0 '+(active?'border-orange-300 bg-orange-50 shadow-sm':'bg-white hover:bg-slate-50')}><span className={'flex size-8 items-center justify-center rounded-xl '+(active?'bg-primary text-white':'bg-slate-100 text-slate-500')}><EIcon aria-hidden className="size-4"/></span><span className="mt-2 block text-[10px] font-bold uppercase tracking-[0.08em] text-slate-400">Engine {e.number}</span><span className="block text-sm font-semibold text-slate-900">{engineLabelFor(e.key,session)}</span></button>;})}</section>
   <ErrorState error={error} onRetry={refresh}/>
   {loading&&!data?<Loading/>:data&&<>
    {action&&<NextAction text={action.text} actionLabel={action.label} onClick={()=>navigate(engine,action.sub)}/>}
-   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{engineMetrics(engine,data).map(m=><Stat key={m.label} label={m.label} value={m.value} hint={m.hint}/>)}</div>
+   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{engineMetrics(engine,data).filter((_,i)=>data[metricSources[engine][i]]!==undefined).map(m=><Stat key={m.label} label={m.label} value={m.value} hint={m.hint}/>)}</div>
    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
     <Section title="Workspaces" description={meta.question}>{visible.length?<div className="grid gap-3 sm:grid-cols-2">{visible.map(w=><button key={w.sub} onClick={()=>navigate(engine,w.sub)} className="group rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:border-orange-200 hover:bg-orange-50/30"><span className="flex items-center justify-between gap-3"><span className="font-semibold text-slate-950">{w.label}</span><ArrowRight aria-hidden className="size-4 text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-orange-600"/></span><span className="mt-1.5 block text-xs leading-5 text-slate-500">{w.description}</span></button>)}</div>:<EmptyState title="No workspaces in this engine are enabled for your role."/>}</Section>
-    <Section title="Engine hand-off" description="Every engine leaves controlled information for the next one."><div className="rounded-2xl bg-slate-950 p-4 text-white"><span className="flex size-10 items-center justify-center rounded-xl bg-primary"><Icon aria-hidden className="size-5"/></span><p className="mt-3 text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">Output</p><p className="mt-1 font-semibold">{meta.output}</p><button className="mt-4 flex w-full items-center justify-between gap-2 rounded-xl bg-white/10 px-3 py-2.5 text-left text-sm font-medium hover:bg-white/15" onClick={()=>navigate(out.target[0],out.target[1])}><span>{out.label}</span><ArrowRight aria-hidden className="size-4 shrink-0"/></button></div></Section>
+    <Section title="Engine hand-off" description="Every engine leaves controlled information for the next one."><div className="rounded-2xl bg-slate-950 p-4 text-white"><span className="flex size-10 items-center justify-center rounded-xl bg-primary"><Icon aria-hidden className="size-5"/></span><p className="mt-3 text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">Output</p><p className="mt-1 font-semibold">{meta.output}</p>{handoff&&<button className="mt-4 flex w-full items-center justify-between gap-2 rounded-xl bg-white/10 px-3 py-2.5 text-left text-sm font-medium hover:bg-white/15" onClick={()=>navigate(out.target[0],out.target[1])}><span>{out.label}</span><ArrowRight aria-hidden className="size-4 shrink-0"/></button>}</div></Section>
    </div>
   </>}
  </div>;

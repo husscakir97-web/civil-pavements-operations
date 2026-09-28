@@ -230,5 +230,5 @@ function LibraryArea() {
   const [tab, setTab] = useState<"items" | "responses">("items");
   return <div><Tabs label="Company library" active={tab} onChange={setTab} tabs={[{ key: "items", label: "Library items" }, { key: "responses", label: "Responses, templates & plans" }]} />{tab === "items" ? <LibraryRegister /> : <PreparationWorkspace scope="company" />}</div>;
 }
-const ClientsRegister = dynamic(() => import("@/components/v1/register-view").then(m => function Clients() { return <m.RegisterView register="clients" description="Create each client once. Opportunities, tenders and projects select them instead of retyping. Clients in use are marked inactive rather than deleted." />; }), { loading });
+const ClientsRegister = dynamic(() => import("@/components/v1/clients").then(m => m.ClientsArea), { loading });
 const LibraryRegister = dynamic(() => import("@/components/v1/register-view").then(m => function Library() { return <m.RegisterView register="library" description="Policies, procedures, certifications, licences, insurances, capability statements, CVs, project examples and standard tender responses. Tender returnables link to these items." />; }), { loading });

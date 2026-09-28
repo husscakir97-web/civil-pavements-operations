@@ -3,8 +3,8 @@
 // search, arrow keys + Enter to choose, and an inline "+ Add" when the record
 // does not exist yet. Clients, sites, workers and plant all use this.
 import {useEffect,useId,useMemo,useRef,useState,type ReactNode} from 'react';
-import {Check,Plus,Search,X} from 'lucide-react';
-import {api,field,useSession,humanStatus} from './kit';
+import {Check,Plus,Search,Star,X} from 'lucide-react';
+import {api,field,useSession,humanStatus,Btn,Field,ErrorState,useAction} from './kit';
 import {filterLookup,type LookupValue} from '@/lib/v1/lookup';
 
 export type LookupItem={id:string;label:string;detail?:string|null;badge?:ReactNode;search?:LookupValue[];ids?:LookupValue[]};
@@ -58,7 +58,8 @@ export function Lookup({label,items,value,onChange,placeholder,disabled,loading,
 
 // ---------------------------------------------------------------- clients & sites
 export type Site={id:string;clientId:string|null;name:string;address:string|null;label:string};
-export type Client={id:string;name:string;legalName:string|null;abn:string|null;contactName:string;email:string;phone:string;status:string;revision:number;sites:Site[]};
+export type Client={id:string;name:string;legalName:string|null;abn:string|null;contactName:string;email:string;phone:string;status:string;revision:number;sites:Site[];contacts?:Contact[]};
+export type Contact={id:string;clientId:string;name:string;role:string|null;email:string|null;phone:string|null;mobile:string|null;isPrimary:boolean;revision:number};
 
 let clientsCache:Promise<Client[]>|null=null;
 const listeners=new Set<(c:Client[])=>void>();
@@ -72,7 +73,7 @@ export function useClients(){
  useEffect(()=>{let live=true;listeners.add(setClients);loadClients().then(c=>{if(live)setClients(c);}).catch(()=>{}).finally(()=>{if(live)setLoading(false);});return()=>{live=false;listeners.delete(setClients);};},[]);
  return {clients,loading,refresh:publish};
 }
-const clientItem=(c:Client):LookupItem=>({id:c.id,label:c.name,detail:[c.legalName&&c.legalName!==c.name?c.legalName:null,c.contactName,c.sites.length?`${c.sites.length} site${c.sites.length===1?'':'s'}`:null,c.status!=='active'?'inactive':null].filter(Boolean).join(' · ')||null,search:[c.name,c.legalName,c.abn,c.contactName,c.email,...c.sites.map(s=>s.label)],ids:[c.abn]});
+const clientItem=(c:Client):LookupItem=>({id:c.id,label:c.name,detail:[c.legalName&&c.legalName!==c.name?c.legalName:null,c.contactName,c.sites.length?`${c.sites.length} site${c.sites.length===1?'':'s'}`:null,c.status!=='active'?'inactive':null].filter(Boolean).join(' · ')||null,search:[c.name,c.legalName,c.abn,c.contactName,c.email,...c.sites.map(s=>s.label),...(c.contacts||[]).map(x=>x.name)],ids:[c.abn]});
 
 export async function quickCreateClient(name:string){
  const r=await api<{client:Client;existing:boolean}>('/api/platform/clients',{method:'POST',body:{action:'create',client:{name}}});
@@ -105,4 +106,31 @@ export function SitePicker({clientId,value,onChange,disabled,label='Site'}:{clie
 export function PersonPicker({people,value,onChange,label,disabled,emptyLabel}:{people:Array<{id:string;name:string;role?:string}>;value:string|null|undefined;onChange:(id:string|null)=>void;label:string;disabled?:boolean;emptyLabel?:string}){
  const items=useMemo(()=>people.map(p=>({id:p.id,label:p.name,detail:p.role?humanStatus(p.role):null})),[people]);
  return <Lookup label={label} items={items} value={value||null} disabled={disabled} placeholder="Search people…" emptyText={emptyLabel||'No members found.'} onChange={i=>onChange(i?.id??null)}/>;
+}
+
+/** Contacts for one client: list, add, set primary, remove. Used from the Clients page. */
+export function ClientContacts({clientId}:{clientId:string}){
+ const {clients,refresh}=useClients(),session=useSession(),{busy,error,run}=useAction();
+ const canEdit=session.can('pipeline.edit')||session.can('project.edit');
+ const c=clients.find(x=>x.id===clientId);
+ const [f,setF]=useState({name:'',role:'',email:'',phone:''});
+ if(!c)return <p className="text-sm text-slate-500">Loading contacts…</p>;
+ const post=(body:Record<string,unknown>,done?:()=>void)=>void run(()=>api('/api/platform/clients',{method:'POST',body}),()=>{refresh();done?.();});
+ const contacts=c.contacts||[];
+ return <div className="grid gap-3">
+  {c.contactName&&<p className="text-sm text-slate-600">Main contact on the client record: <strong>{c.contactName}</strong>{[c.email,c.phone].filter(Boolean).length?` · ${[c.email,c.phone].filter(Boolean).join(' · ')}`:''}</p>}
+  {contacts.length?<ul className="divide-y rounded-lg border">{contacts.map(x=><li key={x.id} className="flex flex-wrap items-center gap-2 p-3 text-sm">
+   <span className="min-w-0 flex-1"><span className="font-medium">{x.name}</span>{x.isPrimary&&<span className="ml-2 rounded bg-amber-50 px-1.5 text-xs text-amber-900">Primary</span>}<span className="block text-xs text-slate-500">{[x.role,x.email,x.phone,x.mobile].filter(Boolean).join(' · ')||'No details'}</span></span>
+   {canEdit&&!x.isPrimary&&<Btn variant="ghost" className="min-h-9 px-2 text-xs" busy={busy} aria-label={`Make ${x.name} primary`} onClick={()=>post({action:'updateContact',id:x.id,revision:x.revision,contact:{isPrimary:true}})}><Star aria-hidden className="size-3.5"/>Primary</Btn>}
+   {canEdit&&<Btn variant="ghost" className="min-h-9 px-2 text-xs text-red-700" busy={busy} aria-label={`Remove ${x.name}`} onClick={()=>{if(confirm(`Remove ${x.name} from ${c.name}?`))post({action:'updateContact',id:x.id,revision:x.revision,contact:{archived:true}});}}>Remove</Btn>}
+  </li>)}</ul>:<p className="text-sm text-slate-500">No other contacts yet.</p>}
+  {canEdit&&<form className="grid gap-2 rounded-lg border bg-slate-50 p-3 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();post({action:'addContact',clientId,contact:{...f,isPrimary:!contacts.length}},()=>setF({name:'',role:'',email:'',phone:''}));}}>
+   <Field label="Name" required><input className={field} required value={f.name} onChange={e=>setF({...f,name:e.target.value})}/></Field>
+   <Field label="Role"><input className={field} placeholder="Project manager, accounts…" value={f.role} onChange={e=>setF({...f,role:e.target.value})}/></Field>
+   <Field label="Email"><input className={field} type="email" value={f.email} onChange={e=>setF({...f,email:e.target.value})}/></Field>
+   <Field label="Phone"><input className={field} value={f.phone} onChange={e=>setF({...f,phone:e.target.value})}/></Field>
+   <div className="sm:col-span-2"><Btn type="submit" busy={busy}><Plus aria-hidden className="size-4"/>Add contact</Btn></div>
+  </form>}
+  <ErrorState error={error}/>
+ </div>;
 }

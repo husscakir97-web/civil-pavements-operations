@@ -151,6 +151,15 @@ try{
  assert(!(await json(await call('/api/platform/clients?q=river','GET',undefined,B.cookie),200)).clients.some(c=>c.id===riverside.id),'clients stay in their organisation');
  await json(await clientsApi({action:'createSite',site:{clientId:riverside.id,address:'Foreign site'}},B.cookie),400,'foreign client cannot receive sites');
  await json(await call('/api/projects','POST',{name:'Foreign use',clientId:riverside.id},B.cookie),400,'foreign client id refused');
+ let withContacts=(await json(await clientsApi({action:'addContact',clientId:riverside.id,contact:{name:'Jo Accounts',role:'Accounts',email:'jo@example.invalid',isPrimary:true}}),201)).client;
+ withContacts=(await json(await clientsApi({action:'addContact',clientId:riverside.id,contact:{name:'Max Site',role:'Site manager',isPrimary:true}}),201)).client;
+ assert.deepEqual(withContacts.contacts.map(c=>[c.name,c.isPrimary]),[['Max Site',true],['Jo Accounts',false]],'one primary contact at a time');
+ const jo=withContacts.contacts.find(c=>c.name==='Jo Accounts');
+ await json(await clientsApi({action:'updateContact',id:jo.id,revision:jo.revision,contact:{archived:true}},B.cookie),404,'foreign contact edit refused');
+ await json(await clientsApi({action:'addContact',clientId:riverside.id,contact:{name:'Intruder'}},B.cookie),400,'foreign client cannot receive contacts');
+ withContacts=(await json(await clientsApi({action:'updateContact',id:jo.id,revision:jo.revision,contact:{archived:true}}),200)).client;
+ assert.deepEqual(withContacts.contacts.map(c=>c.name),['Max Site'],'removed contact is archived, not listed');
+ await json(await clientsApi({action:'updateContact',id:jo.id,revision:jo.revision,contact:{name:'Stale'}}),409,'stale contact edit refused');
  const opps=reg('opportunities',A.cookie);
  const opp=(await json(await opps.create(null,{name:'Riverside drainage upgrade',client_id:riverside.id,site_id:riversideSite.id,estimated_value:850000,probability:60,closing_date:'2099-01-15'}),201)).record;
  assert.equal(opp.client_name,'Riverside Council','client name kept as a snapshot');assert.match(String(opp.location),/Riverside Rd/,'site fills location');

@@ -3,7 +3,7 @@
 // 1. builds the deployed schema with the BASELINE's own migration runner in a disposable database;
 // 2. seeds legacy data the way the legacy routes wrote it (JSON metadata, imperfect values);
 // 3. fingerprints every legacy row;
-// 4. runs THIS branch's migration runner (0003, 0004 and the resource backfill);
+// 4. runs THIS branch's migration runner (0003, 0004, 0005 and the resource backfill);
 // 5. verifies no legacy row was changed or removed, typed data and issues were written,
 //    counts reconcile, and a second run is a no-op.
 // 6. when a production build exists (.next/BUILD_ID), boots it on the upgraded database and checks
@@ -60,7 +60,7 @@ try{
  const upLog=await run(process.cwd(),'scripts/migrate.mjs');
  report.applied=[...upLog.matchAll(/Applied (\S+)/g)].map(m=>m[1]);
  report.backfill=upLog.split('\n').filter(l=>l.startsWith('Resource backfill'));
- assert.deepEqual(report.applied,['0003_v1_platform.sql','0004_v1_resources_retention.sql']);
+ assert.deepEqual(report.applied,['0003_v1_platform.sql','0004_v1_resources_retention.sql','0005_civil_knowledge_engine.sql']);
  // 5. verification
  assert.deepEqual(await fingerprint(),before,'no legacy row was changed or removed');
  const c=async sql=>Number((await q(sql))[0].n);

@@ -183,6 +183,8 @@ export async function checkKnowledge(raw:unknown){
   severity:r.severity,message:r.message,
   source:{id:r.source_id,title:r.source_title,authority:r.source_authority,referenceCode:r.source_reference_code,revisionLabel:r.source_revision_label,jurisdiction:r.source_jurisdiction,sourceClause:r.source_clause,sourcePage:r.source_page,effectiveFrom:r.source_effective_from,effectiveTo:r.source_effective_to,sourceType:r.source_type,sourceUrl:r.source_url,documentId:r.source_document_id,origin:r.organisation_id===PLATFORM_KNOWLEDGE_ORG?'platform':'organisation'},
  }));
- const results=rules.map(r=>evaluateKnowledgeRule(r,v.context)).filter(r=>r.applicability!=='not_applicable');
+ const rank=(r:KnowledgeRuleForCheck)=>r.scope.type==='organisation'?(r.source.origin==='platform'?2:1):0;
+ const ordered=[...rules].sort((a,b)=>rank(a)-rank(b)||a.topic.localeCompare(b.topic)||a.title.localeCompare(b.title));
+ const results=ordered.map(r=>evaluateKnowledgeRule(r,v.context)).filter(r=>r.applicability!=='not_applicable');
  return {onDate,summary:knowledgeSummary(results),results};
 }

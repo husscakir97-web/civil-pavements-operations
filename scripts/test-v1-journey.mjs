@@ -80,9 +80,17 @@ try{
  assert.deepEqual([kc.summary.failed,kc.summary.blocking,kc.results[0].actual,kc.results[0].expected],[1,1,35,40]);
  assert.equal(kc.results[0].source.referenceCode,'SPEC-TEST');
  kc=await json(await call('/api/platform/knowledge/check','POST',{topics:['asphalt'],context:{asphalt:{mix:'TEST14',compactedDepthMm:50}}},A.cookie),200);assert.equal(kc.summary.passed,1);
- const foreignKnowledge=await json(await call('/api/platform/knowledge','GET',undefined,B.cookie),200);assert.equal(foreignKnowledge.packs.length,0,'knowledge is tenant isolated');
+ // Platform knowledge is shared read-only across tenants; organisation knowledge remains isolated.
+ const platformPack='platform-pack-'+suffix,platformSource='platform-source-'+suffix,platformRule='platform-rule-'+suffix,nowIso=new Date().toISOString();
+ await db.execute("INSERT INTO knowledge_packs (id,organisation_id,pack_key,name,description,discipline,jurisdiction,context_type,version_label,status,locked,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'current',1,1,?,?)",[platformPack,'__infrastruct_platform__','fixture-platform-core-'+suffix,'Fixture Platform Knowledge','Journey test only','General','NSW','organisation','R1',nowIso,nowIso]);
+ await db.execute("INSERT INTO knowledge_sources (id,organisation_id,pack_id,title,authority,source_type,reference_code,revision_label,jurisdiction,source_url,status,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'current',1,?,?)",[platformSource,'__infrastruct_platform__',platformPack,'Fixture public source','Infrastruct Test','public','PLATFORM-TEST','R1','NSW','https://example.invalid/platform-test',nowIso,nowIso]);
+ await db.execute("INSERT INTO knowledge_rules (id,organisation_id,pack_id,source_id,rule_code,title,discipline,topic,rule_type,applies_when,assertion,severity,message,source_clause,status,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'current',1,?,?)",[platformRule,'__infrastruct_platform__',platformPack,platformSource,'platform.fixture.minimum','Fixture shared minimum','General','platform-fixture','minimum',JSON.stringify({all:[{field:'fixture.kind',op:'eq',value:'shared'}],any:[]}),JSON.stringify({field:'fixture.value',op:'gte',value:10}),'warning','Shared fixture requires value 10 or greater.','1.1',nowIso,nowIso]);
+ const foreignKnowledge=await json(await call('/api/platform/knowledge','GET',undefined,B.cookie),200);assert(foreignKnowledge.packs.some(p=>p.id===platformPack&&p.origin==='platform'),'platform knowledge is visible across tenants');assert(!foreignKnowledge.packs.some(p=>p.id===pack),'organisation A knowledge stays isolated');
  const foreignKnowledgeCheck=await json(await call('/api/platform/knowledge/check','POST',{topics:['asphalt'],context:{asphalt:{mix:'TEST14',compactedDepthMm:35}}},B.cookie),200);assert.equal(foreignKnowledgeCheck.results.length,0,'another organisation cannot use organisation A rules');
- console.log('PASS knowledge: controlled source + pack + rule lifecycle, deterministic pass/fail, provenance and tenant isolation');
+ const sharedA=await json(await call('/api/platform/knowledge/check','POST',{topics:['platform-fixture'],context:{fixture:{kind:'shared',value:5}}},A.cookie),200);
+ const sharedB=await json(await call('/api/platform/knowledge/check','POST',{topics:['platform-fixture'],context:{fixture:{kind:'shared',value:5}}},B.cookie),200);
+ assert.equal(sharedA.summary.failed,1);assert.equal(sharedB.summary.failed,1);assert.equal(sharedB.results[0].source.origin,'platform');assert.equal(sharedB.results[0].source.referenceCode,'PLATFORM-TEST');
+ console.log('PASS knowledge: controlled source + pack + rule lifecycle, deterministic checks, provenance, tenant isolation and shared read-only platform knowledge');
 
  // ---------------------------------------------------------------- Scenario B
  step='B win work';

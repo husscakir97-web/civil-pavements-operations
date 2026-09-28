@@ -283,6 +283,10 @@ export const organisations=mysqlTable('organisations',{
 });
 
 export const plant=mysqlTable('plant',{
+ safetyHold:int('safety_hold').notNull().default(0),
+ meterType:varchar('meter_type',{length:20}),
+ currentMeter:decimal('current_meter',{precision:15,scale:2}),
+ nextServiceMeter:decimal('next_service_meter',{precision:15,scale:2}),
  id:varchar('id',{length:191}).primaryKey(),
  organisationId:varchar('organisation_id',{length:191}).notNull(),
  name:longtext('name').notNull(),

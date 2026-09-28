@@ -1,0 +1,1 @@
+ALTER TABLE `plant` ADD `safety_hold` int DEFAULT 0 NOT NULL;

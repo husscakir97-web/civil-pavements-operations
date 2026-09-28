@@ -19,6 +19,17 @@ Infrastruct is a modular, white-label operating system for civil and infrastruct
 - Still required before charging: verified subscription checkout/webhooks, plan-to-entitlement mapping, cancellation and payment-failure handling, plus optional AI usage charging.
 - Add company logos, branded quote/invoice templates and custom-domain support when the corresponding hosting capabilities are confirmed.
 - Subscription amounts and AI retail prices require the product owner's decision. Do not present example estimates as live prices or billing as operational before integration.
+
+## Civil Knowledge Engine
+
+- Infrastruct may validate work against controlled civil knowledge, but it must never invent an engineering, legal, employment or specification requirement.
+- Every enforceable knowledge rule must retain provenance: source/authority, reference, revision, effective dates where relevant, and clause/page when available.
+- Only Current packs, Current sources and Current rules may affect live checks. Draft, superseded and retired knowledge remains historical only.
+- Knowledge is deterministic code/data, not an AI answer. AI may help interpret or draft, but the platform rules engine is the authority for automated checks.
+- Shared Infrastruct platform knowledge and organisation/project/client/asset-specific knowledge can coexist. Platform packs are read-only to customers; customer packs remain tenant-isolated. Do not silently decide contractual precedence when requirements conflict; surface the applicable sources and scope for human resolution.
+- Do not reproduce copyrighted standards or licensed publications unless the organisation/platform has the right to store and use that content. Prefer encoded requirements plus source references.
+- Live consumers include Estimating and Project Setup/Overview. The same check API is designed for HSEQ, Scheduling, Workshop, Prestarts and Field capture.
+
 # Release testing requirement
 
 The owner requires multiple meaningful tests before any review deployment.

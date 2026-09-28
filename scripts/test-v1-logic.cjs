@@ -51,7 +51,7 @@ for(const r of ['scheduler','supervisor','field','read_only'])assert.equal(perm.
 assert.equal(perm.can('estimator','estimate.approve'),false);assert.equal(perm.can('project_manager','claim.approve'),false);assert.equal(perm.can('accounts','claim.approve'),true);
 // Admin navigation is capability-driven: no role sees administration it cannot use.
 const navDef=load('lib/v1/navigation.ts');
-assert.deepEqual(navDef.adminSubsFor('admin'),['Company','People','Plant','Rates','Company Library','Team & Permissions','Integrations','Settings']);
+assert.deepEqual(navDef.adminSubsFor('admin'),['Company','People','Plant','Rates','Company Library','Civil Knowledge','Team & Permissions','Integrations','Settings']);
 assert.deepEqual(navDef.adminSubsFor('estimator'),['Rates','Company Library'],'estimator: rates (read) and library, no organisation/security/entitlements');
 assert.deepEqual(navDef.adminSubsFor('scheduler'),['People','Plant'],'operations: people and plant only');
 assert.deepEqual(navDef.adminSubsFor('project_manager'),['People','Plant']);
@@ -60,6 +60,22 @@ assert.deepEqual(navDef.adminSubsFor('read_only'),[],'read-only: no admin area')
 assert.deepEqual(navDef.adminSubsFor('field'),[]);assert.deepEqual(navDef.adminSubsFor('supervisor'),[]);
 assert(!navDef.adminSubsFor('office').some(k=>['Team & Permissions','Integrations','Settings','Company'].includes(k)),'office has no organisation administration');
 assert.deepEqual(navDef.FIELD_SHELL_ROLES,['field','supervisor']);
+// Civil Knowledge Engine: deterministic rule evaluation, missing-context handling and source provenance.
+{const k=load('lib/platform/knowledge-rules.ts');
+ const source={id:'s1',title:'Client pavement specification',authority:'Example client',referenceCode:'SPEC-01',revisionLabel:'R2',jurisdiction:'NSW',sourceClause:'4.2',sourcePage:'18',effectiveFrom:'2026-01-01',effectiveTo:null};
+ const rule={id:'r1',ruleCode:'fixture.mix.minimum',title:'Fixture minimum layer',topic:'asphalt',ruleType:'minimum',severity:'block',message:'Fixture rule only.',source,
+  appliesWhen:{all:[{field:'asphalt.mix',op:'eq',value:'TEST14'}],any:[]},assertion:{field:'asphalt.compactedDepthMm',op:'gte',value:40}};
+ let r=k.evaluateKnowledgeRule(rule,{asphalt:{mix:'TEST14',compactedDepthMm:35}});
+ assert.deepEqual([r.applicability,r.result,r.actual,r.expected],['applicable','fail',35,40]);
+ r=k.evaluateKnowledgeRule(rule,{asphalt:{mix:'TEST14',compactedDepthMm:50}});assert.equal(r.result,'pass');
+ r=k.evaluateKnowledgeRule(rule,{asphalt:{mix:'OTHER',compactedDepthMm:20}});assert.equal(r.applicability,'not_applicable');
+ r=k.evaluateKnowledgeRule(rule,{asphalt:{mix:'TEST14'}});assert.equal(r.result,'needs_context');
+ assert.equal(k.evaluatePredicate({field:'x',op:'between',value:[10,20]},{x:15}),true);
+ assert.equal(k.evaluatePredicate({field:'x',op:'in',value:['a','b']},{x:'B'}),true);
+ assert.equal(k.sourceReference(source),'Example client · SPEC-01 · R2 · Clause 4.2 · Page 18');
+ const sum=k.knowledgeSummary([k.evaluateKnowledgeRule(rule,{asphalt:{mix:'TEST14',compactedDepthMm:35}})]);
+ assert.deepEqual([sum.failed,sum.blocking],[1,1]);
+}
 // Six-engine operating model: fixed order, explicit hand-offs and backwards-compatible legacy routes.
 {const eng=load('lib/v1/engines.ts');
  assert.deepEqual(eng.ENGINE_KEYS,['Win Work','Prepare Work','Resource Work','Deliver Work','Control Money','Learn']);

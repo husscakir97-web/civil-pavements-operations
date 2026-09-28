@@ -1,7 +1,7 @@
 'use client';
 
-import {useEffect,useMemo,useState,type FormEvent} from 'react';
-import {BookOpenCheck,Plus,ShieldCheck,TriangleAlert} from 'lucide-react';
+import {useEffect,useState,type FormEvent} from 'react';
+import {Plus,TriangleAlert} from 'lucide-react';
 import {api,Btn,EmptyState,ErrorState,Field,Loading,PageHeader,Pill,Section,field,useAction,useApi,useSession} from './kit';
 
 type Pack={id:string;pack_key:string;name:string;description:string|null;discipline:string|null;jurisdiction:string|null;context_type:string;context_id:string|null;version_label:string|null;status:string;locked:number;revision:number;source_count:number;rule_count:number};

@@ -16,7 +16,7 @@ const getPoolConn=()=>getPool();
 
 const actor=()=>actorContext.getStore()!;
 // Legacy columns that are NOT NULL with an empty-string default.
-const NOT_NULL_TEXT:Record<string,string[]>={tender_requirements:['source_document','source_page','clarification']};
+const NOT_NULL_TEXT:Record<string,string[]>={tender_requirements:['source_document','source_page','clarification'],clients:['contact_name','email','phone']};
 function legacyNulls(def:RegisterDef,values:Row){for(const c of NOT_NULL_TEXT[def.table]||[])if(c in values&&values[c]==null)values[c]='';return values;}
 const scopeColumn=(def:RegisterDef)=>def.scope==='tender'?'tender_id':def.scope==='itp'?'itp_id':def.scope==='org'?null:'project_id';
 const stateCol=(def:RegisterDef)=>def.stateColumn||'status';
@@ -154,6 +154,7 @@ export async function createRecord(key:string,parentId:string|null,input:Record<
   const parent=await resolveParent(def,parentId,conn,true) as Row;
   await validateRefs(def,values,conn);
   await derive(def,values,null,conn);
+  if(def.key==='clients'&&await one('SELECT id FROM clients WHERE organisation_id=? AND LOWER(TRIM(name))=LOWER(?) LIMIT 1',[a.organisationId,values.name],conn))fail(409,'A client with this name already exists. Search for it instead.');
   const id=uuid(),now=nowIso();
   const row:Row={id,organisation_id:a.organisationId,...values,...(def.fixed||{}),created_by:a.userId,created_at:now,updated_at:now,revision:1};
   const col=scopeColumn(def);if(col&&parent[col])row[col]=parent[col];
@@ -256,6 +257,8 @@ export async function deleteRecord(key:string,id:string){
  return tx(async conn=>{
   const row=await loadForUpdate(def,id,conn);
   await parentOf(def,row,conn);
+  // A client used by records is kept (mark it inactive instead) so links and history stay intact.
+  if(def.key==='clients'&&await one('SELECT 1 AS x FROM opportunities WHERE organisation_id=? AND client_id=? UNION ALL SELECT 1 FROM tenders WHERE organisation_id=? AND client_id=? UNION ALL SELECT 1 FROM jobs WHERE organisation_id=? AND client_id=? LIMIT 1',[a.organisationId,id,a.organisationId,id,a.organisationId,id],conn))fail(409,'This client is used by opportunities, tenders or projects. Mark it inactive instead.');
   if(def.machine&&row[stateCol(def)]!==MACHINES[def.machine].initial)fail(409,'Only records that have not progressed can be deleted. Use the lifecycle actions instead.');
   if(def.key==='itps'&&await one('SELECT id FROM itp_items WHERE organisation_id=? AND itp_id=? LIMIT 1',[a.organisationId,id],conn))fail(409,'Remove the inspection points before deleting this ITP.');
   await exec(`DELETE FROM ${def.table} WHERE organisation_id=? AND id=?`,[a.organisationId,id],conn);

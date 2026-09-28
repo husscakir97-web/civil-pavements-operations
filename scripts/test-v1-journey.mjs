@@ -106,13 +106,27 @@ try{
  assert(liabilitySearch.results.some(r=>r.id===libItem.id),'exact phrase still found');
  const foreignLiability=await json(await call('/api/search?q='+encodeURIComponent('public liability'),'GET',undefined,B.cookie),200);
  assert(!foreignLiability.results.some(r=>[libWords.record.id,libItem.id].includes(r.id)),'library search stays in the organisation');
+ // Core clients: create once, select everywhere, carried opportunity → tender → project.
+ const clientsApi=(body,cookie=A.cookie)=>call('/api/platform/clients','POST',body,cookie);
+ const riverside=(await json(await clientsApi({action:'create',client:{name:'Riverside Council',contactName:'Pat Lee',site:{name:'Riverside Rd',address:'1 Riverside Rd, Parramatta NSW 2150'}}}),201)).client;
+ assert.equal(riverside.sites.length,1);const riversideSite=riverside.sites[0];
+ const sameClient=await json(await clientsApi({action:'create',client:{name:'  riverside council '}}),201);
+ assert.equal(sameClient.client.id,riverside.id);assert.equal(sameClient.existing,true,'exact name returns the existing client');
+ await json(await reg('clients',A.cookie).create(null,{name:'Riverside Council'}),409,'register refuses a duplicate client name');
+ const listed=(await json(await call('/api/platform/clients?q=river','GET',undefined,A.cookie),200)).clients;assert(listed.some(c=>c.id===riverside.id),'client search by partial name');
+ assert(!(await json(await call('/api/platform/clients?q=river','GET',undefined,B.cookie),200)).clients.some(c=>c.id===riverside.id),'clients stay in their organisation');
+ await json(await clientsApi({action:'createSite',site:{clientId:riverside.id,address:'Foreign site'}},B.cookie),400,'foreign client cannot receive sites');
+ await json(await call('/api/projects','POST',{name:'Foreign use',clientId:riverside.id},B.cookie),400,'foreign client id refused');
  const opps=reg('opportunities',A.cookie);
- const opp=(await json(await opps.create(null,{name:'Riverside drainage upgrade',client_name:'Riverside Council',estimated_value:850000,probability:60,closing_date:'2099-01-15'}),201)).record;
+ const opp=(await json(await opps.create(null,{name:'Riverside drainage upgrade',client_id:riverside.id,site_id:riversideSite.id,estimated_value:850000,probability:60,closing_date:'2099-01-15'}),201)).record;
+ assert.equal(opp.client_name,'Riverside Council','client name kept as a snapshot');assert.match(String(opp.location),/Riverside Rd/,'site fills location');
  assert.equal(opp.stage,'lead');
  await json(await call('/api/tenders/register','POST',{opportunityId:opp.id},A.cookie),409,'unqualified opportunity cannot convert');
  await json(await opps.move(opp.id,'converted'),409,'conversion is a dedicated action');
  await json(await opps.move(opp.id,'qualified'),200);
  const {tenderId}=await json(await call('/api/tenders/register','POST',{opportunityId:opp.id},A.cookie),201);
+ const tenderClient=(await json(await call('/api/tenders/workspace?id='+tenderId,'GET',undefined,A.cookie),200)).tender;
+ assert.equal(tenderClient.clientId,riverside.id,'tender inherits client');assert.equal(tenderClient.siteId,riversideSite.id,'tender inherits site');assert.equal(tenderClient.clientName,'Riverside Council');
  await json(await call('/api/tenders/register','POST',{opportunityId:opp.id},A.cookie),409,'one tender per opportunity');
  const tf=new FormData();tf.set('opportunityId',opp.id);tf.set('file',new File(['Tender scope: drainage'],'tender-scope.txt',{type:'text/plain'}));await json(await call('/api/tenders','POST',tf,A.cookie),201,'tender document upload');
  const reqs=reg('requirements',A.cookie),rets=reg('returnables',A.cookie);
@@ -163,7 +177,12 @@ try{
  // ---------------------------------------------------------------- Scenario C
  step='C prepare';
  let pw=await json(await call('/api/projects/workspace?id='+projectId,'GET',undefined,A.cookie),200);
- assert.equal(pw.project.stage,'setup');assert.equal(pw.project.sourceTenderId,tenderId);assert.equal(pw.project.sourceEstimateId,estimateId);
+ assert.equal(pw.project.stage,'setup');assert.equal(pw.project.sourceTenderId,tenderId);assert.equal(pw.project.clientId,riverside.id,'awarded project inherits client');assert.equal(pw.project.siteId,riversideSite.id,'awarded project inherits site');
+ await json(await reg('clients',A.cookie).remove(riverside.id),409,'client in use cannot be deleted');
+ const direct=await json(await call('/api/projects','POST',{name:'Direct client project',clientId:riverside.id},A.cookie),201);
+ const directPw=await json(await call('/api/projects/workspace?id='+direct.projectId,'GET',undefined,A.cookie),200);
+ assert.equal(directPw.project.clientName,'Riverside Council');assert.equal(directPw.project.siteId,null);
+assert.equal(pw.project.sourceEstimateId,estimateId);
  assert.equal(pw.baselines.length,1);assert.equal(pw.baselines[0].contractValue,approvedSell,'baseline inherits the approved revision');assert.equal(pw.baselines[0].estimateRevisionId,approval.revisions[0].id);
  assert.equal(pw.baselines[0].clarifications[0].reference,'CLR-001','clarifications preserved in baseline');
  assert(pw.readiness.blockers.some(b=>b.startsWith('SWMS')),'readiness blocked without SWMS');

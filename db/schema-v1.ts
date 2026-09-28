@@ -634,3 +634,60 @@ export const appBackfills=mysqlTable('app_backfills',{
  startedAt:stamp('started_at').notNull(),
  completedAt:stamp('completed_at'),
 },t=>[index('idx_app_backfills_org_name').on(t.organisationId,t.name)]);
+
+
+// ---------------------------------------------------------------- civil knowledge engine (0005)
+export const knowledgePacks=mysqlTable('knowledge_packs',{
+ id:id(),organisationId:org(),
+ packKey:varchar('pack_key',{length:120}).notNull(),
+ name:varchar('name',{length:255}).notNull(),
+ description:text('description'),
+ discipline:varchar('discipline',{length:80}),
+ jurisdiction:varchar('jurisdiction',{length:80}),
+ contextType:varchar('context_type',{length:30}).notNull().default('organisation'),
+ contextId:ref('context_id'),
+ versionLabel:varchar('version_label',{length:60}),
+ status:varchar('status',{length:20}).notNull().default('draft'),
+ locked:int('locked').notNull().default(0),
+ ...lifecycle(),
+},t=>[uniqueIndex('idx_knowledge_packs_org_key').on(t.organisationId,t.packKey),index('idx_knowledge_packs_org_status').on(t.organisationId,t.status),index('idx_knowledge_packs_org_context').on(t.organisationId,t.contextType,t.contextId)]);
+
+export const knowledgeSources=mysqlTable('knowledge_sources',{
+ id:id(),organisationId:org(),
+ packId:ref('pack_id').notNull(),
+ title:varchar('title',{length:255}).notNull(),
+ authority:varchar('authority',{length:180}),
+ sourceType:varchar('source_type',{length:30}).notNull().default('organisation'),
+ referenceCode:varchar('reference_code',{length:120}),
+ revisionLabel:varchar('revision_label',{length:80}),
+ jurisdiction:varchar('jurisdiction',{length:80}),
+ effectiveFrom:day('effective_from'),
+ effectiveTo:day('effective_to'),
+ sourceUrl:varchar('source_url',{length:512}),
+ documentId:ref('document_id'),
+ licenceNote:text('licence_note'),
+ status:varchar('status',{length:20}).notNull().default('draft'),
+ verifiedBy:ref('verified_by'),verifiedAt:stamp('verified_at'),
+ ...lifecycle(),
+},t=>[index('idx_knowledge_sources_org_pack').on(t.organisationId,t.packId,t.status),index('idx_knowledge_sources_org_reference').on(t.organisationId,t.referenceCode)]);
+
+export const knowledgeRules=mysqlTable('knowledge_rules',{
+ id:id(),organisationId:org(),
+ packId:ref('pack_id').notNull(),
+ sourceId:ref('source_id').notNull(),
+ ruleCode:varchar('rule_code',{length:120}).notNull(),
+ title:varchar('title',{length:255}).notNull(),
+ discipline:varchar('discipline',{length:80}),
+ topic:varchar('topic',{length:120}).notNull(),
+ ruleType:varchar('rule_type',{length:30}).notNull().default('requirement'),
+ appliesWhen:longtext('applies_when').notNull(),
+ assertion:longtext('assertion'),
+ severity:varchar('severity',{length:20}).notNull().default('warning'),
+ message:text('message').notNull(),
+ sourceClause:varchar('source_clause',{length:120}),
+ sourcePage:varchar('source_page',{length:60}),
+ effectiveFrom:day('effective_from'),
+ effectiveTo:day('effective_to'),
+ status:varchar('status',{length:20}).notNull().default('draft'),
+ ...lifecycle(),
+},t=>[uniqueIndex('idx_knowledge_rules_org_code').on(t.organisationId,t.packId,t.ruleCode),index('idx_knowledge_rules_org_topic').on(t.organisationId,t.topic,t.status),index('idx_knowledge_rules_org_pack').on(t.organisationId,t.packId,t.status)]);

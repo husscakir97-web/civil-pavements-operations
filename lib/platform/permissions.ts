@@ -26,14 +26,14 @@ export const CAPABILITIES=[
  'schedule.view','schedule.edit','resources.edit',
  'field.capture','docket.submit','docket.approve',
  'variation.edit','variation.approve','claim.edit','claim.approve','invoice.manage',
- 'reports.view','library.edit',
+ 'reports.view','library.edit','knowledge.view','knowledge.edit',
 ] as const;
 export type Capability=typeof CAPABILITIES[number];
 
 const FIELD:Capability[]=['swms.acknowledge','itp.complete','hseq.report','field.capture','docket.submit','document.upload'];
 const ADMIN_ONLY:Capability[]=['org.admin','team.admin','entitlements.manage','rates.edit'];
 const OFFICE:Capability[]=CAPABILITIES.filter(c=>!ADMIN_ONLY.includes(c));
-const READ:Capability[]=['pipeline.view','project.view','hseq.view','schedule.view','reports.view','commercial.view'];
+const READ:Capability[]=['pipeline.view','project.view','hseq.view','schedule.view','reports.view','commercial.view','knowledge.view'];
 
 export const ROLE_CAPABILITIES:Record<Role,readonly Capability[]>={
  admin:CAPABILITIES,
@@ -41,9 +41,9 @@ export const ROLE_CAPABILITIES:Record<Role,readonly Capability[]>={
  estimator:[...READ,'pipeline.edit','estimate.edit','tender.submit','library.edit','document.upload','audit.view','variation.edit'],
  scheduler:['project.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','document.upload'],
  project_manager:[...READ,'project.edit','project.baseline','project.close','schedule.edit','resources.edit','hseq.edit','hseq.report','swms.approve','document.approve','docket.approve','variation.edit','claim.edit','document.upload','itp.complete','audit.view'],
- supervisor:[...FIELD,'project.view','schedule.view','hseq.view','hseq.edit'],
- field:FIELD,
- accounts:['commercial.view','project.view','reports.view','claim.edit','claim.approve','invoice.manage','docket.approve'],
+ supervisor:[...FIELD,'project.view','schedule.view','hseq.view','hseq.edit','knowledge.view'],
+ field:[...FIELD,'knowledge.view'],
+ accounts:['commercial.view','project.view','reports.view','knowledge.view','claim.edit','claim.approve','invoice.manage','docket.approve'],
  read_only:READ.filter(c=>c!=='commercial.view'),
 };
 

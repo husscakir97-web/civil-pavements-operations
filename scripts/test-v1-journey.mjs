@@ -81,7 +81,7 @@ try{
  assert.equal(kc.results[0].source.referenceCode,'SPEC-TEST');
  kc=await json(await call('/api/platform/knowledge/check','POST',{topics:['asphalt'],context:{asphalt:{mix:'TEST14',compactedDepthMm:50}}},A.cookie),200);assert.equal(kc.summary.passed,1);
  const foreignKnowledge=await json(await call('/api/platform/knowledge','GET',undefined,B.cookie),200);assert.equal(foreignKnowledge.packs.length,0,'knowledge is tenant isolated');
- const foreignCheck=await json(await call('/api/platform/knowledge/check','POST',{topics:['asphalt'],context:{asphalt:{mix:'TEST14',compactedDepthMm:35}}},B.cookie),200);assert.equal(foreignCheck.results.length,0,'another organisation cannot use organisation A rules');
+ const foreignKnowledgeCheck=await json(await call('/api/platform/knowledge/check','POST',{topics:['asphalt'],context:{asphalt:{mix:'TEST14',compactedDepthMm:35}}},B.cookie),200);assert.equal(foreignKnowledgeCheck.results.length,0,'another organisation cannot use organisation A rules');
  console.log('PASS knowledge: controlled source + pack + rule lifecycle, deterministic pass/fail, provenance and tenant isolation');
 
  // ---------------------------------------------------------------- Scenario B

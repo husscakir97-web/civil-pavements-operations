@@ -1,0 +1,43 @@
+{
+  "verified": false,
+  "pack": {
+    "packKey": "example.synthetic",
+    "name": "Synthetic Example — Do Not Use Operationally",
+    "description": "Demonstrates the platform knowledge import format only.",
+    "discipline": "Example",
+    "jurisdiction": "NSW",
+    "contextType": "organisation",
+    "versionLabel": "Example 1"
+  },
+  "sources": [
+    {
+      "key": "example-source",
+      "title": "Synthetic example source",
+      "authority": "Infrastruct test fixture",
+      "sourceType": "public",
+      "referenceCode": "EXAMPLE-ONLY",
+      "revisionLabel": "1",
+      "jurisdiction": "NSW",
+      "sourceUrl": "https://example.invalid/infrastruct-knowledge-fixture",
+      "licenceNote": "Synthetic example only."
+    }
+  ],
+  "rules": [
+    {
+      "sourceKey": "example-source",
+      "ruleCode": "example.minimum",
+      "title": "Synthetic minimum",
+      "discipline": "Example",
+      "topic": "example",
+      "ruleType": "minimum",
+      "appliesWhen": {
+        "all": [{"field": "example.kind", "op": "eq", "value": "fixture"}],
+        "any": []
+      },
+      "assertion": {"field": "example.value", "op": "gte", "value": 10},
+      "severity": "warning",
+      "message": "Synthetic example requires a value of at least 10.",
+      "sourceClause": "1.1"
+    }
+  ]
+}

@@ -51,6 +51,7 @@ export function KnowledgeAdmin(){
    </Section>
    {!active?<Section title="Knowledge pack"><EmptyState title="Choose or create a knowledge pack."/></Section>:<PackWorkspace pack={active} sources={data?.sources||[]} rules={data?.rules||[]} refresh={refresh}/>}
   </div>}
+  <RuleSandbox/>
  </div>;
 }
 
@@ -156,17 +157,34 @@ function RuleEditor({pack,sources,rule,onSaved}:{pack:Pack;sources:Source[];rule
 function RuleSandbox(){
  const [raw,setRaw]=useState('{"asphalt":{"mix":"AC14","compactedDepthMm":50},"project":{"specification":""}}');
  const [topics,setTopics]=useState('asphalt,pavements,materials');
- const [projectId,setProjectId]=useState('');
- const [assetId,setAssetId]=useState('');
- const [context,setContext]=useState<Record<string,unknown>|null>(null);
+ const [scopeType,setScopeType]=useState<'none'|'projectId'|'tenderId'|'clientId'|'assetId'|'assetCategory'>('none');
+ const [scopeId,setScopeId]=useState('');
+ const [onDate,setOnDate]=useState('');
+ const [submitted,setSubmitted]=useState<{context:Record<string,unknown>;topics:string[];scope:Record<string,string>;onDate:string|null}|null>(null);
  const [parseError,setParseError]=useState<string|null>(null);
- const run=()=>{try{const parsed=JSON.parse(raw);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('Scenario must be a JSON object.');setContext(parsed as Record<string,unknown>);setParseError(null);}catch(e){setContext(null);setParseError(e instanceof Error?e.message:'Invalid JSON.');}};
- return <Section title="Rule sandbox" description="Test controlled knowledge against a structured scenario before relying on it in estimates, projects, scheduling, workshop or field workflows.">
-  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
-   <Field label="Scenario JSON"><textarea className={field+' min-h-36 font-mono text-xs'} value={raw} onChange={e=>setRaw(e.target.value)}/></Field>
-   <div className="grid content-start gap-3"><Field label="Topics"><input className={field} value={topics} onChange={e=>setTopics(e.target.value)} placeholder="asphalt, concrete, drainage"/></Field><Field label="Project ID (optional)"><input className={field} value={projectId} onChange={e=>setProjectId(e.target.value)}/></Field><Field label="Asset ID (optional)"><input className={field} value={assetId} onChange={e=>setAssetId(e.target.value)}/></Field><Btn onClick={run}>Run controlled checks</Btn>{parseError&&<p className="text-xs text-red-700">{parseError}</p>}</div>
+ const run=()=>{
+  try{
+   const parsed=JSON.parse(raw);
+   if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('Context must be a JSON object.');
+   const scope:Record<string,string>={};if(scopeType!=='none'&&scopeId.trim())scope[scopeType]=scopeId.trim();
+   setSubmitted({context:parsed as Record<string,unknown>,topics:topics.split(',').map(x=>x.trim()).filter(Boolean),scope,onDate:onDate||null});setParseError(null);
+  }catch(e){setParseError(e instanceof Error?e.message:'Invalid JSON.');}
+ };
+ return <Section title="Rule sandbox" description="Test current/effective platform and organisation rules against a controlled scenario before relying on them operationally.">
+  <div className="grid gap-3 lg:grid-cols-2">
+   <div className="grid gap-3">
+    <Field label="Scenario context (JSON)"><textarea className={field+' min-h-52 font-mono text-xs'} value={raw} onChange={e=>setRaw(e.target.value)}/></Field>
+    <Field label="Topics"><input className={field} value={topics} onChange={e=>setTopics(e.target.value)} placeholder="asphalt, concrete, drainage"/></Field>
+    <div className="grid gap-3 sm:grid-cols-3">
+     <Field label="Scope"><select className={field} value={scopeType} onChange={e=>setScopeType(e.target.value as typeof scopeType)}><option value="none">General</option><option value="projectId">Project</option><option value="tenderId">Tender</option><option value="clientId">Client</option><option value="assetId">Asset</option><option value="assetCategory">Asset category</option></select></Field>
+     <Field label="Scope ID"><input className={field} disabled={scopeType==='none'} value={scopeId} onChange={e=>setScopeId(e.target.value)}/></Field>
+     <Field label="Check date"><input className={field} type="date" value={onDate} onChange={e=>setOnDate(e.target.value)}/></Field>
+    </div>
+    {parseError&&<p className="text-sm text-red-700">{parseError}</p>}
+    <div><Btn type="button" onClick={run}>Run controlled check</Btn></div>
+   </div>
+   <div>{submitted?<KnowledgeCheckPanel title="Sandbox results" context={submitted.context} topics={submitted.topics} scope={submitted.scope} onDate={submitted.onDate}/>:<div className="rounded-xl border border-dashed p-5 text-sm text-slate-500">Enter a structured scenario and run the check. Only Current and effective rules can appear.</div>}</div>
   </div>
-  {context&&<KnowledgeCheckPanel className="mt-4" title="Sandbox results" topics={topics.split(',').map(x=>x.trim()).filter(Boolean)} scope={{projectId:projectId||undefined,assetId:assetId||undefined}} context={context}/>}
  </Section>;
 }
 

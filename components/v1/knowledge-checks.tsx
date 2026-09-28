@@ -9,9 +9,9 @@ type Response={onDate:string;summary:{rules:number;applicable:number;passed:numb
 
 const sourceLabel=(s:Source)=>[s.authority,s.referenceCode,s.revisionLabel,s.sourceClause&&'Clause '+s.sourceClause,s.sourcePage&&'Page '+s.sourcePage].filter(Boolean).join(' · ')||s.title;
 
-export function KnowledgeCheckPanel({context,topics,scope,title='Specification checks',className=''}:{context:Record<string,unknown>;topics?:string[];scope?:Record<string,string|null|undefined>;title?:string;className?:string}){
+export function KnowledgeCheckPanel({context,topics,scope,onDate,title='Specification checks',className=''}:{context:Record<string,unknown>;topics?:string[];scope?:Record<string,string|null|undefined>;onDate?:string|null;title?:string;className?:string}){
  const [data,setData]=useState<Response|null>(null),[error,setError]=useState<string|null>(null),[loading,setLoading]=useState(false);
- const signature=useMemo(()=>JSON.stringify({context,topics:topics||[],scope:scope||{}}),[context,topics,scope]);
+ const signature=useMemo(()=>JSON.stringify({context,topics:topics||[],scope:scope||{},onDate:onDate||null}),[context,topics,scope,onDate]);
  useEffect(()=>{
   let live=true;const timer=setTimeout(async()=>{
    setLoading(true);setError(null);

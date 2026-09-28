@@ -43,6 +43,13 @@
       "when": 1790554860000,
       "tag": "0005_civil_knowledge_engine",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1790640000000,
+      "tag": "0006_core_clients_sites",
+      "breakpoints": true
     }
   ]
 }

@@ -11,6 +11,7 @@ import {query,one,exec,tx,nowIso,uuid,round2,type Row,type Conn} from '@/lib/pla
 import {REGISTERS,registerDef,riskRating,DEFAULT_RISK_MATRIX,type RegisterDef,type FieldDef,type RiskMatrix} from './registers';
 import {requireModule} from '@/lib/platform/entitlements';
 import {getPool} from '@/lib/platform/database';
+import {resolveClientContext} from '@/lib/platform/clients';
 const getPoolConn=()=>getPool();
 
 const actor=()=>actorContext.getStore()!;
@@ -78,6 +79,13 @@ async function orgMatrix(conn:Conn):Promise<RiskMatrix>{
 }
 
 async function derive(def:RegisterDef,values:Row,existing:Row|null,conn:Conn){
+ // Client/site pickers store the id and a readable snapshot; a legacy text value is kept until a client is chosen.
+ const client=def.fields.find(f=>f.type==='client'),site=def.fields.find(f=>f.type==='site');
+ if((client&&client.key in values)||(site&&site.key in values)){
+  const ctx=await resolveClientContext(client?(client.key in values?values[client.key]:existing?.[client.key]):null,site?(site.key in values?values[site.key]:existing?.[site.key]):null,conn);
+  if(client?.snapshot&&client.key in values&&ctx.clientName)values[client.snapshot]=ctx.clientName;
+  if(site?.snapshot&&site.key in values&&ctx.siteLabel&&!values[site.snapshot])values[site.snapshot]=ctx.siteLabel;
+ }
  if(def.key==='risks'){
   const m=await orgMatrix(conn),merged={...existing,...values};
   values.initial_rating=riskRating(merged.initial_likelihood,merged.initial_consequence,m);

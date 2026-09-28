@@ -115,6 +115,24 @@ export const libraryItems=mysqlTable('library_items',{
  ...lifecycle(),
 },t=>[index('idx_library_org_category').on(t.organisationId,t.category)]);
 
+// ---------------------------------------------------------------- core clients & sites (0006)
+// Client lives in the legacy `clients` table (db/schema.ts) with typed columns.
+// A site belongs to a client when known; opportunities, tenders and projects
+// reference both and keep a text snapshot (client_name, location/site_address).
+export const clientSites=mysqlTable('client_sites',{
+ id:id(),organisationId:org(),
+ clientId:ref('client_id'),
+ name:varchar('name',{length:255}).notNull(),
+ address:varchar('address',{length:500}),
+ suburb:varchar('suburb',{length:120}),
+ state:varchar('state',{length:20}),
+ postcode:varchar('postcode',{length:10}),
+ siteContact:varchar('site_contact',{length:160}),
+ accessNotes:text('access_notes'),
+ status:varchar('status',{length:20}).notNull().default('active'),
+ ...lifecycle(),
+},t=>[index('idx_client_sites_org').on(t.organisationId),index('idx_client_sites_org_client').on(t.organisationId,t.clientId)]);
+
 // ---------------------------------------------------------------- pipeline
 export const tenders=mysqlTable('tenders',{
  id:id(),organisationId:org(),
@@ -146,8 +164,9 @@ export const tenders=mysqlTable('tenders',{
  outcomeAt:stamp('outcome_at'),
  outcomeReason:text('outcome_reason'),
  projectId:ref('project_id'),
+ clientId:ref('client_id'),siteId:ref('site_id'),
  ...lifecycle(),
-},t=>[uniqueIndex('idx_tenders_org_opportunity').on(t.organisationId,t.opportunityId),index('idx_tenders_org_stage').on(t.organisationId,t.stage)]);
+},t=>[uniqueIndex('idx_tenders_org_opportunity').on(t.organisationId,t.opportunityId),index('idx_tenders_org_stage').on(t.organisationId,t.stage),index('idx_tenders_org_client').on(t.organisationId,t.clientId)]);
 
 export const tenderBidReviews=mysqlTable('tender_bid_reviews',{
  id:id(),organisationId:org(),

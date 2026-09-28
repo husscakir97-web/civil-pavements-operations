@@ -9,6 +9,7 @@ import {audit} from '@/lib/platform/audit';
 import {fail} from '@/lib/platform/http';
 import {query,one,exec,tx,nowIso,uuid,round2,type Row} from '@/lib/platform/sql';
 import {safeJson} from '@/lib/estimates-db';
+import {resolveClientContext} from '@/lib/platform/clients';
 import {calculateEstimate,validateEstimate,makeGeneralEstimate,makeDefaultEstimate,DEFAULT_RATE_LIBRARY,type RateLibrary} from '@/lib/estimate-calculations';
 import {legacyOpportunityStage} from '@/lib/v1/register-server';
 import {awardEstimate} from '@/lib/seams/award-to-project';
@@ -81,7 +82,7 @@ function completion(t:Row,s:Stats){
 
 function present(t:Row,s:Stats,owner?:string|null){
  const money=can(actor().role,'commercial.view');
- const out:Row={id:t.id,opportunityId:t.opportunity_id,reference:t.reference,title:t.title,clientName:t.client_name,ownerUserId:t.owner_user_id,ownerName:owner??null,stage:t.stage,stageLabel:stateLabel('tender',t.stage),dueDate:t.due_date,location:t.location,scopeSummary:t.scope_summary,estimateId:t.estimate_id,approvalStatus:t.approval_status,approvedBy:t.approved_by,approvedAt:t.approved_at,approvalNotes:t.approval_notes,submittedAt:t.submitted_at,submissionMethod:t.submission_method,submissionVersion:t.submission_version,submissionNotes:t.submission_notes,submissionDocumentId:t.submission_document_id,submissionOverrideReason:t.submission_override_reason,outcomeAt:t.outcome_at,outcomeReason:t.outcome_reason,projectId:t.project_id,revision:t.revision,createdAt:t.created_at,updatedAt:t.updated_at,
+ const out:Row={id:t.id,opportunityId:t.opportunity_id,reference:t.reference,title:t.title,clientName:t.client_name,clientId:t.client_id??null,siteId:t.site_id??null,ownerUserId:t.owner_user_id,ownerName:owner??null,stage:t.stage,stageLabel:stateLabel('tender',t.stage),dueDate:t.due_date,location:t.location,scopeSummary:t.scope_summary,estimateId:t.estimate_id,approvalStatus:t.approval_status,approvedBy:t.approved_by,approvedAt:t.approved_at,approvalNotes:t.approval_notes,submittedAt:t.submitted_at,submissionMethod:t.submission_method,submissionVersion:t.submission_version,submissionNotes:t.submission_notes,submissionDocumentId:t.submission_document_id,submissionOverrideReason:t.submission_override_reason,outcomeAt:t.outcome_at,outcomeReason:t.outcome_reason,projectId:t.project_id,revision:t.revision,createdAt:t.created_at,updatedAt:t.updated_at,
   stats:{documents:s.documents,requirements:s.requirements,suggested:s.suggested,mandatoryOpen:s.mandatoryOpen,returnables:s.returnables,returnablesMandatoryOpen:s.returnablesMandatoryOpen,clarificationsOpen:s.clarificationsOpen,nextClarificationDue:s.nextClarificationDue,estimateState:s.estimateState,bidDecision:s.bidDecision,approvedRevisionNumber:s.approvedRevision?Number(s.approvedRevision.revision_number):null},
   completion:completion(t,s),nextAction:nextAction(t,s),checks:submissionChecks(t,s)};
  if(money){out.estimatedValue=t.estimated_value==null?null:Number(t.estimated_value);out.approvedSellPrice=s.approvedRevision?Number(s.approvedRevision.sell_price):null;out.approvedMarginPct=s.approvedRevision?Number(s.approvedRevision.gross_margin_pct):null;}
@@ -111,7 +112,7 @@ export async function getTender(id:string){
  return {tender:{...present(t,s,owner?.name),awardBlockers:await awardBlockers(t)} as Row,bidReview:bid};
 }
 
-export type TenderInput={title?:string;clientName?:string|null;reference?:string|null;dueDate?:string|null;estimatedValue?:number|null;ownerUserId?:string|null;location?:string|null;scopeSummary?:string|null};
+export type TenderInput={title?:string;clientName?:string|null;clientId?:string|null;siteId?:string|null;reference?:string|null;dueDate?:string|null;estimatedValue?:number|null;ownerUserId?:string|null;location?:string|null;scopeSummary?:string|null};
 async function checkOwner(ownerUserId:string|null|undefined,conn:PoolConnection){if(ownerUserId&&!await one('SELECT id FROM users WHERE organisation_id=? AND id=?',[actor().organisationId,ownerUserId],conn))fail(400,'Choose an owner from your organisation.');}
 
 /** Converting an opportunity preserves lineage (opportunity.tender_id ↔ tender.opportunity_id). A tender created directly gets its own opportunity record. */
@@ -120,6 +121,9 @@ export async function createTender(input:TenderInput&{opportunityId?:string|null
  return tx(async conn=>{
   await checkOwner(input.ownerUserId,conn);
   const now=nowIso(),id=uuid();
+  const ctx=await resolveClientContext(input.clientId,input.siteId,conn);
+  if(ctx.clientName)input={...input,clientName:ctx.clientName};
+  if(ctx.siteLabel&&!input.location)input={...input,location:ctx.siteLabel};
   let opportunityId=input.opportunityId||null,opp:Row|null=null;
   if(opportunityId){
    opp=await one('SELECT * FROM opportunities WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,opportunityId],conn);
@@ -132,11 +136,11 @@ export async function createTender(input:TenderInput&{opportunityId?:string|null
   }else{
    if(!input.title?.trim())fail(400,'A tender title is required.');
    opportunityId=uuid();
-   await exec("INSERT INTO opportunities (id,organisation_id,name,status,metadata,created_at,client_name,owner_user_id,estimated_value,closing_date,stage,location,tender_id,revision,created_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[opportunityId,a.organisationId,input.title!.trim(),'converted',JSON.stringify({client:input.clientName,estimatedValue:input.estimatedValue,tenderCloseDate:input.dueDate?.slice(0,10)}),now,input.clientName||null,input.ownerUserId||null,input.estimatedValue??null,input.dueDate?.slice(0,10)||null,'converted',input.location||null,id,1,a.userId,now],conn);
+   await exec("INSERT INTO opportunities (id,organisation_id,name,status,metadata,created_at,client_name,owner_user_id,estimated_value,closing_date,stage,location,tender_id,client_id,site_id,revision,created_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[opportunityId,a.organisationId,input.title!.trim(),'converted',JSON.stringify({client:input.clientName,estimatedValue:input.estimatedValue,tenderCloseDate:input.dueDate?.slice(0,10)}),now,input.clientName||null,input.ownerUserId||null,input.estimatedValue??null,input.dueDate?.slice(0,10)||null,'converted',input.location||null,id,ctx.clientId,ctx.siteId,1,a.userId,now],conn);
   }
   const meta=safeJson<Row>(opp?.metadata,{});
   const title=(input.title||opp?.name||'').trim()||'Untitled tender';
-  const row={id,organisation_id:a.organisationId,opportunity_id:opportunityId,reference:input.reference||null,title,client_name:input.clientName??opp?.client_name??meta.client??null,owner_user_id:input.ownerUserId??opp?.owner_user_id??null,stage:'draft',due_date:input.dueDate??opp?.closing_date??meta.tenderCloseDate??null,estimated_value:input.estimatedValue??opp?.estimated_value??(Number(meta.estimatedValue)||null),location:input.location??opp?.location??null,scope_summary:input.scopeSummary??null,approval_status:'not_requested',revision:1,created_by:a.userId,created_at:now,updated_at:now};
+  const row={id,organisation_id:a.organisationId,opportunity_id:opportunityId,reference:input.reference||null,title,client_name:input.clientName??opp?.client_name??meta.client??null,owner_user_id:input.ownerUserId??opp?.owner_user_id??null,stage:'draft',due_date:input.dueDate??opp?.closing_date??meta.tenderCloseDate??null,estimated_value:input.estimatedValue??opp?.estimated_value??(Number(meta.estimatedValue)||null),location:input.location??opp?.location??null,client_id:ctx.clientId??opp?.client_id??null,site_id:ctx.siteId??opp?.site_id??null,scope_summary:input.scopeSummary??null,approval_status:'not_requested',revision:1,created_by:a.userId,created_at:now,updated_at:now};
   const cols=Object.keys(row);
   await exec(`INSERT INTO tenders (${cols.join(',')}) VALUES (${cols.map(()=>'?').join(',')})`,Object.values(row),conn);
   await audit({event:'tender.created',entityType:'tender',entityId:id,summary:`Tender created: ${title}`,after:{opportunityId,title}},conn);
@@ -153,6 +157,11 @@ export async function updateTender(id:string,revision:number,input:TenderInput){
   await checkOwner(input.ownerUserId,conn);
   const map:Record<string,string>={title:'title',clientName:'client_name',reference:'reference',dueDate:'due_date',estimatedValue:'estimated_value',ownerUserId:'owner_user_id',location:'location',scopeSummary:'scope_summary'};
   const set:Row={};for(const [k,c] of Object.entries(map))if(k in input)set[c]=(input as Row)[k]??null;
+  if('clientId' in input||'siteId' in input){
+   const ctx=await resolveClientContext('clientId' in input?input.clientId||null:t.client_id,'siteId' in input?input.siteId||null:t.site_id,conn);
+   if('clientId' in input){set.client_id=ctx.clientId;if(ctx.clientName)set.client_name=ctx.clientName;}
+   if('siteId' in input){set.site_id=ctx.siteId;if(ctx.siteLabel&&!('location' in input))set.location=ctx.siteLabel;}
+  }
   if('estimatedValue' in input&&!can(a.role,'commercial.view'))delete set.estimated_value;
   if(set.title==='')fail(400,'A tender title is required.');
   const cols=Object.keys(set);if(!cols.length)return getTender(id);
@@ -212,7 +221,7 @@ export async function createTenderEstimate(id:string,mode:'general'|'paving'){
   const lib=await one('SELECT metadata FROM rate_libraries WHERE organisation_id=? ORDER BY created_at ASC LIMIT 1',[a.organisationId],conn);
   const library={...DEFAULT_RATE_LIBRARY,...safeJson<RateLibrary>(lib?.metadata,{} as RateLibrary)};
   const base=mode==='paving'?makeDefaultEstimate(library):makeGeneralEstimate(library);
-  const data={...base,name:t.title,clientName:t.client_name||'',projectName:t.title,site:t.location||'',opportunityId:t.opportunity_id,opportunityName:t.title,specification:t.scope_summary||base.specification};
+  const data={...base,name:t.title,clientName:t.client_name||'',clientId:t.client_id||'',projectName:t.title,site:t.location||'',opportunityId:t.opportunity_id,opportunityName:t.title,specification:t.scope_summary||base.specification};
   const totals=calculateEstimate(data),validation=validateEstimate(data,totals),now=nowIso(),estimateId=uuid(),revisionId=uuid();
   await exec('INSERT INTO estimates (id,organisation_id,name,status,metadata,created_at,workflow_state,tender_id,updated_at) VALUES (?,?,?,?,?,?,?,?,?)',[estimateId,a.organisationId,t.title,'Draft',JSON.stringify({status:'Draft',revisionNumber:1,currentRevisionId:revisionId,data,totals,validation,sourceOpportunityId:t.opportunity_id,sourceTenderId:t.id,createdAt:now,updatedAt:now}),now,'draft',t.id,now],conn);
   await exec('INSERT INTO quote_revisions (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)',[revisionId,a.organisationId,`${t.title} · Rev 1`,'Draft',JSON.stringify({estimateId,revisionNumber:1,data,totals,validation,reason:'Created from tender'}),now],conn);
@@ -270,7 +279,10 @@ export async function awardTender(id:string){
  const t=await loadTender(id);
  if(!t.estimate_id)fail(422,'This tender has no estimate to award.');
  if(t.project_id)return {alreadyAwarded:true,projectId:t.project_id};
- return awardEstimate(t.estimate_id,{tenderId:id});
+ const result=await awardEstimate(t.estimate_id,{tenderId:id});
+ // The award seam predates Core clients; carry the tender's client and site onto the new project.
+ if('jobId' in result&&result.jobId&&(t.client_id||t.site_id))await exec('UPDATE jobs SET client_id=COALESCE(client_id,?),site_id=COALESCE(site_id,?) WHERE organisation_id=? AND id=?',[t.client_id||null,t.site_id||null,actor().organisationId,result.jobId]);
+ return result;
 }
 
 export async function recordLoss(id:string,reason:string){

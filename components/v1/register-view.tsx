@@ -2,10 +2,12 @@
 // Generic register UI driven by lib/v1/registers.ts. The server enforces every
 // rule; this view only hides actions the current role cannot perform.
 import {useEffect,useMemo,useState,type ReactNode} from 'react';
-import {ChevronRight,Download,Plus,Upload} from 'lucide-react';
+import {ChevronRight,Download,Plus,Search,Upload} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
 import {REGISTERS,type RegisterDef,type FieldDef,type RegisterKey} from '@/lib/v1/registers';
 import {allowedTransitions,MACHINES} from '@/lib/platform/workflow';
+import {filterLookup} from '@/lib/v1/lookup';
+import {ClientPicker,SitePicker} from './lookup';
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,money,dateText,Section,humanStatus} from './kit';
 
 type Rec=Record<string,unknown>&{id:string;revision?:number};
@@ -36,13 +38,19 @@ function display(f:FieldDef,v:unknown,people:Array<{id:string;name:string}>):Rea
   case 'user':return people.find(p=>p.id===v)?.name||'Assigned';
   case 'document':return <a className="text-sky-700 underline" href={`/api/documents?id=${encodeURIComponent(String(v))}`} onClick={e=>e.stopPropagation()}>File</a>;
   case 'relation':return 'Linked';
+  case 'client':case 'site':return 'Linked';
   default:{const s=String(v);return s.length>90?s.slice(0,88)+'…':s;}
  }
 }
 
-function Input({f,value,onChange,disabled,people,relationOptions,documentContext}:{f:FieldDef;value:unknown;onChange:(v:unknown)=>void;disabled?:boolean;people:Array<{id:string;name:string}>;relationOptions:Record<string,Rec[]>;documentContext:{contextType:string;contextId?:string|null;projectId?:string|null}}){
+function Input({f,value,onChange,disabled,people,relationOptions,documentContext,form}:{f:FieldDef;value:unknown;onChange:(v:unknown)=>void;disabled?:boolean;people:Array<{id:string;name:string}>;relationOptions:Record<string,Rec[]>;documentContext:{contextType:string;contextId?:string|null;projectId?:string|null};form:{def:RegisterDef;values:Record<string,unknown>;set:(patch:Record<string,unknown>)=>void}}){
  const v=value===null||value===undefined?'':value;
  switch(f.type){
+  case 'client':{const site=form.def.fields.find(x=>x.type==='site');return <ClientPicker value={v?String(v):null} disabled={disabled} label={f.label} legacyName={f.snapshot?String(form.values[f.snapshot]||'')||null:null} onChange={c=>{const patch:Record<string,unknown>={[f.key]:c?.id??null};if(f.snapshot&&c)patch[f.snapshot]=c.name;
+   // Keep the site only if it belongs to the new client; suggest the client's only site.
+   if(site){const current=String(form.values[site.key]||'');if(!c||!c.sites.some(s=>s.id===current))patch[site.key]=c?.sites.length===1?c.sites[0].id:null;if(c?.sites.length===1&&site.snapshot&&!form.values[site.snapshot])patch[site.snapshot]=c.sites[0].label;}
+   form.set(patch);}}/>;}
+  case 'site':{const client=form.def.fields.find(x=>x.type==='client');return <SitePicker clientId={client?String(form.values[client.key]||'')||null:null} value={v?String(v):null} disabled={disabled} label={f.label} onChange={s=>form.set({[f.key]:s?.id??null,...(f.snapshot&&s?{[f.snapshot]:s.label}:{})})}/>;}
   case 'textarea':return <textarea className={`${field} min-h-24`} value={String(v)} disabled={disabled} maxLength={f.max} onChange={e=>onChange(e.target.value)}/>;
   case 'number':case 'money':return <input className={field} type="number" inputMode="decimal" step={f.type==='money'?'0.01':'any'} min={f.min} max={f.max} value={String(v)} disabled={disabled} onChange={e=>onChange(e.target.value===''?null:e.target.value)}/>;
   case 'rating':return <select className={field} value={String(v)} disabled={disabled} onChange={e=>onChange(e.target.value?Number(e.target.value):null)}><option value="">Not rated</option>{[1,2,3,4,5].map(n=><option key={n} value={n}>{n}</option>)}</select>;
@@ -73,7 +81,12 @@ export function RegisterView({register,parentId=null,all=false,title,description
  const [view,setView]=useState<'focus'|'all'|null>(null);
  // Default to the attention list when something needs attention; the choice sticks once made.
  const showing=focus?(view??(focused.length?'focus':'all')):'all';
- const records=showing==='focus'?focused:scoped;
+ const [query,setQuery]=useState('');
+ // Free-text search over what the user can see (title, category, content, owner, reference, status).
+ const searchable=useMemo(()=>def.fields.filter(f=>['text','textarea','select','user','number'].includes(f.type)&&(!f.commercial||session.can('commercial.view'))),[def,session]);
+ const searchText=(r:Rec)=>[...searchable.map(f=>f.type==='user'?people.find(p=>p.id===r[f.key])?.name:r[f.key] as string|number|null),r.reference as string|null,r.project_name as string|null,humanStatus(String(r[def.stateColumn||'status']??''))];
+ const showSearch=scoped.length>0&&(def.scope==='org'||scoped.length>=6);
+ const records=filterLookup(showing==='focus'?focused:scoped,query,searchText,r=>[r.reference as string|null],r=>String(r[def.titleField]??''));
  const listFields=def.fields.filter(f=>f.list&&(!f.commercial||session.can('commercial.view')));
  const canCreate=!hideCreate&&session.can(def.create||def.edit)&&session.writable(def.module)&&(def.scope==='org'||def.scope==='optional-project'||Boolean(parentId));
  const changed=()=>{refresh();onChanged?.();};
@@ -81,7 +94,9 @@ export function RegisterView({register,parentId=null,all=false,title,description
  return <Section title={title||def.label} description={description} actions={canCreate&&<Btn onClick={()=>setOpen('new')}><Plus aria-hidden className="size-4"/>{def.createLabel}</Btn>}>
   <ErrorState error={error} onRetry={refresh}/>
   {focus&&data&&scoped.length>0&&<div role="group" aria-label={`${def.label} view`} className="mb-3 flex flex-wrap gap-2">{([['focus',`${focus.label} (${focused.length})`],['all',`All (${scoped.length})`]] as const).map(([k,label])=><button key={k} aria-pressed={showing===k} onClick={()=>setView(k)} className={`min-h-9 rounded-full border px-3 text-sm ${showing===k?'border-[#172633] bg-[#172633] text-white':'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{label}</button>)}</div>}
-  {showing==='focus'&&!focused.length&&data?<EmptyState title={focus!.empty||`Nothing needs attention. ${scoped.length} recorded.`}/>:loading&&!data?<Loading/>:!records.length&&!error?<EmptyState title={def.empty} action={canCreate?<Btn variant="secondary" onClick={()=>setOpen('new')}><Plus aria-hidden className="size-4"/>{def.createLabel}</Btn>:undefined}/>:<>
+  {showSearch&&<label className="relative mb-3 block max-w-md text-sm"><span className="sr-only">Search {def.label.toLowerCase()}</span><Search aria-hidden className="absolute left-3 top-3 size-4 text-slate-400"/><input type="search" className={`${field} pl-9`} placeholder={`Search ${def.label.toLowerCase()}`} value={query} onChange={e=>setQuery(e.target.value)}/></label>}
+  {query&&<p role="status" className="sr-only">{records.length} match{records.length===1?'':'es'}</p>}
+  {query&&!records.length&&data?<EmptyState title={`Nothing in ${def.label} matches “${query.trim()}”.`} action={<Btn variant="secondary" onClick={()=>setQuery('')}>Clear search</Btn>}/>:showing==='focus'&&!focused.length&&data?<EmptyState title={focus!.empty||`Nothing needs attention. ${scoped.length} recorded.`}/>:loading&&!data?<Loading/>:!records.length&&!error?<EmptyState title={def.empty} action={canCreate?<Btn variant="secondary" onClick={()=>setOpen('new')}><Plus aria-hidden className="size-4"/>{def.createLabel}</Btn>:undefined}/>:<>
    <div className="hidden overflow-x-auto md:block"><table className="w-full text-left text-sm"><thead className="text-xs text-slate-500"><tr>{all&&<th className="py-2 pr-3 font-medium">Project</th>}{listFields.map(f=><th key={f.key} className="py-2 pr-3 font-medium">{f.label}</th>)}{def.machine&&<th className="py-2 pr-3 font-medium">Status</th>}{rowActions&&<th/>}</tr></thead>
     <tbody className="divide-y">{records.map(r=><tr key={r.id} tabIndex={0} className="cursor-pointer hover:bg-slate-50 focus:bg-slate-50 focus:outline-none" onClick={()=>setOpen(r)} onKeyDown={e=>{if(e.key==='Enter')setOpen(r);}}>{all&&<td className="py-2.5 pr-3 text-slate-600">{String(r.project_name||'Company')}</td>}{listFields.map(f=><td key={f.key} className="max-w-xs py-2.5 pr-3 align-top">{display(f,r[f.key],people)}</td>)}{def.machine&&<td className="py-2.5 pr-3"><StatusBadge machine={def.machine} state={String(r[def.stateColumn||'status'])}/></td>}{rowActions&&<td className="py-2.5 text-right" onClick={e=>e.stopPropagation()}>{rowActions(r,changed)}</td>}</tr>)}</tbody></table></div>
    <ul className="grid gap-3 md:hidden">{records.map(r=><li key={r.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><button className="w-full p-4 text-left active:bg-slate-50" onClick={()=>setOpen(r)}><div className="flex items-start gap-3"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-start gap-2"><span className="min-w-0 flex-1 text-[15px] font-semibold leading-5 text-slate-950">{String(r[def.titleField]||'Untitled').slice(0,120)}</span>{def.machine&&<StatusBadge machine={def.machine} state={String(r[def.stateColumn||'status'])}/>}</div><div className="mt-2 grid gap-1.5">{all&&<div className="flex items-baseline justify-between gap-3 text-xs"><span className="font-medium text-slate-400">Project</span><span className="text-right text-slate-600">{String(r.project_name||'Company')}</span></div>}{listFields.filter(f=>f.key!==def.titleField).slice(0,3).map(f=><div key={f.key} className="flex items-baseline justify-between gap-3 text-xs"><span className="font-medium text-slate-400">{f.label}</span><span className="min-w-0 text-right text-slate-700">{display(f,r[f.key],people)}</span></div>)}</div></div><ChevronRight aria-hidden className="mt-1 size-4 shrink-0 text-slate-300"/></div></button>{rowActions&&<div className="flex flex-wrap gap-2 border-t border-slate-100 bg-slate-50/70 px-3 py-2">{rowActions(r,changed)}</div>}</li>)}</ul>
@@ -118,7 +133,8 @@ function RecordForm({def,record,parentId,defaults,people,relationOptions,docCtx,
  return <div className="grid gap-4 p-5">
   {record&&def.machine&&<div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-slate-500">Status</span><StatusBadge machine={def.machine} state={state!}/>{typeof record.reference==='string'&&<span className="text-slate-500">· {record.reference}</span>}{typeof record.origin==='string'&&record.origin!=='manual'&&<span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-900">Source: {String(record.origin)}{record.confidence!=null?` · confidence ${Number(record.confidence).toFixed(0)}%`:''}</span>}</div>}
   {locked&&<p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">This record is {state} and can no longer be edited.</p>}
-  {visible.filter(f=>!f.derived||record).map(f=>{const Wrap=['boolean','document'].includes(f.type)||f.derived?FieldGroup:Field;return <Wrap key={f.key} label={f.label} hint={f.help}>{f.derived?<div className="text-sm text-slate-700">{display(f,values[f.key],people)}</div>:<Input f={f} value={values[f.key]} disabled={!editable(f)||busy} onChange={v=>setValues(s=>({...s,[f.key]:v}))} people={people} relationOptions={relationOptions} documentContext={docCtx}/>}</Wrap>;})}
+  {visible.filter(f=>(!f.derived||record)&&!(f.derived&&def.fields.some(x=>x.type==='client'&&x.snapshot===f.key))).map(f=>{if(!f.derived&&(f.type==='client'||f.type==='site'))return <div key={f.key}><Input f={f} value={values[f.key]} disabled={!editable(f)||busy} onChange={v=>setValues(s=>({...s,[f.key]:v}))} people={people} relationOptions={relationOptions} documentContext={docCtx} form={{def,values,set:patch=>setValues(s=>({...s,...patch}))}}/></div>;
+   const Wrap=['boolean','document'].includes(f.type)||f.derived?FieldGroup:Field;return <Wrap key={f.key} label={f.label} hint={f.help}>{f.derived?<div className="text-sm text-slate-700">{display(f,values[f.key],people)}</div>:<Input f={f} value={values[f.key]} disabled={!editable(f)||busy} onChange={v=>setValues(s=>({...s,[f.key]:v}))} people={people} relationOptions={relationOptions} documentContext={docCtx} form={{def,values,set:patch=>setValues(s=>({...s,...patch}))}}/>}</Wrap>;})}
   <ErrorState error={error}/>
   <div className="flex flex-wrap gap-2 border-t pt-4">
    {(fullEdit||fieldEdit)&&<Btn busy={busy} onClick={()=>void save()}>{record?'Save changes':'Create'}</Btn>}

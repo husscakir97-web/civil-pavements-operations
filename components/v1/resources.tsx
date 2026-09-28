@@ -6,6 +6,7 @@ import {AlertTriangle,CheckCircle2,Download,FileSpreadsheet,Upload} from 'lucide
 import {Sheet,SheetContent,SheetDescription,SheetTitle} from '@/components/ui/sheet';
 import {api,useApi,useAction,useSession,PageHeader,Section,EmptyState,ErrorState,Loading,Pill,Tabs,Field,Btn,field,money,dateText,ReasonDialog} from './kit';
 import {usePeople} from './register-view';
+import {filterLookup} from '@/lib/v1/lookup';
 
 type Competency={id:string;competency_type:string;reference:string|null;issued_date:string|null;expiry_date:string|null;state:string;source:string};
 type Worker={id:string;name:string;status:string;first_name:string|null;last_name:string|null;employee_number:string|null;email:string|null;phone:string|null;role_title:string|null;employment_type:string|null;user_id:string|null;hourly_rate?:number|null;location:string|null;active:boolean;revision:number;competencies:Competency[]};
@@ -76,10 +77,10 @@ function Workers(){
  const canEdit=s.can('resources.edit'),rates=s.can('commercial.view');
  if(loading&&!data)return <Loading/>;
  if(error&&!data)return <ErrorState error={error} onRetry={refresh}/>;
- const list=(data?.workers||[]).filter(w=>!filter||`${w.name} ${w.role_title||''} ${w.competencies.map(c=>c.competency_type).join(' ')}`.toLowerCase().includes(filter.toLowerCase()));
+ const list=filterLookup(data?.workers||[],filter,w=>[w.name,w.role_title,w.employee_number,w.email,w.phone,w.location,w.employment_type,...w.competencies.map(c=>c.competency_type)],w=>[w.employee_number],w=>w.name);
  return <Section title="Workers" description="Required competencies on a shift are checked against these records before it can be planned." actions={canEdit&&<div className="flex flex-wrap gap-2"><ResourceImporter kind="workers" onImported={refresh}/><Btn onClick={()=>setEditing('new')}>Add worker</Btn></div>}>
   {editing&&<WorkerForm worker={editing==='new'?null:editing} rates={rates} onClose={()=>setEditing(null)} onSaved={()=>{setEditing(null);refresh();}}/>}
-  <label className="mb-3 block max-w-sm text-sm"><span className="sr-only">Filter workers</span><input className={field} placeholder="Filter by name, role or competency" value={filter} onChange={e=>setFilter(e.target.value)}/></label>
+  <label className="mb-3 block max-w-sm text-sm"><span className="sr-only">Filter workers</span><input type="search" className={field} placeholder="Filter by name, employee no., role or competency" value={filter} onChange={e=>setFilter(e.target.value)}/></label>
   {!list.length?<EmptyState title={filter?'No workers match this filter':'No workers yet'} detail={filter?undefined:'Add the people you schedule so competencies and double-booking can be checked.'}/>:
   <ul className="divide-y rounded-lg border">{list.map(w=><li key={w.id} className="grid gap-2 p-3 sm:grid-cols-[1fr_auto]">
    <div className="min-w-0"><p className="font-medium">{w.name} <span className="text-sm font-normal text-slate-500">{w.role_title||''}</span></p>
@@ -139,14 +140,17 @@ function CompetencyEditor({worker,canEdit,onChanged}:{worker:Worker;canEdit:bool
 
 function PlantList(){
  const s=useSession(),{data,error,loading,refresh}=useApi<{plant:Plant[]}>('/api/operations/resources?kind=plant');
- const [editing,setEditing]=useState<Plant|'new'|null>(null);
+ const [editing,setEditing]=useState<Plant|'new'|null>(null),[filter,setFilter]=useState('');
  const canEdit=s.can('resources.edit'),rates=s.can('commercial.view');
  if(loading&&!data)return <Loading/>;
  if(error&&!data)return <ErrorState error={error} onRetry={refresh}/>;
- const list=data?.plant||[];
+ const all=data?.plant||[];
+ const list=filterLookup(all,filter,p=>[p.name,p.plant_number,p.registration,p.category,p.make,p.model,p.description,p.location,p.status],p=>[p.plant_number,p.registration],p=>p.name);
  return <Section title="Plant & equipment" description="Plant with expired registration or compliance cannot be planned onto a shift." actions={canEdit&&<div className="flex flex-wrap gap-2"><ResourceImporter kind="plant" onImported={refresh}/><Btn onClick={()=>setEditing('new')}>Add plant</Btn></div>}>
   {editing&&<PlantForm plant={editing==='new'?null:editing} rates={rates} onClose={()=>setEditing(null)} onSaved={()=>{setEditing(null);refresh();}}/>}
-  {!list.length?<EmptyState title="No plant yet" detail="Add plant and equipment so the scheduler can check availability and compliance."/>:
+  {all.length>0&&<label className="mb-3 block max-w-sm text-sm"><span className="sr-only">Find plant</span><input type="search" className={field} placeholder="Find by plant no., rego, name, category, make or model" value={filter} onChange={e=>setFilter(e.target.value)}/></label>}
+  {filter&&<p role="status" className="sr-only">{list.length} plant item{list.length===1?'':'s'} match</p>}
+  {!list.length?<EmptyState title={filter?'No plant matches this search':'No plant yet'} detail={filter?'Check the plant number or registration, or clear the search.':'Add plant and equipment so scheduling can check availability and compliance.'}/>:
   <ul className="divide-y rounded-lg border">{list.map(p=><li key={p.id} className="flex flex-wrap items-start justify-between gap-2 p-3">
    <div className="min-w-0"><p className="font-medium">{p.name} <span className="text-sm font-normal text-slate-500">{[p.category,p.plant_number,p.registration].filter(Boolean).join(' · ')}</span></p>
     <p className="text-xs text-slate-500">{[p.make,p.model,p.ownership,p.location].filter(Boolean).join(' · ')||'No details recorded'}{rates&&p.hourly_rate!=null?` · ${money(p.hourly_rate,true)}/h`:''}{rates&&p.day_rate!=null?` · ${money(p.day_rate,true)}/day`:''}</p>

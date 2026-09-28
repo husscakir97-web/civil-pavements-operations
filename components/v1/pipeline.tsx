@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import {ArrowRight,Plus,Trophy} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,Section,PageHeader,NextAction,Progress,Stat,money,dateText,humanStatus} from './kit';
-import {ClientPicker,SitePicker,PersonPicker} from './lookup';
+import {ClientPicker,SitePicker,PersonPicker,ClientContactCard} from './lookup';
 import {AiAssist} from './ai';
 import {RegisterView,usePeople,DocumentInput} from './register-view';
 import {EstimateApprovalPanel} from './estimating';
@@ -148,7 +148,7 @@ function IntakeTab({t,closed,onChanged}:{t:Tender;closed:boolean;onChanged:()=>v
  const [editing,setEditing]=useState(false);const {can}=useSession();
  return <div className="grid gap-4">
   <Section title="Tender details" actions={!closed&&can('pipeline.edit')&&<Btn variant="secondary" onClick={()=>setEditing(true)}>Edit details</Btn>}>
-   <dl className="grid gap-3 text-sm sm:grid-cols-3"><div><dt className="text-slate-500">Client</dt><dd>{t.clientName||'Not recorded'}</dd></div><div><dt className="text-slate-500">Location</dt><dd>{t.location||'Not recorded'}</dd></div><div><dt className="text-slate-500">Closing</dt><dd>{dateText(t.dueDate)}</dd></div><div className="sm:col-span-3"><dt className="text-slate-500">Scope summary</dt><dd className="whitespace-pre-wrap">{t.scopeSummary||'Not recorded'}</dd></div></dl>
+   <dl className="grid gap-3 text-sm sm:grid-cols-3"><div><dt className="text-slate-500">Client</dt><dd>{t.clientName||'Not recorded'}</dd></div><div><dt className="text-slate-500">Location</dt><dd>{t.location||'Not recorded'}</dd></div><div><dt className="text-slate-500">Closing</dt><dd>{dateText(t.dueDate)}</dd></div><div className="sm:col-span-3"><dt className="text-slate-500">Scope summary</dt><dd className="whitespace-pre-wrap">{t.scopeSummary||'Not recorded'}</dd></div></dl><div className="mt-3"><ClientContactCard clientId={t.clientId}/></div>
   </Section>
   <TenderReviewAssistant opportunityId={t.opportunityId} opportunityName={t.title}/>
   <Sheet open={editing} onOpenChange={setEditing}><SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-lg"><SheetTitle className="border-b px-5 py-4 text-lg font-semibold">Tender details</SheetTitle><SheetDescription className="sr-only">Edit tender</SheetDescription>{editing&&<TenderForm tender={t} onDone={()=>{setEditing(false);onChanged();}}/>}</SheetContent></Sheet>

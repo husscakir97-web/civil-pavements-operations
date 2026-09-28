@@ -35,12 +35,14 @@ async function handleGET(request:Request){
   if(q.length<2)return Response.json({results:[]});
   const entitlements=await getEntitlements(actor.organisationId);
   const allowed=specs.filter(s=>usable(entitlements,s.module)&&(s.capability==='field'?true:can(actor.role,s.capability)));
-  const like=`%${q.replace(/[\\%_]/g,m=>'\\'+m)}%`;
+  // Every word must appear in one of the record's searchable fields, so
+  // "public liability" finds "Public & Products Liability Insurance".
+  const terms=q.split(/\s+/).filter(Boolean).slice(0,6).map(t=>`%${t.replace(/[\\%_]/g,m=>'\\'+m)}%`);
   const groups=await Promise.all(allowed.map(async spec=>{
    const docContexts=documentContextsFor(actor.role).map(c=>`'${c}'`).join(',')||"''";
    const fieldDocs=spec.table==='documents'?(actor.role==='field'?" AND visibility='field'":` AND context_type IN (${docContexts})`):'';
    const fieldSwms=spec.table==='swms'&&actor.role==='field'?' AND issued_revision_id IS NOT NULL':'';
-   const r=await db.prepare(`SELECT id,${spec.name} AS name,${spec.status} AS status,${spec.detail} AS detail${spec.project?`,${spec.project} AS project_id`:''}${spec.tender?`,${spec.tender} AS tender_id`:''} FROM ${spec.table} WHERE organisation_id=? ${spec.filter||''}${fieldDocs}${fieldSwms} AND (${spec.match.map(c=>`${c} LIKE ?`).join(' OR ')}) LIMIT 10`).bind(actor.organisationId,...spec.match.map(()=>like)).all<Record<string,unknown>>();
+   const r=await db.prepare(`SELECT id,${spec.name} AS name,${spec.status} AS status,${spec.detail} AS detail${spec.project?`,${spec.project} AS project_id`:''}${spec.tender?`,${spec.tender} AS tender_id`:''} FROM ${spec.table} WHERE organisation_id=? ${spec.filter||''}${fieldDocs}${fieldSwms} AND ${terms.map(()=>`(${spec.match.map(c=>`${c} LIKE ?`).join(' OR ')})`).join(' AND ')} LIMIT 10`).bind(actor.organisationId,...terms.flatMap(t=>spec.match.map(()=>t))).all<Record<string,unknown>>();
    return r.results.map(x=>({id:String(x.id),name:String(x.name??''),status:String(x.status??''),detail:String(x.detail??'').slice(0,200),type:spec.type,area:spec.area,projectId:x.project_id?String(x.project_id):null,tenderId:x.tender_id?String(x.tender_id):null}));
   }));
   return Response.json({results:groups.flat().slice(0,80)},{headers:{'Cache-Control':'private, no-store'}});

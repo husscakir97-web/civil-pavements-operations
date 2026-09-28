@@ -176,6 +176,7 @@ export async function checkKnowledge(raw:unknown){
  const topics=new Set((v.topics||[]).map(x=>x.toLowerCase()));
  const rules:KnowledgeRuleForCheck[]=rows.filter(r=>contextMatch(r,v.scope)&&(!topics.size||topics.has(String(r.topic).toLowerCase()))).map(r=>({
   id:r.id,ruleCode:r.rule_code,title:r.title,topic:r.topic,ruleType:r.rule_type,
+  scope:{type:String(r.context_type),id:r.context_id?String(r.context_id):null},
   appliesWhen:conditionSetSchema.parse(parseJson(r.applies_when,{all:[],any:[]})),
   assertion:r.assertion?predicateSchema.parse(parseJson(r.assertion,null)):null,
   severity:r.severity,message:r.message,

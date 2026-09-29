@@ -8,6 +8,7 @@ import {CommunicationPanel} from './communication-panel';
 import {ClientPicker,SitePicker,ContactPicker,PersonPicker,ClientContactCard} from './lookup';
 import {RegisterView,usePeople} from './register-view';
 import {SwmsPanel} from './swms';
+import {ProjectForms} from './forms';
 import {KnowledgeCheckPanel} from './knowledge-checks';
 import {ProjectCommercial,presetClaimLine} from './commercial';
 import {ActivityLog} from './admin';
@@ -298,6 +299,7 @@ function Quality({projectId,closed,onChanged}:{projectId:string;closed:boolean;o
  return <div className="grid gap-4">
   <RegisterView register="risks" parentId={projectId} hideCreate={closed} onChanged={onChanged} focus={{label:'Open',test:r=>String(r.status)==='open',empty:'No open risks. Closed and controlled risks are under All.'}}/>
   <SwmsPanel projectId={projectId} onChanged={onChanged}/>
+  <ProjectForms projectId={projectId}/>
   <RegisterView register="itps" parentId={projectId} hideCreate={closed} rowActions={r=><Btn variant="ghost" onClick={()=>setItp({id:r.id,title:String(r.title)})}>Inspection points<ArrowRight aria-hidden className="size-4"/></Btn>}/>
   <RegisterView register="incidents" parentId={projectId} hideCreate={closed} focus={{label:'Open',test:r=>String(r.status)!=='closed',empty:'No open incidents.'}}/>
   <RegisterView register="ncrs" parentId={projectId} hideCreate={closed} focus={{label:'Open',test:r=>String(r.status)!=='closed',empty:'No open non-conformances.'}}/>

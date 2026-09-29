@@ -15,7 +15,7 @@ export const locationInput=z.object({
  provider:t(20),placeId:t(255),precision:t(30),geocoded:point.nullish(),pin:point.nullish(),pinAddress:t(500),
  source:z.enum(['autocomplete','manual','reverse','legacy','inherited']).optional(),geocodedAt:t(40),reverseGeocodedAt:t(40),
 }).refine(l=>Boolean(l.formattedAddress||l.addressLine1||l.locality||l.pin),'Enter an address or coordinates.');
-export type OwnerType='client_site'|'project'|'shift'|'depot'|'company'|'incident';
+export type OwnerType='client_site'|'project'|'shift'|'depot'|'company'|'incident'|'form_submission';
 
 const num=(v:unknown)=>v==null?null:Number(v);
 const pt=(lat:unknown,lng:unknown):LatLng|null=>lat==null||lng==null?null:{lat:Number(lat),lng:Number(lng)};

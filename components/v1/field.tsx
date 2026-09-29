@@ -9,6 +9,7 @@ import {useCachedApi,useDraft,useOffline,OfflineBanner,requestId,isNetworkFailur
 import {SwmsPanel} from './swms';
 import {RegisterView} from './register-view';
 import {LocationSummary} from './location';
+import {FormLauncher} from './forms';
 
 const ShiftRecord=dynamic(()=>import('@/components/field-workspace').then(m=>m.FieldWorkspace),{loading:()=><Loading label="Opening the shift record…"/>});
 
@@ -64,6 +65,7 @@ function ShiftDetail({shift,onBack,onChanged}:{shift:Shift;onBack:()=>void;onCha
   <nav className="grid grid-cols-3 gap-2" aria-label="Shift steps">{([['start','Before work',ShieldCheck],['during','During work',HardHat],['finish','Finish',ClipboardList]] as const).map(([k,label,Icon])=><button key={k} onClick={()=>setStep(k)} aria-current={step===k?'step':undefined} className={`relative flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border text-sm font-medium ${step===k?'border-orange-400 bg-orange-50 text-orange-900':done[k]?'border-emerald-200 bg-emerald-50 text-emerald-900':'bg-white text-slate-700'}`}>{done[k]?<CheckCircle2 aria-hidden className="size-5 text-emerald-600"/>:<Icon aria-hidden className="size-5"/>}{label}<span className="sr-only">{done[k]?' (done)':''}</span></button>)}</nav>
   {step==='start'&&<div className="grid gap-3">
    {shift.project&&<SwmsPanel projectId={shift.project.id} shiftId={shift.id} onChanged={onChanged}/>}
+   <FormLauncher context={{type:'shift',id:shift.id,label:shift.name,projectId:shift.project?.id??null}} hint="Prestarts, inspections and checklists for this shift."/>
    <Btn variant="secondary" className="min-h-12" onClick={()=>setRecord(true)}><ClipboardList aria-hidden className="size-5"/>Sign on and pre-start</Btn>
    <Btn className="min-h-12" onClick={()=>{onChanged();setStep('during');}}>Continue to work<CheckCircle2 aria-hidden className="size-4"/></Btn>
   </div>}

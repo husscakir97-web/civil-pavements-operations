@@ -237,3 +237,21 @@ export async function externalDocument(raw:string,id:string){
  const object=await bucket.get(doc.storage_key);if(!object)fail(404,'Document not found.');
  return new Response(object.body,{headers:{'Content-Type':doc.content_type,'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(doc.file_name)}`,'X-Content-Type-Options':'nosniff','Cache-Control':'private, no-store'}});
 }
+
+
+/** Best-effort operational notification after a shift save. Never call this before the shift commits. */
+export async function notifyShiftChange(current:{id:string;name:string;status:string;metadata:Record<string,unknown>},previous?:{id:string;name:string;status:string;metadata:Record<string,unknown>}){
+ const a=actorContext.getStore();if(!a)return;
+ const next=current.metadata||{},before=previous?.metadata||{};
+ const previousIds=previous?await shiftAssignedUserIds(a.organisationId,before):new Set<string>(),nextIds=await shiftAssignedUserIds(a.organisationId,next);
+ const audience=new Set([...previousIds,...nextIds]);audience.delete(a.userId);if(!audience.size)return;
+ const fields:Array<[string,string]>=[['date','date'],['start','start time'],['finish','finish time'],['scope','scope']];
+ const changed=fields.filter(([k])=>String(before[k]??'')!==String(next[k]??'')).map(([,label])=>label);
+ if(previous&&previous.status!==current.status)changed.push('status');
+ const oldAss=[...previousIds].sort().join('|'),newAss=[...nextIds].sort().join('|');if(oldAss!==newAss)changed.push('resources');
+ if(previous&&!changed.length)return;
+ const projectId=next.jobId?String(next.jobId):null,ctx:ContextInfo={type:'shift',id:current.id,title:current.name,module:'operations',capability:'schedule.view',projectId,target:projectId?{area:'Projects',sub:'Projects',id:projectId,tab:'delivery'}:{area:'Schedule',sub:'Schedule'},shift:{id:current.id,metadata:next}};
+ const title=previous?'Shift changed · '+current.name:'New shift · '+current.name,body=previous?(changed.length?'Updated: '+changed.join(', '):'Shift details updated'):[next.date,next.start,next.finish].filter(Boolean).join(' · ')||'New shift assigned';
+ await tx(async conn=>{for(const uid of audience)await insertNotification(conn,uid,'shift_changed',title,body,ctx);});
+ await maybeEmail([...audience],title,body);
+}

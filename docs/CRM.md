@@ -61,14 +61,26 @@ estimates. Each section needs its module entitlement and capability; project row
 are limited to the user's accessible projects; no totals over records the user cannot see.
 Money fields only with commercial access.
 
-## Permissions
-- View/pick: pipeline, project or schedule view.
-- Create/edit master: pipeline edit, schedule edit (operational quick create), or organisation-
-  wide project edit. Project/Site Engineers only see clients of their assigned projects and do
-  not manage the master.
-- Import, merge, legacy linking: organisation-level pipeline managers (Admin, Office, Estimator).
-- Commercial client fields (payment terms, credit status, billing email, account reference):
-  commercial roles only, on read and write.
+## Permissions (capabilities, enforced by the server)
+| Capability | Meaning | Roles |
+|---|---|---|
+| view (pipeline, project or schedule view) | search, open and pick clients | all office roles; Project/Site Engineers only for clients of their assigned projects |
+| `crm.create` | quick create a client, or add a site/contact to a client, inside a workflow | Admin, Office, Estimator, Scheduler, Project Manager |
+| `crm.edit` | change existing master records: identity/contact fields, status (inactivate/reactivate), account owner, contacts and sites | Admin, Office |
+| `crm.manage` | bulk import, merge, legacy linking, bulk status/owner changes | Admin, Office |
+
+Quick create never grants editing: a Scheduler, Estimator or Project Manager cannot edit a client
+afterwards, even one they created. Commercial client fields (payment terms, credit status, billing
+email, account reference) still require `commercial.view` on read and write; no CRM capability
+implies commercial access. Project/Site Engineers and Accounts hold no CRM capability.
+
+## Merge and primary contacts
+A client keeps at most one active primary contact. On merge the kept client's primary stays
+primary and moved primaries are cleared; if the kept client has none and the duplicate has exactly
+one, that contact stays primary; if the duplicate has several, none is promoted (the preview says
+so). Contacts are never archived or deleted by a merge, so opportunity/tender/project `contact_id`
+references stay valid. The preview warns about contacts sharing an email and sites that look like
+the same place; both records are kept.
 
 ## Known limitations
 - Documents tab: the document model has no client context yet, so client documents are reached

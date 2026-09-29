@@ -18,8 +18,11 @@ type Work={client:Client;projects?:{active:Array<{id:string;name:string;projectN
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function useDebounced(value:string,ms=200){const [v,setV]=useState(value);useEffect(()=>{const t=setTimeout(()=>setV(value),ms);return()=>clearTimeout(t);},[value,ms]);return v;}
-const canEdit=(s:ReturnType<typeof useSession>)=>s.can('pipeline.edit')||s.can('schedule.edit')||(s.can('project.edit')&&s.can('project.all.view'));
-const canManage=(s:ReturnType<typeof useSession>)=>(s.can('pipeline.edit')&&s.can('project.all.view'))||s.can('org.admin');
+// Capability-driven (server-enforced): create = quick add client/site/contact, edit = change master records,
+// manage = import, merge, legacy linking and bulk changes.
+const canCreate=(s:ReturnType<typeof useSession>)=>s.can('crm.create');
+const canEdit=(s:ReturnType<typeof useSession>)=>s.can('crm.edit');
+const canManage=(s:ReturnType<typeof useSession>)=>s.can('crm.manage');
 
 export function ClientsArea({initialQuery}:{initialQuery?:string}){
  const session=useSession();
@@ -33,7 +36,7 @@ export function ClientsArea({initialQuery}:{initialQuery?:string}){
    actions={<div className="flex flex-wrap gap-2">
     {canManage(session)&&<Btn variant="secondary" onClick={()=>setLinking(true)}><Link2 aria-hidden className="size-4"/>Link old records</Btn>}
     {canManage(session)&&<Btn variant="secondary" onClick={()=>setImporting(true)}><Upload aria-hidden className="size-4"/>Import</Btn>}
-    {canEdit(session)&&<Btn onClick={()=>setAdding(true)}><Plus aria-hidden className="size-4"/>Add client</Btn>}
+    {canCreate(session)&&<Btn onClick={()=>setAdding(true)}><Plus aria-hidden className="size-4"/>Add client</Btn>}
    </div>}/>
   <div className="relative"><Search aria-hidden className="pointer-events-none absolute left-3 top-3.5 size-4 text-slate-400"/>
    <input type="search" aria-label="Search CRM" className={`${field} min-h-12 pl-9 text-base`} placeholder="Search name, ABN, code, contact, email, site or address…" value={q} onChange={e=>setQ(e.target.value)}/></div>
@@ -62,12 +65,12 @@ function ClientList({q,tick,onOpen,onChanged}:{q:string;tick:number;onOpen:(id:s
  return <div className="grid gap-3">
   <div className="flex flex-wrap items-center gap-3 text-sm">
    <label className="flex items-center gap-2"><input type="checkbox" className="size-4" checked={showInactive} onChange={e=>setShowInactive(e.target.checked)}/>Show inactive clients</label>
-   {picked.length>0&&canEdit(session)&&<span className="flex flex-wrap items-center gap-2"><span className="text-slate-600">{picked.length} selected</span><Btn variant="secondary" className="min-h-9 py-1" busy={busy} onClick={()=>bulk('inactive')}>Mark inactive</Btn><Btn variant="secondary" className="min-h-9 py-1" busy={busy} onClick={()=>bulk('active')}>Mark active</Btn><Btn variant="ghost" className="min-h-9 py-1" onClick={()=>setPicked([])}>Clear</Btn></span>}
+   {picked.length>0&&canManage(session)&&<span className="flex flex-wrap items-center gap-2"><span className="text-slate-600">{picked.length} selected</span><Btn variant="secondary" className="min-h-9 py-1" busy={busy} onClick={()=>bulk('inactive')}>Mark inactive</Btn><Btn variant="secondary" className="min-h-9 py-1" busy={busy} onClick={()=>bulk('active')}>Mark active</Btn><Btn variant="ghost" className="min-h-9 py-1" onClick={()=>setPicked([])}>Clear</Btn></span>}
   </div>
   <ErrorState error={loadError||error} onRetry={refresh}/>
   {loading&&!data?<Loading/>:!list.length?<EmptyState title={q?'No clients match.':'No clients yet.'} detail={q?'Try a name, ABN, code, contact or site.':'Add a client, or import your existing customer list.'}/>:
   <section className="surface overflow-hidden"><ul className="divide-y">{list.map(c=><li key={c.id} className="flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50">
-   {canEdit(session)&&<input type="checkbox" className="size-4 shrink-0" aria-label={`Select ${c.name}`} checked={picked.includes(c.id)} onChange={e=>setPicked(p=>e.target.checked?[...p,c.id]:p.filter(x=>x!==c.id))}/>}
+   {canManage(session)&&<input type="checkbox" className="size-4 shrink-0" aria-label={`Select ${c.name}`} checked={picked.includes(c.id)} onChange={e=>setPicked(p=>e.target.checked?[...p,c.id]:p.filter(x=>x!==c.id))}/>}
    <button className="grid min-w-0 flex-1 gap-0.5 text-left sm:grid-cols-[minmax(0,2fr)_1fr_1fr] sm:items-center sm:gap-3" onClick={()=>onOpen(c.id)}>
     <span className="min-w-0"><span className="flex items-center gap-2 font-medium"><Building2 aria-hidden className="size-4 shrink-0 text-slate-400"/><span className="truncate">{c.name}</span>{c.status!=='active'&&<Pill>Inactive</Pill>}</span><span className="block truncate text-xs text-slate-500">{[c.legalName&&c.legalName!==c.name?c.legalName:null,c.abn?`ABN ${formatAbn(c.abn)}`:null,c.clientCode].filter(Boolean).join(' · ')||'No legal name or ABN yet'}</span></span>
     <span className="truncate text-sm text-slate-600">{(c.contacts||[]).find(x=>x.isPrimary)?.name||c.contactName||'—'}</span>
@@ -171,7 +174,7 @@ function ContactEditor({client:c,onChanged}:{client:Client;onChanged:()=>void}){
 }
 
 function SiteEditor({client:c,onChanged}:{client:Client;onChanged:()=>void}){
- const session=useSession(),editable=canEdit(session),{busy,error,run}=useAction();
+ const session=useSession(),editable=canEdit(session),addable=canCreate(session),{busy,error,run}=useAction();
  const [edit,setEdit]=useState<Site|null>(null),[add,setAdd]=useState({name:'',address:'',suburb:'',state:'',postcode:'',accessNotes:''});
  const post=(body:Record<string,unknown>,done:()=>void)=>void run(()=>api('/api/platform/clients',{method:'POST',body}),()=>{done();onChanged();});
  return <div className="grid gap-4">
@@ -180,7 +183,7 @@ function SiteEditor({client:c,onChanged}:{client:Client;onChanged:()=>void}){
    {(['name','address','suburb','state','postcode','accessNotes'] as const).map(k=><Field key={k} label={{name:'Site name',address:'Address',suburb:'Suburb',state:'State',postcode:'Postcode',accessNotes:'Access notes'}[k]}><input className={field} value={String(edit[k]||'')} onChange={e=>setEdit({...edit,[k]:e.target.value})}/></Field>)}
    <div className="flex flex-wrap gap-2 sm:col-span-2"><Btn type="submit" busy={busy}>Save site</Btn><Btn type="button" variant="secondary" busy={busy} onClick={()=>post({action:'updateSite',id:edit.id,revision:edit.revision||1,site:{status:edit.status==='inactive'?'active':'inactive'}},()=>setEdit(null))}>{edit.status==='inactive'?'Reactivate':'Mark inactive'}</Btn><Btn type="button" variant="ghost" onClick={()=>setEdit(null)}>Cancel</Btn></div>
   </form>}
-  {editable&&!edit&&<form className="grid gap-3 rounded-lg border bg-slate-50 p-3 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();post({action:'createSite',site:{clientId:c.id,...Object.fromEntries(Object.entries(add).map(([k,x])=>[k,x||null]))}},()=>setAdd({name:'',address:'',suburb:'',state:'',postcode:'',accessNotes:''}));}}>
+  {addable&&!edit&&<form className="grid gap-3 rounded-lg border bg-slate-50 p-3 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();post({action:'createSite',site:{clientId:c.id,...Object.fromEntries(Object.entries(add).map(([k,x])=>[k,x||null]))}},()=>setAdd({name:'',address:'',suburb:'',state:'',postcode:'',accessNotes:''}));}}>
    <p className="text-sm font-medium sm:col-span-2">Add a site</p>
    <Field label="Site name"><input className={field} value={add.name} onChange={e=>setAdd({...add,name:e.target.value})}/></Field>
    <Field label="Address"><input className={field} value={add.address} onChange={e=>setAdd({...add,address:e.target.value})}/></Field>
@@ -208,13 +211,13 @@ function ClientWork({work:w}:{work:Work}){
 }
 
 function MergeClient({client:c,onMerged}:{client:Client;onMerged:()=>void}){
- const [other,setOther]=useState<Client|null>(null),[preview,setPreview]=useState<{keep:{name:string};merge:{name:string};affected:Record<string,number>}|null>(null),{busy,error,run}=useAction();
+ const [other,setOther]=useState<Client|null>(null),[preview,setPreview]=useState<{keep:{name:string};merge:{name:string};affected:Record<string,number>;warnings?:string[]}|null>(null),{busy,error,run}=useAction();
  const affected=useMemo(()=>preview?Object.entries(preview.affected).filter(([,n])=>n>0):[],[preview]);
  return <div className="grid gap-4">
   <p className="text-sm text-slate-600">Merge a duplicate into <strong>{c.name}</strong>. Its opportunities, tenders, projects, contacts and sites move here; the duplicate is kept as a merged record for history, never deleted. Existing record snapshots are not rewritten.</p>
   <ClientPicker label="Duplicate to merge into this client" value={other?.id} onChange={x=>{setOther(x&&x.id!==c.id?x:null);setPreview(null);}}/>
   {other&&!preview&&<Btn variant="secondary" busy={busy} onClick={()=>void run(()=>api<{preview:NonNullable<typeof preview>}>('/api/platform/clients',{method:'POST',body:{action:'merge',keepId:c.id,mergeId:other.id,confirm:false}}),r=>setPreview(r.preview))}><Merge aria-hidden className="size-4"/>Preview merge</Btn>}
-  {preview&&<div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm"><p className="font-medium">Keep {preview.keep.name} · merge {preview.merge.name}</p><p className="mt-1">{affected.length?affected.map(([k,n])=>`${n} ${k.toLowerCase()}`).join(', ')+' will move.':'No linked records will move.'}</p>
+  {preview&&<div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm"><p className="font-medium">Keep {preview.keep.name} · merge {preview.merge.name}</p><p className="mt-1">{affected.length?affected.map(([k,n])=>`${n} ${k.toLowerCase()}`).join(', ')+' will move.':'No linked records will move.'}</p>{(preview.warnings||[]).length>0&&<ul className="mt-2 list-disc pl-5 text-amber-900">{preview.warnings!.map(w=><li key={w}>{w}</li>)}</ul>}
    <div className="mt-3 flex gap-2"><Btn busy={busy} onClick={()=>void run(()=>api('/api/platform/clients',{method:'POST',body:{action:'merge',keepId:c.id,mergeId:other!.id,confirm:true}}),()=>{setOther(null);setPreview(null);onMerged();})}>Confirm merge</Btn><Btn variant="secondary" onClick={()=>setPreview(null)}>Cancel</Btn></div></div>}
   <ErrorState error={error}/>
  </div>;

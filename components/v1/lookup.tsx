@@ -114,7 +114,9 @@ function useClientSearch(){
  return {clients,loading,recent,setQuery};
 }
 const clientItem=(c:Client,recent=false):LookupItem=>({id:c.id,label:c.name,detail:[c.legalName&&c.legalName!==c.name?c.legalName:null,c.abn?`ABN ${formatAbn(c.abn)}`:null,c.clientCode,c.contactName,c.sites.length?`${c.sites.length} site${c.sites.length===1?'':'s'}`:null].filter(Boolean).join(' · ')||null,badge:c.status!=='active'?<span className="rounded bg-slate-100 px-1.5 text-[10px] text-slate-600">Inactive</span>:recent?<span className="text-[10px] text-slate-400">Recent</span>:undefined,search:[c.name,c.legalName,c.abn,c.clientCode,c.contactName,c.email,...c.sites.map(s=>s.label),...(c.contacts||[]).flatMap(x=>[x.name,x.email])],ids:[c.abn,c.clientCode]});
-const canCreateClients=(s:{can:(c:never)=>boolean})=>s.can('pipeline.edit' as never)||s.can('schedule.edit' as never)||(s.can('project.edit' as never)&&s.can('project.all.view' as never));
+/** Quick create in workflows (crm.create); editing existing master records needs crm.edit. The server enforces both. */
+const canCreateClients=(s:ReturnType<typeof useSession>)=>s.can('crm.create');
+const canEditClients=(s:ReturnType<typeof useSession>)=>s.can('crm.edit');
 
 export async function quickCreateClient(name:string,extra:{abn?:string|null}={}){
  const r=await api<{client:Client;existing:boolean}>('/api/platform/clients',{method:'POST',body:{action:'create',client:{name,...extra}}});
@@ -169,7 +171,7 @@ export function PersonPicker({people,value,onChange,label,disabled,emptyLabel}:{
 /** Contacts for one client: list, add, set primary, remove. */
 export function ClientContacts({clientId}:{clientId:string}){
  const {client:c,refresh}=useClientRecord(clientId),session=useSession(),{busy,error,run}=useAction();
- const canEdit=canCreateClients(session);
+ const canAdd=canCreateClients(session),canEdit=canEditClients(session);
  const [f,setF]=useState({name:'',role:'',email:'',phone:''});
  if(!c)return <p className="text-sm text-slate-500">Loading contacts…</p>;
  const post=(body:Record<string,unknown>,done?:()=>void)=>void run(()=>api('/api/platform/clients',{method:'POST',body}),()=>{refresh();done?.();});
@@ -181,7 +183,7 @@ export function ClientContacts({clientId}:{clientId:string}){
    {canEdit&&!x.isPrimary&&<Btn variant="ghost" className="min-h-9 px-2 text-xs" busy={busy} aria-label={`Make ${x.name} primary`} onClick={()=>post({action:'updateContact',id:x.id,revision:x.revision,contact:{isPrimary:true}})}><Star aria-hidden className="size-3.5"/>Primary</Btn>}
    {canEdit&&<Btn variant="ghost" className="min-h-9 px-2 text-xs text-red-700" busy={busy} aria-label={`Remove ${x.name}`} onClick={()=>{if(confirm(`Remove ${x.name} from ${c.name}?`))post({action:'updateContact',id:x.id,revision:x.revision,contact:{archived:true}});}}>Remove</Btn>}
   </li>)}</ul>:<p className="text-sm text-slate-500">No other contacts yet.</p>}
-  {canEdit&&<form className="grid gap-2 rounded-lg border bg-slate-50 p-3 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();post({action:'addContact',clientId,contact:{...f,isPrimary:!contacts.length}},()=>setF({name:'',role:'',email:'',phone:''}));}}>
+  {canAdd&&<form className="grid gap-2 rounded-lg border bg-slate-50 p-3 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();post({action:'addContact',clientId,contact:{...f,isPrimary:!contacts.length}},()=>setF({name:'',role:'',email:'',phone:''}));}}>
    <Field label="Name" required><input className={field} required value={f.name} onChange={e=>setF({...f,name:e.target.value})}/></Field>
    <Field label="Role"><input className={field} placeholder="Project manager, accounts…" value={f.role} onChange={e=>setF({...f,role:e.target.value})}/></Field>
    <Field label="Email"><input className={field} type="email" value={f.email} onChange={e=>setF({...f,email:e.target.value})}/></Field>

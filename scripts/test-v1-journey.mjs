@@ -772,6 +772,56 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  await json(await cr({action:'merge',keepId:twin1,mergeId:twin2,confirm:true}),200);
  const [[mt]]=await db.execute('SELECT client_id FROM jobs WHERE id=?',[jobTwin]),[[mc]]=await db.execute('SELECT status,merged_into_id FROM clients WHERE id=?',[twin2]);assert.equal(mt.client_id,twin1);assert.equal(mc.status,'merged');assert.equal(mc.merged_into_id,twin1);
  assert(!(await json(await call('/api/platform/clients?q=twin','GET',undefined,A.cookie),200)).clients.some(c=>c.id===twin2),'merged client hidden from pickers');
+ // Merge keeps one primary contact: the kept client's primary wins; references to moved contacts stay valid.
+ const jane=(await json(await cr({action:'create',client:{name:'Jane Keep Co',contact:{name:'Jane',email:'jane@keep.example.com'}}}),201)).client;
+ const johnCo=(await json(await cr({action:'create',client:{name:'John Merge Co',contact:{name:'John',email:'jane@keep.example.com'}}}),201)).client;
+ const john=johnCo.contacts.find(x=>x.name==='John');assert(john.isPrimary&&jane.contacts[0].isPrimary);
+ const johnOpp=(await json(await opps.create(null,{name:'John opportunity',client_id:johnCo.id,contact_id:john.id}),201)).record;
+ const mp2=await json(await cr({action:'merge',keepId:jane.id,mergeId:johnCo.id}),200);
+ assert(mp2.preview.warnings.some(w=>/share the email/.test(w)),'duplicate contact email warned');assert(mp2.preview.warnings.some(w=>/John will no longer be primary/.test(w)),'primary rule shown in preview');
+ await json(await cr({action:'merge',keepId:jane.id,mergeId:johnCo.id,confirm:true}),200);
+ const [prim]=await db.execute("SELECT name FROM client_contacts WHERE organisation_id=? AND client_id=? AND status='active' AND is_primary=1",[memberA.organisation_id,jane.id]);assert.deepEqual(prim.map(x=>x.name),['Jane'],'exactly one primary: Jane');
+ const [[johnRow]]=await db.execute('SELECT client_id,status,is_primary FROM client_contacts WHERE id=?',[john.id]);assert.deepEqual([johnRow.client_id,johnRow.status,Number(johnRow.is_primary)],[jane.id,'active',0],'John moved, active, no longer primary');
+ const [[oppRow]]=await db.execute('SELECT client_id,contact_id FROM opportunities WHERE id=?',[johnOpp.id]);assert.deepEqual([oppRow.client_id,oppRow.contact_id],[jane.id,john.id],'opportunity still points at John');
+ const [[mergedB]]=await db.execute('SELECT status FROM clients WHERE id=?',[johnCo.id]);assert.equal(mergedB.status,'merged','duplicate kept as merged, not deleted');
+ const [[mergeAudit]]=await db.execute("SELECT COUNT(*) AS n FROM audit_log WHERE organisation_id=? AND event_type='client.merged' AND entity_id=?",[memberA.organisation_id,jane.id]);assert.equal(Number(mergeAudit.n),1);
+ const noPrim=(await json(await cr({action:'create',client:{name:'No Primary Co'}}),201)).client;
+ await json(await cr({action:'addContact',clientId:noPrim.id,contact:{name:'Plain Contact',isPrimary:false}}),201);
+ const onePrim=(await json(await cr({action:'create',client:{name:'One Primary Co',contact:{name:'Pat Primary'}}}),201)).client;
+ await json(await cr({action:'merge',keepId:noPrim.id,mergeId:onePrim.id,confirm:true}),200);
+ const [prim2]=await db.execute("SELECT name FROM client_contacts WHERE organisation_id=? AND client_id=? AND status='active' AND is_primary=1",[memberA.organisation_id,noPrim.id]);assert.deepEqual(prim2.map(x=>x.name),['Pat Primary'],'the duplicate\'s only primary stays primary');
+ // CRM permissions by role (server-enforced): workflow roles quick-create; master edit and administration are Admin/Office.
+ const target=(await json(await cr({action:'create',client:{name:'Permission Target'}}),201)).client;
+ const targetNow=async()=>(await json(await call('/api/platform/clients?ids='+target.id,'GET',undefined,A.cookie),200)).clients[0];
+ const siteT=(await json(await cr({action:'createSite',site:{clientId:target.id,name:'Target Yard'}}),201)).site;
+ const contactT=(await json(await cr({action:'addContact',clientId:target.id,contact:{name:'Target Contact'}}),201));const contactTRow=contactT.client.contacts.find(x=>x.id===contactT.contactId);
+ const crmImportAs=()=>{const f=new FormData();f.set('mode','preview');f.set('file',new File([bytes],'crm.xlsx'));return call('/api/platform/clients/import','POST',f,R.cookie);};
+ for(const role of ['scheduler','project_manager','estimator']){
+  await as(role);const who=role+': ';
+  assert((await json(await call('/api/platform/clients?q=permission','GET',undefined,R.cookie),200,who+'search')).clients.some(c=>c.id===target.id),who+'finds clients');
+  const made=(await json(await cr({action:'create',client:{name:`Quick ${role}`}},R.cookie),201,who+'quick create client')).client;
+  await json(await cr({action:'createSite',site:{clientId:target.id,address:`${role} site`}},R.cookie),201,who+'adds a site');
+  await json(await cr({action:'addContact',clientId:target.id,contact:{name:`${role} contact`}},R.cookie),201,who+'adds a contact');
+  const t=await targetNow();
+  await json(await cr({action:'update',id:t.id,revision:t.revision,client:{name:'Renamed'}},R.cookie),403,who+'cannot edit master fields');
+  await json(await cr({action:'update',id:t.id,revision:t.revision,client:{status:'inactive'}},R.cookie),403,who+'cannot inactivate');
+  await json(await cr({action:'update',id:made.id,revision:made.revision,client:{phone:'1'}},R.cookie),403,who+'cannot edit even a client they created');
+  await json(await cr({action:'updateSite',id:siteT.id,revision:siteT.revision,site:{status:'inactive'}},R.cookie),403,who+'cannot change sites');
+  await json(await cr({action:'updateContact',id:contactTRow.id,revision:contactTRow.revision,contact:{archived:true}},R.cookie),403,who+'cannot change contacts');
+  await json(await cr({action:'bulk',ids:[t.id],change:{status:'inactive'}},R.cookie),403,who+'cannot bulk update');
+  await json(await crmImportAs(),403,who+'cannot import');
+  await json(await cr({action:'merge',keepId:t.id,mergeId:made.id},R.cookie),403,who+'cannot merge');
+  await json(await call('/api/platform/clients?view=legacy','GET',undefined,R.cookie),403,who+'no legacy administration');
+  await json(await cr({action:'linkLegacy',apply:true},R.cookie),403,who+'cannot bulk-link');
+ }
+ await as('office');
+ let tgt=await targetNow();await json(await cr({action:'update',id:tgt.id,revision:tgt.revision,client:{phone:'02 5555 0000'}},R.cookie),200,'office edits the master');
+ tgt=await targetNow();await json(await cr({action:'bulk',ids:[tgt.id],change:{status:'inactive'}},R.cookie),200,'office bulk updates');
+ await json(await crmImportAs(),200,'office imports');
+ await json(await call('/api/platform/clients?view=legacy','GET',undefined,R.cookie),200,'office links legacy records');
+ const officeDup=(await json(await cr({action:'create',client:{name:'Office Dup'}},R.cookie),201)).client;await json(await cr({action:'merge',keepId:target.id,mergeId:officeDup.id},R.cookie),200,'office previews merges');
+ for(const role of ['project_engineer','site_engineer','accounts']){await as(role);await json(await cr({action:'create',client:{name:`${role} made`}},R.cookie),403,role+' cannot create clients');await json(await cr({action:'addContact',clientId:target.id,contact:{name:'x'}},R.cookie),403,role+' cannot add contacts');}
+ await as('accounts');
  // Tenant isolation by forged ids.
  await json(await call('/api/platform/clients?id='+riverside.id,'GET',undefined,B.cookie),404,'foreign client detail');
  assert.equal((await json(await call('/api/platform/clients?ids='+riverside.id,'GET',undefined,B.cookie),200)).clients.length,0,'foreign client by id');
@@ -803,7 +853,7 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  await db.execute("UPDATE organisation_entitlements SET status='active' WHERE organisation_id=? AND module='pipeline'",[memberA.organisation_id]);
  const full=await json(await call('/api/platform/clients?id='+riverside.id,'GET',undefined,A.cookie),200);assert(full.tenders.some(t=>t.id===tenderId),'client work shows its tender');assert(full.projects.active.some(p=>p.id===projectId)||full.projects.completed.some(p=>p.id===projectId));
  const tpl=await call('/api/platform/clients/import?template=1','GET',undefined,A.cookie);assert.equal(tpl.status,200);const tb=new ExcelJS.Workbook();await tb.xlsx.load(Buffer.from(await tpl.arrayBuffer()));assert.deepEqual(tb.worksheets.map(w=>w.name),['Instructions','Clients','Contacts','Sites']);
- console.log('PASS K CRM: bulk import 100 new/50 update/10 exact/5 possible/5 invalid with contacts+sites, preview writes nothing, decisions, audit, idempotent re-run; quick create by ABN/name; inactive; legacy linking never guesses; merge; tenant isolation; search; PE client scope; scheduler job from CRM; module-aware history; template');
+ console.log('PASS K CRM: bulk import 100 new/50 update/10 exact/5 possible/5 invalid with contacts+sites, preview writes nothing, decisions, audit, idempotent re-run; quick create by ABN/name; inactive; legacy linking never guesses; merge; tenant isolation; search; PE client scope; scheduler job from CRM; module-aware history; template; CRM create/edit/manage by role; merge keeps one primary contact with duplicate warnings');
 
  // ---------------------------------------------------------------- Scenario H: ABN register, AI orchestration, billing
  step='H ABN';

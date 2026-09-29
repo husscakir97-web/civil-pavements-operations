@@ -12,22 +12,22 @@ import {fail} from './http';
 import {query,one,exec,tx,nowIso,uuid,type Conn,type Row} from './sql';
 import {getPool} from './database';
 import {orgWideProjects,memberProjectIds} from './project-access';
-import {matchClient,matchContact,matchSite,strongAbn,abnDigits,collapse,legacyClientFor} from '@/lib/v1/crm-match';
+import {matchClient,matchContact,matchSite,strongAbn,abnDigits,collapse,legacyClientFor,nameKey} from '@/lib/v1/crm-match';
 
 const actor=()=>actorContext.getStore()!;
-/** Anyone who works with pipeline, projects or the schedule can see and pick clients. */
+/** Anyone who works with pipeline, projects or the schedule can see and pick clients (engineers: their projects' clients only). */
 export const canViewClients=(role:string)=>can(role,'pipeline.view')||can(role,'project.view')||can(role,'schedule.view');
-/**
- * Creating and editing the master: sales/estimating, schedulers (operational quick create) and
- * organisation-wide project roles. Project/Site Engineers are project-scoped and do not manage the master.
- */
-export const canEditClients=(role:string)=>can(role,'pipeline.edit')||can(role,'schedule.edit')||(can(role,'project.edit')&&can(role,'project.all.view'));
-/** Merging and legacy linking change many records: organisation-level managers only. */
-export const canManageClients=(role:string)=>can(role,'pipeline.edit')&&can(role,'project.all.view')||can(role,'org.admin');
+/** Quick create inside a workflow: a new client, or a site/contact on a client (crm.create). */
+export const canCreateClients=(role:string)=>can(role,'crm.create');
+/** Changing existing master records: identity/contact fields, status, contacts and sites (crm.edit). */
+export const canEditClients=(role:string)=>can(role,'crm.edit');
+/** CRM administration: bulk import, merge, legacy linking, bulk status/owner changes (crm.manage). */
+export const canManageClients=(role:string)=>can(role,'crm.manage');
 const commercial=(role:string)=>can(role,'commercial.view');
 function needView(){if(!canViewClients(actor().role))fail(403,'You are not authorised to view clients.');}
-function needEdit(){if(!canEditClients(actor().role))fail(403,'You are not authorised to change clients.');}
-function needManage(){if(!canManageClients(actor().role))fail(403,'You are not authorised to merge or link clients.');}
+function needCreate(){if(!canCreateClients(actor().role))fail(403,'You are not authorised to add clients.');}
+function needEdit(){if(!canEditClients(actor().role))fail(403,'You are not authorised to change client records.');}
+function needManage(){if(!canManageClients(actor().role))fail(403,'You are not authorised to administer the client master.');}
 
 export type ContactSummary={id:string;clientId:string;name:string;firstName:string|null;lastName:string|null;role:string|null;department:string|null;email:string|null;phone:string|null;mobile:string|null;isPrimary:boolean;status:string;notes:string|null;revision:number};
 export type SiteSummary={id:string;clientId:string|null;name:string;address:string|null;suburb:string|null;state:string|null;postcode:string|null;siteContact:string|null;accessNotes:string|null;status:string;label:string;revision:number};
@@ -150,7 +150,7 @@ async function checkOwner(ownerUserId:unknown,conn:Conn){if(ownerUserId&&!await 
  * duplicate. Weaker similarities are never merged automatically.
  */
 export async function createClient(input:z.infer<typeof clientInput>){
- needEdit();
+ needCreate();
  const a=actor(),v=clientInput.parse(input);
  return tx(async conn=>{
   const existing=await query("SELECT id,name,legal_name,abn,client_code,status FROM clients WHERE organisation_id=? AND status<>'merged' FOR UPDATE",[a.organisationId],conn);
@@ -192,7 +192,7 @@ export async function updateClient(id:string,revision:number,input:z.infer<typeo
 }
 /** Bulk activate/inactivate or assign an owner. Each client is updated and audited individually. */
 export async function bulkUpdateClients(ids:string[],change:{status?:'active'|'inactive';ownerUserId?:string|null}){
- needEdit();
+ needManage();
  const a=actor();if(!ids.length)return {updated:0};
  return tx(async conn=>{
   if('ownerUserId' in change)await checkOwner(change.ownerUserId,conn);
@@ -224,7 +224,7 @@ async function insertSite(v:z.infer<typeof siteInput>,conn:Conn){
  await audit({event:'client_site.created',entityType:'client_site',entityId:id,summary:`Site added: ${name}`,after:v},conn);
  return site((await one('SELECT * FROM client_sites WHERE id=?',[id],conn))!);
 }
-export async function createSite(input:z.infer<typeof siteInput>){needEdit();const v=siteInput.parse(input);return tx(async conn=>({site:await insertSite(v,conn)}));}
+export async function createSite(input:z.infer<typeof siteInput>){needCreate();const v=siteInput.parse(input);return tx(async conn=>({site:await insertSite(v,conn)}));}
 export const sitePatch=z.object({name:opt(255),address:opt(500),suburb:opt(120),state:opt(20),postcode:opt(10),siteContact:opt(160),accessNotes:z.string().trim().max(5000).nullish(),status:z.enum(['active','inactive']).optional()});
 export async function updateSite(id:string,revision:number,input:z.infer<typeof sitePatch>){
  needEdit();
@@ -280,7 +280,7 @@ async function insertContact(clientId:string,v:z.infer<typeof contactInput>,conn
 }
 /** Adds a contact to a client (same email or same name within the client returns the existing contact). */
 export async function addContact(clientId:string,input:z.infer<typeof contactInput>){
- needEdit();
+ needCreate();
  const a=actor(),v=contactInput.parse(input);
  return tx(async conn=>{
   if(!await one("SELECT id FROM clients WHERE organisation_id=? AND id=? AND status<>'merged' FOR UPDATE",[a.organisationId,clientId],conn))fail(400,'Client not found.');
@@ -330,9 +330,28 @@ export async function mergeClients(keepId:string,mergeId:string,confirm=false){
   if(!keep||!drop)fail(404,'Client not found.');
   const affected:Record<string,number>={};
   for(const [table,label] of CLIENT_REFS)affected[label]=Number((await one<{n:number}>(`SELECT COUNT(*) AS n FROM ${table} WHERE organisation_id=? AND client_id=?`,[org,mergeId],conn))?.n||0);
-  const preview={keep:{id:keep!.id,name:keep!.name},merge:{id:drop!.id,name:drop!.name},affected};
+  // Warn about records that will sit side by side after the merge (they are kept, never auto-merged).
+  const [contacts,sites]=await Promise.all([
+   query("SELECT id,client_id,name,email,is_primary FROM client_contacts WHERE organisation_id=? AND client_id IN (?) AND status='active'",[org,[keepId,mergeId]],conn),
+   query("SELECT id,client_id,name,address FROM client_sites WHERE organisation_id=? AND client_id IN (?) AND status='active'",[org,[keepId,mergeId]],conn),
+  ]);
+  const warnings:string[]=[];
+  const email=(e:unknown)=>String(e||'').trim().toLowerCase();
+  for(const k of contacts.filter(x=>x.client_id===mergeId&&email(x.email)))for(const o of contacts.filter(x=>x.client_id===keepId&&email(x.email)===email(k.email)))warnings.push(`Contacts “${k.name}” and “${o.name}” share the email ${email(k.email)}; both are kept.`);
+  const skey=(x:Row)=>[nameKey(x.name),nameKey(x.address)].filter(Boolean);
+  for(const k of sites.filter(x=>x.client_id===mergeId))for(const o of sites.filter(x=>x.client_id===keepId))if(skey(k).some(v=>skey(o).includes(v)))warnings.push(`Sites “${k.name}” and “${o.name}” look like the same place; both are kept.`);
+  // One primary contact per client: the kept client's primary wins; otherwise a single primary moves across.
+  const keepPrimary=contacts.filter(x=>x.client_id===keepId&&Number(x.is_primary)),dropPrimary=contacts.filter(x=>x.client_id===mergeId&&Number(x.is_primary));
+  const primaryRule=keepPrimary.length?(dropPrimary.length?`${dropPrimary.map(x=>x.name).join(', ')} will no longer be primary; ${keepPrimary[0].name} stays the primary contact.`:null)
+   :dropPrimary.length===1?`${dropPrimary[0].name} becomes the primary contact.`
+   :dropPrimary.length>1?`The duplicate has ${dropPrimary.length} primary contacts; none is made primary — choose one after the merge.`:null;
+  if(primaryRule)warnings.push(primaryRule);
+  if(keepPrimary.length>1)warnings.push(`${keep!.name} already has ${keepPrimary.length} primary contacts; review them after the merge.`);
+  const preview={keep:{id:keep!.id,name:keep!.name},merge:{id:drop!.id,name:drop!.name},affected,warnings};
   if(!confirm)return {preview,merged:false};
   const now=nowIso();
+  // Clear moved primaries before they arrive when the kept client already has one (or the duplicate has several).
+  if(keepPrimary.length||dropPrimary.length>1)await exec("UPDATE client_contacts SET is_primary=0,revision=revision+1,updated_at=? WHERE organisation_id=? AND client_id=? AND is_primary=1",[now,org,mergeId],conn);
   for(const [table] of CLIENT_REFS)await exec(`UPDATE ${table} SET client_id=?,updated_at=? WHERE organisation_id=? AND client_id=?`,[keepId,now,org,mergeId],conn);
   // Fill gaps on the kept client from the merged one; never overwrite what the kept client already has.
   const fill:Row={};for(const col of ['legal_name','abn','client_code','website','notes'])if(!keep![col]&&drop![col])fill[col]=drop![col];
@@ -340,7 +359,7 @@ export async function mergeClients(keepId:string,mergeId:string,confirm=false){
   const cols=Object.keys(fill);
   if(cols.length)await exec(`UPDATE clients SET ${cols.map(c=>`${c}=?`).join(',')},revision=COALESCE(revision,1)+1,updated_at=? WHERE organisation_id=? AND id=?`,[...cols.map(c=>fill[c]),now,org,keepId],conn);
   await exec("UPDATE clients SET status='merged',merged_into_id=?,revision=COALESCE(revision,1)+1,updated_at=? WHERE organisation_id=? AND id=?",[keepId,now,org,mergeId],conn);
-  await audit({event:'client.merged',entityType:'client',entityId:keepId,summary:`Merged ${drop!.name} into ${keep!.name}`,before:{mergedClient:drop},after:{affected,filled:fill}},conn);
+  await audit({event:'client.merged',entityType:'client',entityId:keepId,summary:`Merged ${drop!.name} into ${keep!.name}`,before:{mergedClient:drop},after:{affected,filled:fill,warnings}},conn);
   return {preview,merged:true};
  };
  return confirm?tx(work):work(getPool());

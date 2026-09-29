@@ -412,6 +412,10 @@ assert.deepEqual(rm.mapWorker({id:'w',name:'Sam',status:'Active',metadata:{compe
  const parsed=sp.parseSheet(ws,imp.DEFS.clients);assert.deepEqual(parsed.heads.map(h=>h.key),['name','abn','contactName',null],'common headings map, unknown ones stay unmapped');assert.equal(parsed.rows.length,2,'blank rows skipped');
  const manual=sp.parseSheet(ws,imp.DEFS.clients,{'Mystery column':'notes'});assert.equal(manual.heads[3].key,'notes','manual mapping applies');
  assert.throws(()=>sp.parseSheet(ws,imp.DEFS.clients,{'Mystery column':'name'}),/More than one column/,'two columns cannot map to one field');}
+// CRM capabilities: quick create for workflow roles; master edit and administration for Admin/Office only.
+{const crm={admin:['crm.create','crm.edit','crm.manage'],office:['crm.create','crm.edit','crm.manage'],estimator:['crm.create'],scheduler:['crm.create'],project_manager:['crm.create'],project_engineer:[],site_engineer:[],supervisor:[],field:[],accounts:[],read_only:[]};
+ for(const [r,caps] of Object.entries(crm))for(const c of ['crm.create','crm.edit','crm.manage'])assert.equal(perm.can(r,c),caps.includes(c),`${r} ${caps.includes(c)?'needs':'must not have'} ${c}`);
+ for(const r of perm.ROLES)if(!perm.can(r,'commercial.view'))assert.equal(perm.can(r,'crm.edit')&&!perm.can(r,'commercial.view'),false,r+': CRM capability never implies commercial access');}
 console.log('PASS CRM matching: ABN/phone/email normalisation, deterministic client/contact/site matching, possible duplicates, legacy linking, import value validation and heading mapping');
 const {parsePastedItems}=load('lib/v1/estimate-paste.ts');
 const pasted=parsePastedItems('Description\tQty\tUnit\tRate\nProfile 50mm\t1,200\tm2\t$4.50\nAC14\t180\tt\t165\tmaterial\tWearing\nbad row\tx\tm\t1',  'General',i=>'i'+i);

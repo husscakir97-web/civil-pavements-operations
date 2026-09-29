@@ -19,6 +19,7 @@ export const ROLE_DESCRIPTIONS:Record<Role,string>={
 export const CAPABILITIES=[
  'org.admin','team.admin','entitlements.manage','rates.edit','audit.view',
  'commercial.view','pipeline.view','pipeline.edit','tender.approve','tender.submit','tender.award',
+ 'workshop.view','workshop.edit','workshop.verify',
  'estimate.edit','estimate.approve',
  'project.view','project.edit','project.baseline','project.close',
  'document.upload','document.approve',
@@ -39,12 +40,12 @@ export const ROLE_CAPABILITIES:Record<Role,readonly Capability[]>={
  admin:CAPABILITIES,
  office:OFFICE,
  estimator:[...READ,'pipeline.edit','estimate.edit','tender.submit','library.edit','document.upload','audit.view','variation.edit'],
- scheduler:['project.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','knowledge.view','document.upload'],
+ scheduler:['workshop.view','project.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','knowledge.view','document.upload'],
  project_manager:[...READ,'project.edit','project.baseline','project.close','schedule.edit','resources.edit','hseq.edit','hseq.report','swms.approve','document.approve','docket.approve','variation.edit','claim.edit','document.upload','itp.complete','audit.view'],
  supervisor:[...FIELD,'project.view','schedule.view','hseq.view','hseq.edit','knowledge.view'],
  field:[...FIELD,'knowledge.view'],
  accounts:['commercial.view','project.view','reports.view','knowledge.view','claim.edit','claim.approve','invoice.manage','docket.approve'],
- read_only:READ.filter(c=>c!=='commercial.view'),
+ read_only:['workshop.view',...READ.filter(c=>c!=='commercial.view')],
 };
 
 export function can(role:string|undefined,capability:Capability){
@@ -58,8 +59,9 @@ export const roleLabel=(role:string)=>isKnownRole(role)?ROLE_LABELS[role]:role;
 // handler remain the authority for each action; this only stops a role reaching
 // a module it has no business in. admin/office/field keep their original V1 rules.
 export type PermissionLevel='read'|'write'|'approve'|'admin'|'field'|'field-read';
-type Mod='core'|'pipeline'|'estimating'|'projects'|'ims'|'operations'|'field'|'dockets'|'commercial'|'reports'|'ai';
+type Mod='core'|'pipeline'|'estimating'|'projects'|'ims'|'operations'|'field'|'dockets'|'commercial'|'reports'|'ai'|'workshop';
 const MODULE_ACCESS:Record<Mod,{read:Capability[];write:Capability[];approve:Capability[]}>={
+ workshop:{read:['workshop.view'],write:['workshop.edit'],approve:['workshop.verify']},
  core:{read:[],write:[],approve:[]},
  pipeline:{read:['pipeline.view'],write:['pipeline.edit','tender.submit'],approve:['tender.approve','tender.award']},
  estimating:{read:['pipeline.view','estimate.edit'],write:['estimate.edit'],approve:['estimate.approve']},

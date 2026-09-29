@@ -14,7 +14,7 @@ export async function reportsV1(){
  const a=actorContext.getStore()!,org=a.organisationId,e=await getEntitlements(org),money=can(a.role,'commercial.view')&&usable(e,'commercial');
  const today=easternDate(new Date()),past30=new Date(Date.parse(today)-30*86400000).toISOString().slice(0,10),next14=new Date(Date.parse(today)+14*86400000).toISOString().slice(0,10);
  const out:Record<string,unknown>={generatedAt:new Date().toISOString(),commercialVisible:money};
- if(usable(e,'pipeline')){
+ if(usable(e,'pipeline')&&can(a.role,'pipeline.view')){
   const opps=await query("SELECT stage,status,estimated_value,probability,metadata FROM opportunities WHERE organisation_id=? AND LOWER(status)<>'archived'",[org]);
   const stages:Record<string,{count:number;value:number;weighted:number}>={};
   for(const o of opps){const s=o.stage||legacyOpportunityStage(o.status);const v=Number(o.estimated_value??0);const g=stages[s]||={count:0,value:0,weighted:0};g.count++;g.value+=v;g.weighted+=v*Math.min(100,Math.max(0,Number(o.probability||0)))/100;}
@@ -23,7 +23,7 @@ export async function reportsV1(){
   const won=byStage.awarded?.count||0,lost=byStage.lost?.count||0;
   out.pipeline={opportunities:Object.entries(stages).map(([stage,v])=>({stage,count:v.count,...(money?{value:round2(v.value),weighted:round2(v.weighted)}:{})})),tenders:Object.entries(byStage).map(([stage,v])=>({stage,count:v.count,...(money?{value:round2(v.value)}:{})})),conversionPct:won+lost?round2(won/(won+lost)*100):null,decided:won+lost};
  }
- if(usable(e,'projects')){
+ if(usable(e,'projects')&&can(a.role,'project.view')){
   const projects=await query("SELECT id,name,project_number,stage,status,contract_value FROM jobs WHERE organisation_id=? AND LOWER(status)<>'archived'",[org]);
   const counts:Record<string,number>={};for(const p of projects){const s=stageOf(p);counts[s]=(counts[s]||0)+1;}
   const live=projects.filter(p=>!['closed'].includes(stageOf(p)));
@@ -40,7 +40,7 @@ export async function reportsV1(){
    out.learn=learn;
   }
  }
- if(usable(e,'operations')){
+ if(usable(e,'operations')&&can(a.role,'schedule.view')){
   const upcoming=await one<{n:number}>("SELECT COUNT(*) AS n FROM shifts WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.date')) BETWEEN ? AND ? AND status NOT IN ('Cancelled','Archived')",[org,today,next14]);
   const completed=await one<{n:number}>("SELECT COUNT(*) AS n FROM shifts WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.date')) BETWEEN ? AND ? AND status='Completed'",[org,past30,today]);
   const assignments=await query("SELECT metadata FROM shifts WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.date')) BETWEEN ? AND ? AND status NOT IN ('Cancelled','Archived')",[org,past30,next14]);

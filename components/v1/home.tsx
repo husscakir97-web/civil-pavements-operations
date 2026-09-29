@@ -4,7 +4,7 @@ import {ArrowRight,CalendarDays,CheckCheck,ClipboardList,Siren,BarChart3,Search 
 import {useApi,useSession,ErrorState,Loading,Btn,money,pct,StatusBadge} from './kit';
 import {useNav,areaTarget} from './nav';
 import type {HomeItem} from '@/lib/seams/home';
-import {ENGINES,type EngineKey} from '@/lib/v1/engines';
+import {enginesFor,engineLabelFor} from '@/lib/v1/workspaces';
 
 // Home answers "what needs me?": my work first, then today, then exceptions, and only
 // then portfolio figures. Everything comes from the role-aware home feed.
@@ -36,15 +36,7 @@ export function HomeV1(){
  const {data,error,loading,refresh}=useApi<Feed>('/api/platform/home');
  const {brand,userName,can,module}=useSession();const {navigate}=useNav();
  const hour=new Date().getHours();
- const engineAccess:Record<EngineKey,boolean>={
-  'Win Work':can('pipeline.view')||can('estimate.edit'),
-  'Prepare Work':can('project.view')||can('hseq.view')||can('library.edit'),
-  'Resource Work':can('schedule.view')||can('resources.edit'),
-  'Deliver Work':can('project.view')||can('docket.approve'),
-  'Control Money':can('commercial.view'),
-  'Learn':can('reports.view'),
- };
- const engines=ENGINES.filter(e=>engineAccess[e.key]);
+ const engines=enginesFor({can,module});
  const [query,setQuery]=useState('');
  return <div className="grid gap-5">
   <header className="flex flex-wrap items-end justify-between gap-3">
@@ -67,6 +59,6 @@ export function HomeV1(){
    {can('commercial.view')&&module('commercial')&&<Portfolio/>}
   </>}
   {/* Operating areas stay available for orientation, below the work that needs you. */}
-  {engines.length>0&&<nav aria-label="Go to area" className="flex flex-wrap gap-2 border-t pt-4"><span className="w-full text-xs font-semibold uppercase tracking-wide text-slate-500">Go to</span>{engines.map(e=><button key={e.key} onClick={()=>navigate(e.key,'Overview')} title={e.question} className="min-h-9 rounded-full border bg-white px-3 text-sm text-slate-700 hover:bg-slate-50">{e.key}</button>)}</nav>}
+  {engines.length>0&&<nav aria-label="Go to area" className="flex flex-wrap gap-2 border-t pt-4"><span className="w-full text-xs font-semibold uppercase tracking-wide text-slate-500">Go to</span>{engines.map(e=><button key={e.key} onClick={()=>navigate(e.key,'Overview')} title={e.question} className="min-h-9 rounded-full border bg-white px-3 text-sm text-slate-700 hover:bg-slate-50">{engineLabelFor(e.key,{can,module})}</button>)}</nav>}
  </div>;
 }

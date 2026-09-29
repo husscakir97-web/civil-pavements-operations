@@ -12,7 +12,8 @@ import { useSession, Tabs } from "@/components/v1/kit";
 import { NavContext, parseRoute, routeHash, useNav, type Route } from "@/components/v1/nav";
 import { OfflineProvider } from "@/components/v1/offline";
 import { ADMIN_SUBS, FIELD_SHELL_ROLES } from "@/lib/v1/navigation";
-import { resolveEngineRoute } from "@/lib/v1/engines";
+import { workspacesFor, engineLabelFor } from "@/lib/v1/workspaces";
+import { isEngineKey, resolveEngineRoute } from "@/lib/v1/engines";
 import type { Capability } from "@/lib/platform/permissions";
 
 const loading = () => <div role="status" className="workspace-placeholder"><span className="sr-only">Loading workspace…</span><div className="h-7 w-52 rounded bg-slate-200/70"/><div className="mt-3 h-4 w-72 max-w-full rounded bg-slate-200/50"/><div className="mt-8 grid gap-4 sm:grid-cols-3">{[0,1,2].map(i=><div key={i} className="h-28 rounded-xl border bg-white"/>)}</div><div className="mt-5 h-64 rounded-xl border bg-white"/></div>;
@@ -43,6 +44,8 @@ const TendersView = dynamic(() => loaders.pipeline().then(m => m.TendersView), {
 const EstimatesQuotes = dynamic(() => loaders.estimates().then(m => m.EstimatesQuotes), { loading });
 const ProjectsView = dynamic(() => loaders.projects().then(m => m.ProjectsView), { loading });
 const OperationsPage = dynamic(() => loaders.operations().then(m => m.OperationsPage), { loading });
+const Program = dynamic(() => import("@/components/v1/program").then(m => m.Program), { loading });
+const Workshop = dynamic(() => import("@/components/v1/workshop").then(m => m.Workshop), { loading });
 const JobsPlanning = dynamic(() => import("@/components/jobs-planning").then(m => m.JobsPlanning), { loading });
 const DocketDashboard = dynamic(() => loaders.dockets().then(m => m.DocketDashboard), { loading });
 const CommercialArea = dynamic(() => loaders.commercial().then(m => m.CommercialArea), { loading });
@@ -70,11 +73,13 @@ const AREAS: Area[] = [
   { key: "Prepare Work", label: "Prepare Work", icon: ClipboardCheck, engineNumber: 2, defaultSub: "Overview", subs: [
     { key: "Overview", anyOf: ["project.view","hseq.view","library.edit"] },
     { key: "Projects", module: "projects", capability: "project.view" },
+    { key: "Programme", module: "projects", capability: "project.view" },
     { key: "IMS & HSEQ", module: "ims", capability: "hseq.view" },
     { key: "Company Library", capability: "library.edit" },
   ], preload: loaders.engines },
   { key: "Resource Work", label: "Resource Work", icon: UsersRound, engineNumber: 3, defaultSub: "Overview", subs: [
-    { key: "Overview", anyOf: ["schedule.view","resources.edit"] },
+    { key: "Overview", anyOf: ["schedule.view","resources.edit","workshop.view"] },
+    { key: "Workshop", module: "workshop", capability: "workshop.view" },
     { key: "Schedule", module: "operations", capability: "schedule.view" },
     { key: "Resources", module: "operations", capability: "schedule.view" },
   ], preload: loaders.engines },
@@ -153,7 +158,7 @@ function WorkspaceShell() {
   const resolvedRoute = resolveEngineRoute(route);
   const allowed = (item: { module?: string; capability?: Capability; anyOf?: Capability[] }) => (!item.module || session.module(item.module)) && (!item.capability || session.can(item.capability)) && (!item.anyOf?.length || item.anyOf.some(c => session.can(c)));
   // An area with sub-pages is shown only when at least one of them is permitted.
-  const areas = AREAS.filter(a => allowed(a) && (!a.subs || a.subs.some(allowed)));
+  const areas = AREAS.filter(a => allowed(a) && (isEngineKey(a.key) ? workspacesFor(a.key,session).length > 0 : !a.subs || a.subs.some(allowed)));
   const area = areas.find(a => a.key === resolvedRoute.area) ?? (resolvedRoute.area === "Search" ? null : areas[0]);
   const subs = area?.subs?.filter(allowed) ?? [];
   const sub = subs.find(s => s.key === resolvedRoute.sub)?.key ?? subs.find(s => s.key === area?.defaultSub)?.key ?? subs[0]?.key;
@@ -176,7 +181,7 @@ function WorkspaceShell() {
     <nav aria-label="Primary application areas" className="space-y-1.5 px-3 py-4">{areas.map(a => { const Icon = a.icon; const current = area?.key === a.key; return <div key={a.key}>
       {a.engineNumber===1&&<p className="mb-2 mt-3 px-3 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Operating engines</p>}
       {a.key==="Admin"&&<p className="mb-2 mt-4 px-3 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">System</p>}
-      <button aria-current={current ? "page" : undefined} onClick={() => go(a.key,a.defaultSub)} onPointerEnter={() => void a.preload().catch(() => {})} onFocus={() => void a.preload().catch(() => {})} className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition-all ${current ? "bg-slate-950 text-white shadow-md" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"}`}><span className={`flex size-8 items-center justify-center rounded-lg ${current ? "bg-primary text-white" : "bg-slate-100 text-slate-500 group-hover:bg-white"}`}><Icon aria-hidden className="size-[17px]" /></span><span className="min-w-0 flex-1 truncate">{a.label}</span>{a.engineNumber&&<span className={`text-[10px] font-bold tabular-nums ${current?"text-slate-400":"text-slate-300"}`}>0{a.engineNumber}</span>}</button>
+      <button aria-current={current ? "page" : undefined} onClick={() => go(a.key,a.defaultSub)} onPointerEnter={() => void a.preload().catch(() => {})} onFocus={() => void a.preload().catch(() => {})} className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition-all ${current ? "bg-slate-950 text-white shadow-md" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"}`}><span className={`flex size-8 items-center justify-center rounded-lg ${current ? "bg-primary text-white" : "bg-slate-100 text-slate-500 group-hover:bg-white"}`}><Icon aria-hidden className="size-[17px]" /></span><span className="min-w-0 flex-1 truncate">{isEngineKey(a.key)?engineLabelFor(a.key,session):a.label}</span>{a.engineNumber&&<span className={`text-[10px] font-bold tabular-nums ${current?"text-slate-400":"text-slate-300"}`}>0{a.engineNumber}</span>}</button>
       {current && a.subs && <div className="ml-11 mt-1.5 grid gap-1 border-l-2 border-slate-200 pl-3">{a.subs.filter(allowed).map(s => <button key={s.key} onClick={() => go(a.key, s.key)} className={`rounded-lg px-2.5 py-1.5 text-left text-xs font-medium ${sub === s.key ? "bg-orange-50 text-orange-800" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"}`}>{s.key}</button>)}</div>}
     </div>; })}</nav>
     <div className="mt-auto border-t border-slate-200 p-3"><button onClick={() => go("Search")} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-950"><Search aria-hidden className="size-4" />Search</button><Link href="/account" className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-950"><CircleUserRound aria-hidden className="size-4" />{role === "admin" ? "Account & team" : "Account"}</Link></div>
@@ -187,8 +192,10 @@ function WorkspaceShell() {
   if (k === "Search") content = <SearchV1 />;
   else if (k === "Home") content = <HomeV1 />;
   else if (k === "Win Work") content = sub === "Overview" ? <EngineOverview engine="Win Work" /> : sub === "Tenders" ? <TendersView /> : sub === "Estimates" ? <EstimatesQuotes key={route.id || "all"} initialEstimateId={route.id} /> : sub === "Clients" ? <ClientsRegister key={route.id || "all"} initialQuery={route.id} /> : <OpportunitiesView key={route.id || "all"} />;
+  else if (k === "Prepare Work" && sub === "Programme") content = <Program />;
   else if (k === "Prepare Work") content = sub === "Overview" ? <EngineOverview engine="Prepare Work" /> : sub === "Projects" ? <ProjectsView /> : sub === "IMS & HSEQ" ? <HseqArea /> : <LibraryArea />;
-  else if (k === "Resource Work") content = sub === "Overview" ? <EngineOverview engine="Resource Work" /> : sub === "Resources" ? <ResourcesArea key={`resources-${route.tab || ""}-${route.id || ""}`} initial={route.tab === "plant" ? "plant" : "workers"} initialQuery={route.id} other={<OperationsPage module="Resources" initialResource="crews" resourceTypes={otherResources} onNavigate={legacyNavigate} />} /> : <JobsPlanning key={`schedule-${route.id || "all"}`} page="Planning" initialJobId={route.id} onBack={route.id ? () => navigate("Prepare Work", "Projects", route.id) : undefined} />;
+  else if (k === "Resource Work") content = sub === "Overview" ? <EngineOverview engine="Resource Work" /> : sub === "Workshop" ? <Workshop /> : sub === "Resources" ? <ResourcesArea key={`resources-${route.tab || ""}-${route.id || ""}`} initial={route.tab === "plant" ? "plant" : "workers"} initialQuery={route.id} other={<OperationsPage module="Resources" initialResource="crews" resourceTypes={otherResources} onNavigate={legacyNavigate} />} /> : <JobsPlanning key={`schedule-${route.id || "all"}`} page="Planning" initialJobId={route.id} onBack={route.id ? () => navigate("Prepare Work", "Projects", route.id) : undefined} />;
+  else if (k === "Deliver Work" && sub === "Programme") content = <Program />;
   else if (k === "Deliver Work") content = sub === "Overview" ? <EngineOverview engine="Deliver Work" /> : sub === "Dockets" ? <DocketDashboard /> : <ProjectsView />;
   else if (k === "Control Money") content = sub === "Overview" ? <EngineOverview engine="Control Money" /> : <CommercialArea />;
   else if (k === "Learn") content = sub === "Overview" ? <EngineOverview engine="Learn" /> : <ReportsV1 />;

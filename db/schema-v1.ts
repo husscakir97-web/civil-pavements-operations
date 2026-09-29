@@ -726,3 +726,45 @@ export const knowledgeRules=mysqlTable('knowledge_rules',{
  status:varchar('status',{length:20}).notNull().default('draft'),
  ...lifecycle(),
 },t=>[uniqueIndex('idx_knowledge_rules_org_code').on(t.organisationId,t.packId,t.ruleCode),index('idx_knowledge_rules_org_topic').on(t.organisationId,t.topic,t.status),index('idx_knowledge_rules_org_pack').on(t.organisationId,t.packId,t.status)]);
+
+// Append-only source events, committed atomically with the source transaction.
+export const domainEvents=mysqlTable('domain_events',{
+ id:id(),organisationId:org(),eventType:varchar('event_type',{length:80}).notNull(),
+ eventVersion:int('event_version').notNull().default(1),module:varchar('module',{length:40}).notNull(),
+ entityType:varchar('entity_type',{length:40}).notNull(),entityId:ref('entity_id').notNull(),
+ occurrenceId:ref('occurrence_id').notNull(),actorUserId:ref('actor_user_id').notNull(),createdAt:stamp('created_at').notNull(),
+},t=>[uniqueIndex('idx_domain_event_occurrence').on(t.organisationId,t.eventType,t.occurrenceId),index('idx_domain_events_org_time').on(t.organisationId,t.createdAt,t.id)]);
+
+// Workshop is asset-scoped and does not require Operations.
+export const workshopOrders=mysqlTable('workshop_orders',{
+ id:id(),organisationId:org(),assetId:ref('asset_id').notNull(),title:varchar('title',{length:180}).notNull(),
+ severity:varchar('severity',{length:20}).notNull(),status:varchar('status',{length:30}).notNull().default('open'),
+ dueDate:day('due_date'),repairerId:ref('repairer_id'),verifiedBy:ref('verified_by'),...lifecycle(),
+},t=>[index('workshop_orders_org_idx').on(t.organisationId),index('workshop_orders_asset_idx').on(t.organisationId,t.assetId)]);
+export const workshopEntries=mysqlTable('workshop_entries',{
+ id:id(),organisationId:org(),orderId:ref('order_id').notNull(),kind:varchar('kind',{length:30}).notNull(),
+ note:text('note').notNull(),labourHours:decimal('labour_hours',{precision:10,scale:2}),parts:text('parts'),
+ actorId:ref('actor_id').notNull(),createdAt:stamp('created_at').notNull(),
+},t=>[index('workshop_entries_org_idx').on(t.organisationId),index('workshop_entries_order_idx').on(t.organisationId,t.orderId)]);
+
+export const programActivities=mysqlTable('program_activities',{
+ id:id(),organisationId:org(),projectId:ref('project_id').notNull(),name:varchar('name',{length:180}).notNull(),
+ startDate:day('start_date').notNull(),durationDays:int('duration_days').notNull(),predecessorId:ref('predecessor_id'),
+ responsible:varchar('responsible',{length:180}),workPackage:varchar('work_package',{length:180}),
+ resourceRequirement:text('resource_requirement'),plannedQuantity:decimal('planned_quantity',{precision:15,scale:2}),
+ quantityUnit:varchar('quantity_unit',{length:40}),productionPerDay:decimal('production_per_day',{precision:15,scale:2}),
+ status:varchar('status',{length:30}).notNull().default('planned'),
+ // 0012: user-controlled order (quick reorder); dates still come from start/duration/dependencies.
+ sequence:int('sequence'),...lifecycle(),
+},t=>[index('program_activities_org_idx').on(t.organisationId),index('program_activities_project_idx').on(t.organisationId,t.projectId)]);
+
+export const shiftRequirements=mysqlTable('shift_requirements',{
+ id:id(),organisationId:org(),shiftId:ref('shift_id').notNull(),category:varchar('category',{length:40}).notNull(),
+ role:varchar('role',{length:100}).notNull(),quantity:int('quantity').notNull(),status:varchar('status',{length:20}).notNull().default('active'),...lifecycle(),
+},t=>[index('shift_requirements_org_idx').on(t.organisationId),index('shift_requirements_shift_idx').on(t.organisationId,t.shiftId)]);
+
+export const assetMeterReadings=mysqlTable('asset_meter_readings',{
+ id:id(),organisationId:org(),assetId:ref('asset_id').notNull(),meterType:varchar('meter_type',{length:20}).notNull(),
+ reading:decimal('reading',{precision:15,scale:2}).notNull(),nextService:decimal('next_service',{precision:15,scale:2}).notNull(),
+ note:text('note').notNull(),actorId:ref('actor_id').notNull(),createdAt:stamp('created_at').notNull(),
+},t=>[index('asset_meter_readings_org_idx').on(t.organisationId),index('asset_meter_readings_asset_idx').on(t.organisationId,t.assetId)]);

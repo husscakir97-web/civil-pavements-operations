@@ -8,6 +8,7 @@ import {useWorkspaceBrand} from '@/components/workspace-brand';
 import {Dialog,DialogContent,DialogTitle,DialogDescription} from '@/components/ui/dialog';
 import {stateLabel,stateTone,type MachineKey,type Tone} from '@/lib/platform/workflow';
 import {can as roleCan,type Capability} from '@/lib/platform/permissions';
+import {usable,writable} from '@/lib/platform/modules';
 
 export class ApiError extends Error{constructor(message:string,readonly status:number,readonly body:Record<string,unknown>){super(message);}}
 export async function api<T=Record<string,unknown>>(url:string,init?:{method?:string;body?:unknown;signal?:AbortSignal}):Promise<T>{
@@ -52,7 +53,7 @@ export function useAction(){
 
 export function useSession(){
  const s=useWorkspaceBrand();
- return {...s,can:(c:Capability)=>roleCan(s.role,c),module:(m:string)=>!s.entitlements||(s.entitlements as Record<string,string>)[m]!=='disabled',writable:(m:string)=>!s.entitlements||(s.entitlements as Record<string,string>)[m]==='active'};
+ return {...s,can:(c:Capability)=>roleCan(s.role,c),module:(m:string)=>usable(s.entitlements,m),writable:(m:string)=>writable(s.entitlements,m)};
 }
 
 const toneClass:Record<Tone,string>={neutral:'bg-slate-100 text-slate-700 border-slate-200',info:'bg-sky-50 text-sky-800 border-sky-200',warning:'bg-amber-50 text-amber-900 border-amber-200',success:'bg-emerald-50 text-emerald-800 border-emerald-200',danger:'bg-red-50 text-red-800 border-red-200'};

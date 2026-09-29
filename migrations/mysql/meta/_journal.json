@@ -47,12 +47,61 @@
     {
       "idx": 6,
       "version": "5",
-      "when": 1790640000000,
-      "tag": "0006_core_clients_sites",
+      "when": 1790567448424,
+      "tag": "0006_domain_events",
       "breakpoints": true
     },
     {
       "idx": 7,
+      "version": "5",
+      "when": 1790571089303,
+      "tag": "0007_odd_human_torch",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1790571149528,
+      "tag": "0008_brainy_terrax",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1790571436568,
+      "tag": "0009_late_wendell_rand",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1790571495629,
+      "tag": "0010_opposite_doctor_doom",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1790572023886,
+      "tag": "0011_sad_killer_shrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1790572083886,
+      "tag": "0012_programme_sequence",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1790572143886,
+      "tag": "0006_core_clients_sites",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
       "version": "5",
       "when": 1790640060000,
       "tag": "0007_client_contacts",

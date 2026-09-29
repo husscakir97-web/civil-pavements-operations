@@ -59,7 +59,7 @@ try{
  assert.equal(ws.role,'admin');assert.equal(ws.onboarding.completed,false);assert(Object.values(ws.entitlements).every(s=>s==='active'),'beta trial grants every module');
  const [[memberA]]=await db.execute('SELECT organisation_id FROM users WHERE id=?',[A.user.id]),[[memberB]]=await db.execute('SELECT organisation_id FROM users WHERE id=?',[B.user.id]);
  assert.notEqual(memberA.organisation_id,memberB.organisation_id,'independent signups create separate organisations');
- const [[entCount]]=await db.execute('SELECT COUNT(*) AS n FROM organisation_entitlements WHERE organisation_id=?',[memberA.organisation_id]);assert.equal(Number(entCount.n),11);
+ const [[entCount]]=await db.execute('SELECT COUNT(*) AS n FROM organisation_entitlements WHERE organisation_id=?',[memberA.organisation_id]);assert.equal(Number(entCount.n),12);
  await json(await call('/api/platform/onboarding','PUT',{abn:'12 345 678 901'},A.cookie),400,'invalid ABN rejected');
  await json(await call('/api/platform/onboarding','PUT',{complete:true},A.cookie),422,'legal name required to finish');
  let profile=(await json(await call('/api/platform/onboarding','PUT',{legal_name:'Alpha Civil Pty Ltd',trading_name:'Alpha Civil',abn:'51 824 753 556',business_activities:['Civil construction','Drainage'],operating_regions:['NSW'],workforce_size:'21–50',onboarding_step:4,complete:true},A.cookie),200)).profile;
@@ -92,6 +92,39 @@ try{
  assert.equal(sharedA.summary.failed,1);assert.equal(sharedB.summary.failed,1);assert.equal(sharedB.results[0].source.origin,'platform');assert.equal(sharedB.results[0].source.referenceCode,'PLATFORM-TEST');
  console.log('PASS knowledge: controlled source + pack + rule lifecycle, deterministic checks, provenance, tenant isolation and shared read-only platform knowledge');
 
+
+ step='Workshop standalone and isolation';
+ const W=await signup('workshop-verifier');await db.execute("UPDATE users SET organisation_id=?,role='office' WHERE id=?",[memberA.organisation_id,W.user.id]);
+ const workshop=(b,c=A.cookie)=>call('/api/workshop','POST',b,c);
+ await json(await call('/api/platform/entitlements','PUT',{module:'operations',status:'disabled'},A.cookie),200);
+ const wa=await json(await workshop({action:'asset',name:'QA Paver',number:'QA-01',category:'Paver',registration:'TEST'}),200);
+ const wo=await json(await workshop({action:'defect',assetId:wa.id,title:'Critical brake fault',severity:'critical',note:'Synthetic inspection evidence'}),200);
+ await json(await workshop({action:'meter',assetId:wa.id,meterType:'hours',reading:100,nextService:90,note:'Inspection reading'}),200);
+ await json(await workshop({action:'meter',assetId:wa.id,meterType:'hours',reading:99,nextService:200,note:'Backwards reading'}),409);
+ await json(await workshop({action:'meter',assetId:wa.id,meterType:'hours',reading:110,nextService:200,note:'Foreign reading'},B.cookie),404);
+ await json(await call('/api/platform/entitlements','PUT',{module:'operations',status:'active'},A.cookie),200);
+ // Simulate a legacy availability edit: the separate safety hold must still block allocation.
+ await db.execute("UPDATE plant SET status='Available' WHERE organisation_id=? AND id=?",[memberA.organisation_id,wa.id]);
+ const held=await json(await call('/api/delivery','POST',{kind:'shifts',check:true,record:{id:'',name:'Safety check',status:'Planned',metadata:{date:'2026-10-01',start:'07:00',finish:'17:00',assignments:[{category:'plant',resourceId:wa.id}]}},candidates:[]},A.cookie),200);assert(held.conflicts.some(c=>c.code==='RESOURCE_UNAVAILABLE'),'workshop hold overrides ordinary availability');
+ await json(await call('/api/platform/entitlements','PUT',{module:'operations',status:'disabled'},A.cookie),200);
+ await json(await workshop({action:'defect',assetId:wa.id,title:'Foreign defect',severity:'minor',note:'foreign'},B.cookie),404);
+ let wview=await json(await call('/api/workshop','GET',undefined,A.cookie),200);assert.equal(wview.assets.find(a=>a.id===wa.id).status,'Out of service');
+ const foreign=await json(await call('/api/workshop','GET',undefined,B.cookie),200);assert(!foreign.orders.some(o=>o.id===wo.id));
+ const wo2=await json(await workshop({action:'defect',assetId:wa.id,title:'Second critical fault',severity:'critical',note:'Independent second fault'}),200);
+ await json(await workshop({action:'repair',id:wo.id,revision:1,note:'Replaced brake assembly',labourHours:2,parts:'Brake assembly'}),200);
+ await json(await workshop({action:'verify',id:wo.id,revision:2,note:'Self verification',accepted:true}),403);
+ await json(await workshop({action:'verify',id:wo.id,revision:2,note:'Independent functional inspection passed',accepted:true},W.cookie),200);
+ wview=await json(await call('/api/workshop','GET',undefined,A.cookie),200);assert.equal(wview.assets.find(a=>a.id===wa.id).status,'Out of service','another critical defect keeps hold');
+ await json(await workshop({action:'repair',id:wo2.id,revision:1,note:'Second fault repaired',labourHours:1,parts:''}),200);
+ await json(await workshop({action:'verify',id:wo2.id,revision:2,note:'Second independent inspection',accepted:true},W.cookie),200);
+ wview=await json(await call('/api/workshop','GET',undefined,A.cookie),200);assert.equal(wview.assets.find(a=>a.id===wa.id).status,'Available');assert.equal(wview.entries.filter(e=>e.order_id===wo.id).length,3);
+ await json(await workshop({action:'repair',id:wo.id,revision:1,note:'stale',labourHours:0,parts:''}),409);
+ await json(await call('/api/platform/entitlements','PUT',{module:'workshop',status:'read_only'},A.cookie),200);
+ await json(await workshop({action:'asset',name:'Denied',number:'',category:'',registration:''}),403);
+ await json(await call('/api/workshop','GET',undefined,A.cookie),200);
+ await json(await call('/api/platform/entitlements','PUT',{module:'workshop',status:'active'},A.cookie),200);
+ await json(await call('/api/platform/entitlements','PUT',{module:'operations',status:'active'},A.cookie),200);
+ console.log('PASS Workshop: standalone asset/defect/repair/independent verification, immutable history, tenant denial, stale update and read-only refusal');
  // ---------------------------------------------------------------- Scenario B
  step='B win work';
  const upload=async(cookie,fields,name='evidence.pdf',content='%PDF-1.4 fixture')=>{const f=new FormData();for(const [k,v] of Object.entries(fields))f.set(k,v);f.set('file',new File([content],name,{type:'application/pdf'}));return call('/api/documents','POST',f,cookie);};
@@ -114,7 +147,7 @@ try{
  assert.equal(sameClient.client.id,riverside.id);assert.equal(sameClient.existing,true,'exact name returns the existing client');
  await json(await reg('clients',A.cookie).create(null,{name:'Riverside Council'}),409,'register refuses a duplicate client name');
  assert((await json(await call('/api/search?q=riverside%20council','GET',undefined,A.cookie),200)).results.some(r=>r.type==='Client'&&r.id===riverside.id),'global search is case-insensitive on legacy tables');
- const listed=(await json(await call('/api/platform/clients?q=river','GET',undefined,A.cookie),200)).clients;assert(listed.some(c=>c.id===riverside.id),'client search by partial name');
+ const clientMatches=(await json(await call('/api/platform/clients?q=river','GET',undefined,A.cookie),200)).clients;assert(clientMatches.some(c=>c.id===riverside.id),'client search by partial name');
  assert(!(await json(await call('/api/platform/clients?q=river','GET',undefined,B.cookie),200)).clients.some(c=>c.id===riverside.id),'clients stay in their organisation');
  await json(await clientsApi({action:'createSite',site:{clientId:riverside.id,address:'Foreign site'}},B.cookie),400,'foreign client cannot receive sites');
  await json(await call('/api/projects','POST',{name:'Foreign use',clientId:riverside.id},B.cookie),400,'foreign client id refused');
@@ -178,6 +211,29 @@ try{
  await json(await reg('clarifications',A.cookie).move(clar.id,'responded'),200);
  const award=await json(await call('/api/tenders/workspace','POST',{action:'award',id:tenderId},A.cookie),200);
  assert.equal(award.projectCreated,true);const projectId=award.jobId;
+ const activity={projectId,name:'Excavation',startDate:'2026-10-01',durationDays:3,predecessorId:null,responsible:'QA lead',workPackage:'Drainage',resourceRequirement:'Excavator',plannedQuantity:120,quantityUnit:'m',productionPerDay:40,status:'planned'};
+ const pa=await json(await call('/api/projects/program','POST',activity,A.cookie),200);
+ const pb=await json(await call('/api/projects/program','POST',{...activity,name:'Pipework',predecessorId:pa.id},A.cookie),200);
+ const program=await json(await call('/api/projects/program?projectId='+projectId,'GET',undefined,A.cookie),200);assert.equal(program.activities.find(a=>a.id===pb.id).start,'2026-10-04');
+ await json(await call('/api/projects/program','POST',{...activity,id:pa.id,revision:1,predecessorId:pb.id},A.cookie),400,'dependency cycle refused');
+ await json(await call('/api/projects/program','POST',{...activity,id:pa.id,revision:99},A.cookie),409,'stale activity refused');
+ await json(await call('/api/projects/program?projectId='+projectId,'GET',undefined,B.cookie),404,'foreign programme hidden');
+ await json(await call('/api/projects/program','POST',{...activity,id:pa.id,revision:1},B.cookie),404,'foreign programme write refused');
+ console.log('PASS programme dependency projection, cycle refusal, stale revision and tenant isolation');
+ // Quick programme edits: order, inline change, duplicate — same graph, revision and tenant rules.
+ const listed=async()=>(await json(await call('/api/projects/program?projectId='+projectId,'GET',undefined,A.cookie),200)).activities;
+ let acts=await listed();assert.deepEqual(acts.map(a=>a.id),[pa.id,pb.id],'new activities keep entry order');
+ await json(await call('/api/projects/program','PATCH',{action:'reorder',projectId,ids:[pb.id,pa.id]},A.cookie),200);
+ acts=await listed();assert.deepEqual(acts.map(a=>a.id),[pb.id,pa.id],'reordered');
+ await json(await call('/api/projects/program','PATCH',{action:'reorder',projectId,ids:[pa.id]},A.cookie),409,'partial reorder refused');
+ await json(await call('/api/projects/program','PATCH',{action:'reorder',projectId,ids:[pa.id,pb.id]},B.cookie),404,'foreign reorder refused');
+ const a1=acts.find(a=>a.id===pa.id);
+ await json(await call('/api/projects/program','PATCH',{action:'update',projectId,id:pa.id,revision:a1.revision,changes:{startDate:'2026-10-06',status:'in_progress'}},A.cookie),200);
+ await json(await call('/api/projects/program','PATCH',{action:'update',projectId,id:pa.id,revision:a1.revision,changes:{durationDays:2}},A.cookie),409,'stale inline edit refused');
+ acts=await listed();assert.equal(acts.find(a=>a.id===pa.id).start_date,'2026-10-06');assert.equal(acts.find(a=>a.id===pb.id).start,'2026-10-09','dependant moved by inline date change');
+ const dup=await json(await call('/api/projects/program','PATCH',{action:'duplicate',projectId,id:pb.id},A.cookie),200);
+ acts=await listed();assert.deepEqual(acts.map(a=>a.id),[pb.id,dup.id,pa.id],'duplicate sits after its source');assert.equal(acts[1].status,'planned');
+ console.log('PASS programme reorder, inline edit with dependency move, stale refusal, duplicate and tenant isolation');
  const again=await json(await call('/api/tenders/workspace','POST',{action:'award',id:tenderId},A.cookie),200);assert.equal(again.alreadyAwarded,true,'award is idempotent');
  const estSearch=await json(await call('/api/search?q=Riverside','GET',undefined,A.cookie),200);
  assert.equal(estSearch.results.find(r=>r.type==='Estimate')?.tenderId,tenderId,'search links an estimate to its tender so it opens in the tender workspace');
@@ -283,6 +339,10 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  let day=await json(await call('/api/field/today','GET',undefined,C.cookie),200);
  const mine=day.today.find(s=>s.id===shift.id);assert(mine,'field user sees assigned shift today');assert.equal(mine.swmsOutstanding,1);
  const fieldText=JSON.stringify(day);for(const k of ['"rate"','contractValue','approvedBudget','hourlyRate','sellPrice'])assert(!fieldText.includes(k),'field Today leaked '+k);
+ const demand={id:'',name:'Requirement shortage test',status:'Draft',metadata:{jobId:projectId,date:today,start:'19:00',finish:'20:00',assignments:[],requirements:[{category:'plant',role:'Paver',quantity:1}]}};
+ const demandSaved=(await json(await call('/api/delivery','POST',{kind:'shifts',record:demand},A.cookie),201)).record;
+ const shortage=await json(await call('/api/delivery','POST',{kind:'shifts',record:{...demandSaved,status:'Planned'}},A.cookie),409);assert(shortage.conflicts.some(c=>c.code==='REQUIREMENT_SHORTAGE'));
+ const [[demandCount]]=await db.execute('SELECT COUNT(*) n FROM shift_requirements WHERE organisation_id=? AND shift_id=?',[memberA.organisation_id,demandSaved.id]);assert.equal(Number(demandCount.n),1);
  const ack=await json(await call('/api/hseq/swms','POST',{action:'acknowledge',id:sw.swmsId,shiftId:shift.id},C.cookie),200);assert.equal(ack.acknowledged,true);
  const ack2=await json(await call('/api/hseq/swms','POST',{action:'acknowledge',id:sw.swmsId,shiftId:shift.id},C.cookie),200);assert.equal(ack2.alreadyAcknowledged,true,'acknowledgement is idempotent');
  day=await json(await call('/api/field/today','GET',undefined,C.cookie),200);assert.equal(day.today.find(s=>s.id===shift.id).swmsOutstanding,0);
@@ -469,6 +529,38 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const orgAudit=await json(await call('/api/platform/audit','GET',undefined,A.cookie),200);
  for(const e of ['estimate.approved','tender.submitted','tender.awarded','entitlement.changed','organisation.onboarding.completed'])assert(orgAudit.events.some(x=>x.event_type===e),'audit missing '+e);
  console.log('PASS entitlements (read-only, disabled 404, nav flag, data retained), closeout gate, closed-project write refusal, reopen with reason, audit trail');
+
+ // Modular foundation: journal visibility and standalone Core summaries.
+ step='modular foundation';
+ const events=await json(await call('/api/platform/events','GET',undefined,A.cookie),200);
+ assert(events.events.some(e=>e.event_type==='project.awarded'&&e.entity_id===projectId));
+ assert(events.events.some(e=>e.event_type==='docket.approved'));
+ const foreignEvents=await json(await call('/api/platform/events?organisationId='+memberA.organisation_id,'GET',undefined,B.cookie),200);
+ assert(!foreignEvents.events.some(e=>events.events.some(a=>a.id===e.id)),'query tenant ID cannot change event ownership');
+ await json(await call('/api/platform/events?limit=0','GET',undefined,A.cookie),400);
+ await json(await call('/api/platform/events?type=unknown','GET',undefined,A.cookie),404);
+ const [[eventCount]]=await db.execute('SELECT COUNT(*) AS n FROM domain_events WHERE organisation_id=?',[memberA.organisation_id]);
+ const [[existingEvent]]=await db.execute('SELECT * FROM domain_events WHERE organisation_id=? LIMIT 1',[memberA.organisation_id]);
+ await db.execute('INSERT INTO domain_events (id,organisation_id,event_type,event_version,module,entity_type,entity_id,occurrence_id,actor_user_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id',[crypto.randomUUID(),existingEvent.organisation_id,existingEvent.event_type,1,existingEvent.module,existingEvent.entity_type,existingEvent.entity_id,existingEvent.occurrence_id,existingEvent.actor_user_id,existingEvent.created_at]);
+ const [[dedup]]=await db.execute('SELECT COUNT(*) AS n FROM domain_events WHERE organisation_id=?',[memberA.organisation_id]);assert.equal(dedup.n,eventCount.n,'same occurrence is idempotent');
+ await db.beginTransaction();
+ await db.execute('INSERT INTO domain_events SELECT ?,organisation_id,event_type,event_version,module,entity_type,entity_id,?,actor_user_id,created_at FROM domain_events WHERE id=?',[crypto.randomUUID(),crypto.randomUUID(),existingEvent.id]);
+ await db.rollback();
+ const [[rolledBack]]=await db.execute('SELECT COUNT(*) AS n FROM domain_events WHERE organisation_id=?',[memberA.organisation_id]);assert.equal(rolledBack.n,eventCount.n,'event rollback retains source atomicity');
+ const [savedEntitlements]=await db.execute('SELECT module,status FROM organisation_entitlements WHERE organisation_id=?',[memberA.organisation_id]);
+ for(const standalone of ['operations','ims']){
+  await db.execute("UPDATE organisation_entitlements SET status=CASE WHEN module IN ('core',?) THEN 'active' ELSE 'disabled' END WHERE organisation_id=?",[standalone,memberA.organisation_id]);
+  const overview=await json(await call('/api/platform/overview','GET',undefined,A.cookie),200,'standalone summary without Reports');
+  assert(overview[standalone==='ims'?'hseq':'operations']);
+  if(standalone==='operations'){const delivery=await json(await call('/api/delivery','GET',undefined,A.cookie),200);assert(!/"(rate|hourlyRate|approvedBudget|contractValue|materialCost)"/.test(JSON.stringify(delivery)),'Operations-only admin sees no commercial data');}
+  for(const key of ['pipeline','projects','commercial','learn','dockets'])assert.equal(overview[key],undefined);
+  await json(await call('/api/reports/v1','GET',undefined,A.cookie),404);
+  const hiddenEvents=await json(await call('/api/platform/events','GET',undefined,A.cookie),200);assert.equal(hiddenEvents.events.length,0);
+ }
+ for(const e of savedEntitlements)await db.execute('UPDATE organisation_entitlements SET status=? WHERE organisation_id=? AND module=?',[e.status,memberA.organisation_id,e.module]);
+ const restored=await json(await call('/api/platform/events','GET',undefined,A.cookie),200);assert.equal(restored.events.length,events.events.length,'reenabling modules restores historical journal visibility');
+ console.log('PASS modularity: Operations/IMS standalone summaries, Reports independence, event tenant isolation, pagination validation, idempotency, rollback and retained history');
+
 
  // ---------------------------------------------------------------- Scenario R: role matrix (one member, role changed between checks)
  step='R roles';

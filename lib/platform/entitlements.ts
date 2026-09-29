@@ -4,6 +4,8 @@
 import type {PoolConnection} from 'mysql2/promise';
 import {actorContext} from './context';
 import {database} from './database';
+import {can} from './permissions';
+import {MODULE_SEAMS,type SeamKey} from './modules';
 import {MODULES,TRIAL_PLAN,usable,writable,type Entitlements,type EntitlementStatus,type ModuleKey} from './modules';
 export {usable,writable};
 const now=()=>new Date().toISOString();
@@ -17,6 +19,7 @@ export async function provisionTrial(organisationId:string,conn?:PoolConnection)
 
 export async function getEntitlements(organisationId:string):Promise<Entitlements>{
  const actor=actorContext.getStore();
+ if(actor&&actor.organisationId!==organisationId)throw new ModuleUnavailable(404,'Not found.');
  if(actor?.organisationId===organisationId&&actor.entitlements)return actor.entitlements;
  let rows=(await database.prepare('SELECT module,status,valid_until FROM organisation_entitlements WHERE organisation_id=?').bind(organisationId).all<{module:string;status:EntitlementStatus;valid_until:string|null}>()).results;
  if(!rows.length){
@@ -35,6 +38,10 @@ export async function getEntitlements(organisationId:string):Promise<Entitlement
 
 /** Downgrades never delete data. Records created while entitled stay readable/exportable. */
 export async function setEntitlement(organisationId:string,module:ModuleKey,status:EntitlementStatus,source='manual'){
+ const current=actorContext.getStore();
+ if(!current)throw new ModuleUnavailable(401,'Sign in required.');
+ if(current.organisationId!==organisationId)throw new ModuleUnavailable(404,'Not found.');
+ if(!can(current.role,'entitlements.manage'))throw new ModuleUnavailable(403,'You are not authorised for this action.');
  if(module==='core')throw Object.assign(new Error('Core cannot be changed.'),{status:400});
  const before=(await getEntitlements(organisationId))[module];
  const t=now(),actor=actorContext.getStore();
@@ -56,3 +63,11 @@ export async function requireModule(module:ModuleKey,write=false){
 }
 /** A seam fires only when every participating module is fully entitled. */
 export async function seamEnabled(organisationId:string,...modules:ModuleKey[]){const e=await getEntitlements(organisationId);return modules.every(m=>writable(e,m));}
+/** Named synchronous seams preserve the initiating action's capability and tenant. */
+export async function requireSeam(key:SeamKey){
+ const actor=actorContext.getStore();
+ if(!actor)throw new ModuleUnavailable(401,'Sign in required.');
+ const seam=MODULE_SEAMS[key];
+ if(!can(actor.role,seam.capability))throw new ModuleUnavailable(403,'You are not authorised for this action.');
+ return seamEnabled(actor.organisationId,...seam.modules);
+}

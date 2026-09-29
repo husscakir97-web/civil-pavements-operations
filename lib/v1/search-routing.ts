@@ -11,7 +11,7 @@ export function searchTarget(r:SearchResult,role:string):Target{
   case 'Project':return ['Projects',undefined,r.id];
   case 'Variation':case 'Claim':case 'Invoice':if(r.projectId)return project('commercial');break;
   case 'SWMS':if(r.projectId)return project('quality');break;
-  case 'Document':if(r.projectId)return project('documents');break;
+  case 'Document':if(r.projectId)return project('documents');return ['Documents','All Documents',r.name||r.id];
   case 'Docket':if(r.projectId)return project('delivery');break;
   case 'Shift':if(r.projectId&&role!=='field')return ['Operations','Schedule',r.projectId];break;
   // Registers without a detail page open filtered to the record (the route id carries the search text).

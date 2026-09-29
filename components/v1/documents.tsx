@@ -24,7 +24,7 @@ export function DocumentsWorkspace({initialQuery}:{initialQuery?:string}){
  };
  const rows=docs.data?.documents||[];
  return <div className="grid gap-4">
-  <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-2xl font-bold">All documents</h2><p className="mt-1 text-sm text-slate-500">Search files across the workspaces you are authorised to see. Project scope and module permissions are enforced on the server.</p></div>{session.can('document.upload')&&<Btn onClick={()=>setShowUpload(v=>!v)}><Upload aria-hidden className="size-4"/>Upload company file</Btn>}</div>
+  <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-2xl font-bold">All documents</h2><p className="mt-1 text-sm text-slate-500">Search files across the workspaces you are authorised to see. Project scope and module permissions are enforced on the server.</p></div>{session.can('library.edit')&&<Btn onClick={()=>setShowUpload(v=>!v)}><Upload aria-hidden className="size-4"/>Upload company file</Btn>}</div>
   {showUpload&&<CompanyUpload onDone={()=>{setShowUpload(false);docs.refresh();}}/>}
   <div className="grid gap-2 rounded-xl border bg-white p-3 lg:grid-cols-[minmax(260px,1fr)_220px_200px_auto] lg:items-end">
    <Field label="Search"><div className="relative"><Search aria-hidden className="pointer-events-none absolute left-3 top-3 size-4 text-slate-400"/><input className={`${field} pl-9`} type="search" placeholder="Title, file name, category…" value={typed} onChange={e=>setTyped(e.target.value)}/></div></Field>

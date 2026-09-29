@@ -7,6 +7,9 @@ import {requireModule} from './entitlements';
 import type {ModuleKey} from './modules';
 
 export const DOMAIN_EVENTS={
+ 'workshop.defect.created':{module:'workshop',publish:'workshop.edit',read:'workshop.view',entity:'work_order'},
+ 'workshop.repair.recorded':{module:'workshop',publish:'workshop.edit',read:'workshop.view',entity:'work_order'},
+ 'workshop.verified':{module:'workshop',publish:'workshop.verify',read:'workshop.view',entity:'work_order'},
  'project.awarded':{module:'projects',publish:'tender.award',read:'project.view',entity:'project'},
  'docket.approved':{module:'dockets',publish:'docket.approve',read:'docket.approve',entity:'docket'},
 } as const satisfies Record<string,{module:ModuleKey;publish:Capability;read:Capability;entity:string}>;

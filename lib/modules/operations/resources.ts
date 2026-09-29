@@ -154,6 +154,7 @@ export async function savePlant(id:string|null,revision:number|null,raw:unknown)
   }else{
    const current=await one('SELECT * FROM plant WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,id],conn);
    if(!current)fail(404,'Plant item not found.');
+   if(Number(current.safety_hold)&&input.status!=='Out of service')fail(409,'Workshop safety hold: verify outstanding critical repairs before changing availability.');
    if(revision!=null&&Number(current!.revision)!==Number(revision))fail(409,'This plant item was changed by someone else. Refresh to see the latest version.');
    const meta={...parseMeta(current!.metadata),...mirror};
    await exec(`UPDATE plant SET name=?,status=?,metadata=?,${Object.keys(cols).map(c=>`${c}=?`).join(',')},revision=revision+1,updated_at=?,legacy_synced_at=? WHERE organisation_id=? AND id=?`,[input.name,input.status,JSON.stringify(meta),...Object.values(cols),now,now,a.organisationId,id],conn);

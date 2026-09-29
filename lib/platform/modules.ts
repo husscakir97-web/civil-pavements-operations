@@ -1,12 +1,12 @@
 import type {Capability} from './permissions';
 // Stable entitlement keys are a compatibility contract, including the legacy Field surface.
-export const MODULES=['core','pipeline','estimating','projects','ims','operations','field','dockets','commercial','reports','ai'] as const;
+export const MODULES=['core','pipeline','estimating','projects','ims','operations','field','dockets','commercial','reports','ai','workshop'] as const;
 export type ModuleKey=typeof MODULES[number];
 export type EntitlementStatus='active'|'read_only'|'disabled';
 export type Entitlements=Record<ModuleKey,EntitlementStatus>;
 
 export const MODULE_LABELS:Record<ModuleKey,string>={
- core:'Core platform',pipeline:'Pipeline & tendering',estimating:'Estimating',projects:'Projects',
+ workshop:'Workshop & fleet',core:'Core platform',pipeline:'Pipeline & tendering',estimating:'Estimating',projects:'Projects',
  ims:'IMS & HSEQ',operations:'Operations & scheduling',field:'Field',dockets:'Dockets',
  commercial:'Commercial',reports:'Reports',ai:'AI assistance',
 };
@@ -34,6 +34,7 @@ const contract=(key:ModuleKey,ownedEntities:string[],workspace:ModuleContract['w
 });
 /** Implemented modules only. Future products must not be provisioned or advertised as usable. */
 export const MODULE_REGISTRY:Record<ModuleKey,ModuleContract>={
+ workshop:contract('workshop',['workshop_orders','workshop_entries'],{area:'Resource Work',sub:'Workshop'},['workshop.view','workshop.edit','workshop.verify'],{publishedEvents:['workshop.defect.created','workshop.repair.recorded','workshop.verified']}),
  core:contract('core',['organisations','users','documents','knowledge_packs','audit_log','domain_events'],{area:'Home'},['org.admin','knowledge.view'],{kind:'core',coreDependencies:[]}),
  pipeline:contract('pipeline',['opportunities','tenders','tender_requirements'],{area:'Win Work',sub:'Tenders'},['pipeline.view','pipeline.edit','tender.award'],{optionalSeams:['award.project'],reporting:['pipeline']}),
  estimating:contract('estimating',['estimates','estimate_revisions'],{area:'Win Work',sub:'Estimates'},['estimate.edit','estimate.approve'],{optionalSeams:['award.project']}),

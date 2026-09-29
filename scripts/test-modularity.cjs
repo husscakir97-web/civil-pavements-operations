@@ -18,7 +18,8 @@ const before=only('operations'),after={...before,ims:'active'};
 assert.equal(nav.enginesFor(access(after)).length,2);assert.equal(before.ims,'disabled');
 assert(!nav.workspacesFor('Prepare Work',access(only('ims'))).some(w=>w.module==='projects'));
 for(const key of mod.MODULES){const c=mod.MODULE_REGISTRY[key];assert.equal(c.key,key);assert.equal(c.entitlement,key);assert(c.workspace);for(const seam of c.optionalSeams)assert(mod.MODULE_SEAMS[seam]);}
-assert(!mod.MODULES.includes('workshop'),'unbuilt products must not receive a trial grant');
+assert.deepEqual(nav.enginesFor(access(only('workshop'))).map(e=>e.key),['Resource Work']);
+assert.equal(nav.workspacesFor('Resource Work',access(only('workshop')))[0].sub,'Workshop');
 for(const [key,event] of Object.entries(ev.DOMAIN_EVENTS))assert(mod.MODULE_REGISTRY[event.module].publishedEvents.includes(key));
 (async()=>{
  await assert.rejects(()=>ev.domainEventStatement('project.awarded','p1','r1'),/Sign in/);

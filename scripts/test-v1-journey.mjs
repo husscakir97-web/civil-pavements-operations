@@ -59,7 +59,7 @@ try{
  assert.equal(ws.role,'admin');assert.equal(ws.onboarding.completed,false);assert(Object.values(ws.entitlements).every(s=>s==='active'),'beta trial grants every module');
  const [[memberA]]=await db.execute('SELECT organisation_id FROM users WHERE id=?',[A.user.id]),[[memberB]]=await db.execute('SELECT organisation_id FROM users WHERE id=?',[B.user.id]);
  assert.notEqual(memberA.organisation_id,memberB.organisation_id,'independent signups create separate organisations');
- const [[entCount]]=await db.execute('SELECT COUNT(*) AS n FROM organisation_entitlements WHERE organisation_id=?',[memberA.organisation_id]);assert.equal(Number(entCount.n),11);
+ const [[entCount]]=await db.execute('SELECT COUNT(*) AS n FROM organisation_entitlements WHERE organisation_id=?',[memberA.organisation_id]);assert.equal(Number(entCount.n),12);
  await json(await call('/api/platform/onboarding','PUT',{abn:'12 345 678 901'},A.cookie),400,'invalid ABN rejected');
  await json(await call('/api/platform/onboarding','PUT',{complete:true},A.cookie),422,'legal name required to finish');
  let profile=(await json(await call('/api/platform/onboarding','PUT',{legal_name:'Alpha Civil Pty Ltd',trading_name:'Alpha Civil',abn:'51 824 753 556',business_activities:['Civil construction','Drainage'],operating_regions:['NSW'],workforce_size:'21–50',onboarding_step:4,complete:true},A.cookie),200)).profile;
@@ -92,6 +92,39 @@ try{
  assert.equal(sharedA.summary.failed,1);assert.equal(sharedB.summary.failed,1);assert.equal(sharedB.results[0].source.origin,'platform');assert.equal(sharedB.results[0].source.referenceCode,'PLATFORM-TEST');
  console.log('PASS knowledge: controlled source + pack + rule lifecycle, deterministic checks, provenance, tenant isolation and shared read-only platform knowledge');
 
+
+ step='Workshop standalone and isolation';
+ const W=await signup('workshop-verifier');await db.execute("UPDATE users SET organisation_id=?,role='office' WHERE id=?",[memberA.organisation_id,W.user.id]);
+ const workshop=(b,c=A.cookie)=>call('/api/workshop','POST',b,c);
+ await json(await call('/api/platform/entitlements','PUT',{module:'operations',status:'disabled'},A.cookie),200);
+ const wa=await json(await workshop({action:'asset',name:'QA Paver',number:'QA-01',category:'Paver',registration:'TEST'}),200);
+ const wo=await json(await workshop({action:'defect',assetId:wa.id,title:'Critical brake fault',severity:'critical',note:'Synthetic inspection evidence'}),200);
+ await json(await workshop({action:'meter',assetId:wa.id,meterType:'hours',reading:100,nextService:90,note:'Inspection reading'}),200);
+ await json(await workshop({action:'meter',assetId:wa.id,meterType:'hours',reading:99,nextService:200,note:'Backwards reading'}),409);
+ await json(await workshop({action:'meter',assetId:wa.id,meterType:'hours',reading:110,nextService:200,note:'Foreign reading'},B.cookie),404);
+ await json(await call('/api/platform/entitlements','PUT',{module:'operations',status:'active'},A.cookie),200);
+ // Simulate a legacy availability edit: the separate safety hold must still block allocation.
+ await db.execute("UPDATE plant SET status='Available' WHERE organisation_id=? AND id=?",[memberA.organisation_id,wa.id]);
+ const held=await json(await call('/api/delivery','POST',{kind:'shifts',check:true,record:{id:'',name:'Safety check',status:'Planned',metadata:{date:'2026-10-01',start:'07:00',finish:'17:00',assignments:[{category:'plant',resourceId:wa.id}]}},candidates:[]},A.cookie),200);assert(held.conflicts.some(c=>c.code==='RESOURCE_UNAVAILABLE'),'workshop hold overrides ordinary availability');
+ await json(await call('/api/platform/entitlements','PUT',{module:'operations',status:'disabled'},A.cookie),200);
+ await json(await workshop({action:'defect',assetId:wa.id,title:'Foreign defect',severity:'minor',note:'foreign'},B.cookie),404);
+ let wview=await json(await call('/api/workshop','GET',undefined,A.cookie),200);assert.equal(wview.assets.find(a=>a.id===wa.id).status,'Out of service');
+ const foreign=await json(await call('/api/workshop','GET',undefined,B.cookie),200);assert(!foreign.orders.some(o=>o.id===wo.id));
+ const wo2=await json(await workshop({action:'defect',assetId:wa.id,title:'Second critical fault',severity:'critical',note:'Independent second fault'}),200);
+ await json(await workshop({action:'repair',id:wo.id,revision:1,note:'Replaced brake assembly',labourHours:2,parts:'Brake assembly'}),200);
+ await json(await workshop({action:'verify',id:wo.id,revision:2,note:'Self verification',accepted:true}),403);
+ await json(await workshop({action:'verify',id:wo.id,revision:2,note:'Independent functional inspection passed',accepted:true},W.cookie),200);
+ wview=await json(await call('/api/workshop','GET',undefined,A.cookie),200);assert.equal(wview.assets.find(a=>a.id===wa.id).status,'Out of service','another critical defect keeps hold');
+ await json(await workshop({action:'repair',id:wo2.id,revision:1,note:'Second fault repaired',labourHours:1,parts:''}),200);
+ await json(await workshop({action:'verify',id:wo2.id,revision:2,note:'Second independent inspection',accepted:true},W.cookie),200);
+ wview=await json(await call('/api/workshop','GET',undefined,A.cookie),200);assert.equal(wview.assets.find(a=>a.id===wa.id).status,'Available');assert.equal(wview.entries.filter(e=>e.order_id===wo.id).length,3);
+ await json(await workshop({action:'repair',id:wo.id,revision:1,note:'stale',labourHours:0,parts:''}),409);
+ await json(await call('/api/platform/entitlements','PUT',{module:'workshop',status:'read_only'},A.cookie),200);
+ await json(await workshop({action:'asset',name:'Denied',number:'',category:'',registration:''}),403);
+ await json(await call('/api/workshop','GET',undefined,A.cookie),200);
+ await json(await call('/api/platform/entitlements','PUT',{module:'workshop',status:'active'},A.cookie),200);
+ await json(await call('/api/platform/entitlements','PUT',{module:'operations',status:'active'},A.cookie),200);
+ console.log('PASS Workshop: standalone asset/defect/repair/independent verification, immutable history, tenant denial, stale update and read-only refusal');
  // ---------------------------------------------------------------- Scenario B
  step='B win work';
  const upload=async(cookie,fields,name='evidence.pdf',content='%PDF-1.4 fixture')=>{const f=new FormData();for(const [k,v] of Object.entries(fields))f.set(k,v);f.set('file',new File([content],name,{type:'application/pdf'}));return call('/api/documents','POST',f,cookie);};
@@ -148,6 +181,15 @@ try{
  await json(await reg('clarifications',A.cookie).move(clar.id,'responded'),200);
  const award=await json(await call('/api/tenders/workspace','POST',{action:'award',id:tenderId},A.cookie),200);
  assert.equal(award.projectCreated,true);const projectId=award.jobId;
+ const activity={projectId,name:'Excavation',startDate:'2026-10-01',durationDays:3,predecessorId:null,responsible:'QA lead',workPackage:'Drainage',resourceRequirement:'Excavator',plannedQuantity:120,quantityUnit:'m',productionPerDay:40,status:'planned'};
+ const pa=await json(await call('/api/projects/program','POST',activity,A.cookie),200);
+ const pb=await json(await call('/api/projects/program','POST',{...activity,name:'Pipework',predecessorId:pa.id},A.cookie),200);
+ const program=await json(await call('/api/projects/program?projectId='+projectId,'GET',undefined,A.cookie),200);assert.equal(program.activities.find(a=>a.id===pb.id).start,'2026-10-04');
+ await json(await call('/api/projects/program','POST',{...activity,id:pa.id,revision:1,predecessorId:pb.id},A.cookie),400,'dependency cycle refused');
+ await json(await call('/api/projects/program','POST',{...activity,id:pa.id,revision:99},A.cookie),409,'stale activity refused');
+ await json(await call('/api/projects/program?projectId='+projectId,'GET',undefined,B.cookie),404,'foreign programme hidden');
+ await json(await call('/api/projects/program','POST',{...activity,id:pa.id,revision:1},B.cookie),404,'foreign programme write refused');
+ console.log('PASS programme dependency projection, cycle refusal, stale revision and tenant isolation');
  const again=await json(await call('/api/tenders/workspace','POST',{action:'award',id:tenderId},A.cookie),200);assert.equal(again.alreadyAwarded,true,'award is idempotent');
  const estSearch=await json(await call('/api/search?q=Riverside','GET',undefined,A.cookie),200);
  assert.equal(estSearch.results.find(r=>r.type==='Estimate')?.tenderId,tenderId,'search links an estimate to its tender so it opens in the tender workspace');
@@ -248,6 +290,10 @@ try{
  let day=await json(await call('/api/field/today','GET',undefined,C.cookie),200);
  const mine=day.today.find(s=>s.id===shift.id);assert(mine,'field user sees assigned shift today');assert.equal(mine.swmsOutstanding,1);
  const fieldText=JSON.stringify(day);for(const k of ['"rate"','contractValue','approvedBudget','hourlyRate','sellPrice'])assert(!fieldText.includes(k),'field Today leaked '+k);
+ const demand={id:'',name:'Requirement shortage test',status:'Draft',metadata:{jobId:projectId,date:today,start:'19:00',finish:'20:00',assignments:[],requirements:[{category:'plant',role:'Paver',quantity:1}]}};
+ const demandSaved=(await json(await call('/api/delivery','POST',{kind:'shifts',record:demand},A.cookie),201)).record;
+ const shortage=await json(await call('/api/delivery','POST',{kind:'shifts',record:{...demandSaved,status:'Planned'}},A.cookie),409);assert(shortage.conflicts.some(c=>c.code==='REQUIREMENT_SHORTAGE'));
+ const [[demandCount]]=await db.execute('SELECT COUNT(*) n FROM shift_requirements WHERE organisation_id=? AND shift_id=?',[memberA.organisation_id,demandSaved.id]);assert.equal(Number(demandCount.n),1);
  const ack=await json(await call('/api/hseq/swms','POST',{action:'acknowledge',id:sw.swmsId,shiftId:shift.id},C.cookie),200);assert.equal(ack.acknowledged,true);
  const ack2=await json(await call('/api/hseq/swms','POST',{action:'acknowledge',id:sw.swmsId,shiftId:shift.id},C.cookie),200);assert.equal(ack2.alreadyAcknowledged,true,'acknowledgement is idempotent');
  day=await json(await call('/api/field/today','GET',undefined,C.cookie),200);assert.equal(day.today.find(s=>s.id===shift.id).swmsOutstanding,0);

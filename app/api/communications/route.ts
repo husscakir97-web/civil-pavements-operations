@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {api,body} from '@/lib/platform/http';
+import {api} from '@/lib/platform/http';
 import {isCommunicationContext,threadFeed,sendMessage,acknowledgeMessage} from '@/lib/platform/communications';
 export const dynamic='force-dynamic';
 const send=z.object({action:z.literal('send'),contextType:z.string(),contextId:z.string().min(1).max(191),body:z.string().trim().min(1).max(5000),recipientUserIds:z.array(z.string().max(191)).max(50).optional(),mentionedUserIds:z.array(z.string().max(191)).max(50).optional(),requiresAck:z.boolean().optional(),parentMessageId:z.string().max(191).nullable().optional()});

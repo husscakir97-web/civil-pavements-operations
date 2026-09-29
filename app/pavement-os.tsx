@@ -170,7 +170,7 @@ function WorkspaceShell() {
   else if (k === "Resources") content = sub === "Workshop" ? <Workshop /> : sub === "Crews" ? other(["crews"]) : sub === "Suppliers & Subcontractors" ? other(["suppliers", "subcontractors"]) : sub === "Depots" ? <DepotsArea /> : <ResourcesArea key={`${sub}-${route.id || ""}`} only initial={sub === "Plant & Equipment" ? "plant" : "workers"} initialQuery={route.id} />;
   else if (k === "Commercial") content = sub === "Dockets" ? <DocketDashboard /> : <CommercialArea />;
   else if (k === "IMS & HSEQ") content = <HseqArea />;
-  else if (k === "Documents") content = sub === "Company Library" ? <LibraryArea /> : <DocumentsWorkspace initialQuery={route.id} />;
+  else if (k === "Documents") content = sub === "Company Library" ? <LibraryArea /> : <DocumentsWorkspace key={route.id || "all-documents"} initialQuery={route.id} />;
   else if (k === "Reports") content = sub === "Lifecycle" ? <div className="grid gap-4"><div className="flex flex-wrap gap-2" role="group" aria-label="Lifecycle stage">{ENGINES.map(e => <button key={e.key} aria-pressed={engine === e.key} onClick={() => setEngine(e.key)} className={`rounded-lg border px-3 py-1.5 text-sm ${engine === e.key ? "border-slate-950 bg-slate-950 text-white" : "bg-white text-slate-600"}`}>{e.key}</button>)}</div><EngineOverview key={engine} engine={engine} /></div> : <ReportsV1 />;
   else if (k === "Admin") content = <AdminArea sub={sub || "Company"} onNavigate={() => {}} />;
 

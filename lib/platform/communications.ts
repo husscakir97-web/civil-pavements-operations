@@ -10,7 +10,7 @@ import {getEntitlements} from './entitlements';
 import {usable,writable,type ModuleKey} from './modules';
 import {fail} from './http';
 import {query,one,exec,tx,uuid,nowIso,type Conn,type Row} from './sql';
-import {canAccessProject,orgWideProjects,memberProjectIds} from './project-access';
+import {canAccessProject,orgWideProjects} from './project-access';
 import {shiftAudience,shiftVisible} from './shift-scope';
 import {sendEmail,isEmailEnabled} from './email';
 

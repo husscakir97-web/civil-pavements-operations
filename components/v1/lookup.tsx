@@ -1,7 +1,7 @@
 'use client';
 // CRM/resource pickers built on the shared generic Lookup control.
 import {useEffect,useMemo,useState,type ReactNode} from 'react';
-import {Plus,Search,Star} from 'lucide-react';
+import {Plus,Star} from 'lucide-react';
 import {api,field,useSession,humanStatus,Btn,Field,ErrorState,useAction} from './kit';
 import {useNav} from './nav';
 import {formatAbn} from '@/lib/platform/abn';

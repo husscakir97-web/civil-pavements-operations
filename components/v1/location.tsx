@@ -175,7 +175,7 @@ export function AddressLocationPicker({label='Address',value,onChange,mode='map'
  const admin=session.can('org.admin');
  if(readOnly)return <LocationSummary label={label} location={value} legacyText={legacyText}/>;
  return <div className="grid gap-2 text-sm">
-  {searching?<Lookup label={label} items={lookupItems} value={null} loading={loading} onQueryChange={setQuery} onChange={i=>void choose(i)} placeholder="Start typing an address…" emptyText={query.trim().length<3?'Type at least 3 characters.':'No matching addresses. Enter it by hand below.'} hint={hint}/>
+  {searching?<Lookup label={label} items={lookupItems} value={null} loading={loading} initialQuery={initialQuery} onQueryChange={setQuery} onChange={i=>void choose(i)} placeholder="Start typing an address…" emptyText={query.trim().length<3?'Type at least 3 characters.':'No matching addresses. Enter it by hand below.'} hint={hint}/>
    :<span className="font-medium text-slate-700">{label}</span>}
   {config&&config.mode==='none'&&admin&&<p className="text-xs text-slate-500">Address search and maps are not configured for this organisation. Addresses can be entered by hand.</p>}
   {failed&&<p className="text-xs text-amber-800">Maps could not be loaded. Enter the address by hand; coordinates are optional.</p>}

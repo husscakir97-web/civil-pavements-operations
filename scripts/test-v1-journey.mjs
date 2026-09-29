@@ -621,6 +621,9 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  // Documents follow the record they belong to: tender pricing never reaches scheduling roles.
  await as('admin');
  const pricing=(await json(await upload(A.cookie,{contextType:'tender',contextId:tenderId,category:'Pricing',title:'Priced schedule'}),201)).document;
+ const fieldTrap=(await json(await upload(A.cookie,{contextType:'tender',contextId:tenderId,category:'Pricing',title:'Tender field-visible trap',visibility:'field'}),201)).document;
+ assert.equal((await call('/api/documents?id='+fieldTrap.id,'GET',undefined,C.cookie)).status,404,'field-visible flag cannot expose tender documents to Field Worker');
+ assert(!(await json(await call('/api/search?q=Tender%20field-visible%20trap','GET',undefined,C.cookie),200)).results.some(r=>r.id===fieldTrap.id),'Field Worker search cannot find field-visible tender documents');
  await as('scheduler');
  assert.equal((await call('/api/documents?id='+pricing.id,'GET',undefined,R.cookie)).status,403,'scheduler cannot open tender documents');
  const schedDocs=await json(await call('/api/documents?contextType=tender&contextId='+tenderId,'GET',undefined,R.cookie),200);assert.equal(schedDocs.documents.length,0,'nor list them');

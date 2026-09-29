@@ -165,6 +165,7 @@ export async function markNotification(id:string|null){
 }
 export async function saveNotificationPreferences(p:{email:boolean;sms:boolean;quietStart:string|null;quietEnd:string|null;timezone:string}){
  const a=actorContext.getStore()!,id=uuid(),now=nowIso();
+ try{new Intl.DateTimeFormat('en-AU',{timeZone:p.timezone}).format(new Date());}catch{fail(400,'Choose a valid timezone.');}
  // SMS is stored as preference only until a provider is configured; no number is exposed to advertisers/providers.
  await exec('INSERT INTO notification_preferences (id,organisation_id,user_id,in_app,email,sms,quiet_start,quiet_end,timezone,updated_at) VALUES (?,?,?,1,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE email=VALUES(email),sms=VALUES(sms),quiet_start=VALUES(quiet_start),quiet_end=VALUES(quiet_end),timezone=VALUES(timezone),updated_at=VALUES(updated_at)',[id,a.organisationId,a.userId,p.email?1:0,p.sms?1:0,p.quietStart,p.quietEnd,trim(p.timezone,80)||'Australia/Sydney',now]);
  return notificationsFeed();

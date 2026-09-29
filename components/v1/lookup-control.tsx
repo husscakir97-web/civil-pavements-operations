@@ -7,17 +7,19 @@ import {filterLookup,type LookupValue} from '@/lib/v1/lookup';
 
 export type LookupItem={id:string;label:string;detail?:string|null;badge?:ReactNode;search?:LookupValue[];ids?:LookupValue[]};
 
-export function Lookup({label,items,value,onChange,placeholder,disabled,loading,createLabel,onCreate,emptyText,allowClear=true,hint,onQueryChange,selectedItem,heading}:{
+export function Lookup({label,items,value,onChange,placeholder,disabled,loading,createLabel,onCreate,emptyText,allowClear=true,hint,onQueryChange,selectedItem,heading,initialQuery=''}:{
  label:string;items:LookupItem[];value:string|null|undefined;onChange:(item:LookupItem|null)=>void;placeholder?:string;disabled?:boolean;loading?:boolean;
  onQueryChange?:(query:string)=>void;
  selectedItem?:LookupItem|null;
  heading?:string;
+ /** Seeds the text box when a higher-level quick-create flow hands off what the user already typed. */
+ initialQuery?:string;
  createLabel?:(query:string)=>string;onCreate?:(query:string)=>Promise<LookupItem|null|void>;
  emptyText?:string;allowClear?:boolean;hint?:ReactNode;
 }){
  const id=useId(),listId=`${id}-list`;
  const selected=items.find(i=>i.id===value)||(selectedItem&&selectedItem.id===value?selectedItem:null);
- const [query,setQuery]=useState(''),[open,setOpen]=useState(false),[active,setActive]=useState(0),[creating,setCreating]=useState(false),[error,setError]=useState('');
+ const [query,setQuery]=useState(initialQuery),[open,setOpen]=useState(false),[active,setActive]=useState(0),[creating,setCreating]=useState(false),[error,setError]=useState('');
  const box=useRef<HTMLDivElement>(null);
  const results=useMemo(()=>filterLookup(items,query,i=>i.search??[i.label,i.detail],i=>i.ids??[],i=>i.label).slice(0,50),[items,query]);
  const canCreate=Boolean(onCreate&&query.trim());

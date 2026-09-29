@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import {createServer as httpServer} from 'node:http';
 import {spawn} from 'node:child_process';
+import {createHash as sha} from 'node:crypto';
 import {connect} from './mysql-config.mjs';
 if(!process.env.MYSQL_DATABASE?.endsWith('_test'))throw new Error('MYSQL_DATABASE must name a disposable database ending in _test');
 const run=(file,extra={})=>new Promise((resolve,reject)=>{const child=spawn(process.execPath,[file],{env:{...process.env,...extra},stdio:['ignore','pipe','pipe']});let log='';child.stdout.on('data',b=>log+=b);child.stderr.on('data',b=>log+=b);child.on('exit',code=>code===0?resolve(log):reject(new Error(log)));});
@@ -670,9 +671,10 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const docBContextOnly=(await json(await upload(A.cookie,{contextType:'project',contextId:pB,title:'Bravo context-only secret'}),201,'project-context document without project_id')).document;
  // Tranche 7: contextual communication, acknowledgement receipts, notifications and secure external links.
  const [[alphaShiftRow]]=await db.execute('SELECT metadata FROM shifts WHERE organisation_id=? AND id=?',[memberA.organisation_id,shiftA]);
- const alphaShiftMeta=JSON.parse(alphaShiftRow.metadata);alphaShiftMeta.assignments=[{resourceId:workerId,category:'workers',name:'Casey Field',role:'Worker',hours:8,rate:88,payload:0,trips:0,userId:C.user.id}];
+ const alphaShiftMeta=JSON.parse(alphaShiftRow.metadata);// A non-overlapping window: Casey already works Pipe laying day 1 (07:00–15:30) today; this test is about notifications, not double-booking.
+ alphaShiftMeta.start='16:00';alphaShiftMeta.finish='20:00';alphaShiftMeta.assignments=[{resourceId:workerId,category:'workers',name:'Casey Field',role:'Worker',hours:8,rate:88,payload:0,trips:0,userId:C.user.id}];
  await db.execute('UPDATE shifts SET metadata=? WHERE organisation_id=? AND id=?',[JSON.stringify(alphaShiftMeta),memberA.organisation_id,shiftA]);
- alphaShiftMeta.start='06:30';
+ alphaShiftMeta.start='16:30';
  await json(await call('/api/delivery','POST',{kind:'shifts',record:{id:shiftA,name:'Alpha kerb pour',status:'Planned',metadata:alphaShiftMeta}},A.cookie),200,'office changes assigned shift time');
  const fieldInboxAfterChange=await json(await call('/api/communications/notifications','GET',undefined,C.cookie),200,'field shift-change notification');
  assert(fieldInboxAfterChange.notifications.some(n=>n.kind==='shift_changed'&&n.title.includes('Alpha kerb pour')),'assigned worker receives shift-change notification');
@@ -702,6 +704,8 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const otherShiftEvidence=(await json(await upload(A.cookie,{contextType:'field',contextId:otherAlphaShift,projectId:pA,title:'Other shift field evidence',visibility:'field'}),201,'other shift field evidence')).document;
  const link=await json(await call('/api/communications/external','POST',{action:'create',shiftId:shiftA,recipientName:'External Crew',recipientEmail:'external@example.invalid',recipientPhone:'0400000000',expiresDays:2},A.cookie),200,'create secure external shift link');
  const rawToken=link.path.split('/').pop();assert(rawToken&&rawToken.length>20,'raw external token returned only at creation');
+ const [[tokenRow]]=await db.execute('SELECT * FROM external_access_tokens WHERE organisation_id=? AND id=?',[memberA.organisation_id,link.id]);assert.equal(tokenRow.token_hash,sha('sha256').update(rawToken).digest('hex'),'only the SHA-256 hash is stored');assert(!JSON.stringify(tokenRow).includes(rawToken),'raw token never persisted');
+ assert(!JSON.stringify(await json(await call('/api/communications/external?shiftId='+shiftA,'GET',undefined,A.cookie),200)).includes(rawToken),'raw token never re-exposed by the link manager');
  let externalJob=await json(await call('/api/external/job?token='+encodeURIComponent(rawToken),'GET'),200,'external recipient opens job');
  assert.equal(externalJob.shift.name,'Alpha kerb pour');assert(externalJob.documents.some(d=>d.id===packDoc.id),'field-visible job pack exposed');assert(!externalJob.documents.some(d=>d.id===officeOnlyDoc.id),'office-only document never exposed');assert(!externalJob.documents.some(d=>d.id===otherShiftEvidence.id),'field evidence from another shift in the same project is not exposed');
  const externalReply=new FormData();externalReply.set('token',rawToken);externalReply.set('action','accepted');externalReply.set('operator','External Operator');externalReply.set('plant','EX-01');externalReply.set('note','Available as booked');
@@ -765,9 +769,10 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
   // Summaries are derived from the engineer's projects only.
   const ov=await json(await call('/api/platform/overview','GET',undefined,cookie),200,who+'overview');
   assert.equal(ov.projects.total,1,who+'overview counts only assigned projects');
-  assert.equal(ov.operations.upcomingShifts14d,2,who+'overview shifts only from assigned projects');
+  // Alpha has three in-window shifts (kerb pour, upcoming, other shift); Bravo's three must not be counted.
+  assert.equal(ov.operations.upcomingShifts14d,3,who+'overview shifts only from assigned projects');
   assert(!ov.commercial&&!ov.pipeline,who+'no commercial or pipeline summaries');
-  if(label==='project_engineer'){const rep=await json(await call('/api/reports/v1','GET',undefined,cookie),200,who+'reports');assert.equal(rep.projects.total,1,who+'reports scoped');assert.equal(rep.operations.upcomingShifts14d,2);}
+  if(label==='project_engineer'){const rep=await json(await call('/api/reports/v1','GET',undefined,cookie),200,who+'reports');assert.equal(rep.projects.total,1,who+'reports scoped');assert.equal(rep.operations.upcomingShifts14d,3,who+'report shifts only from assigned projects');}
   else await json(await call('/api/reports/v1','GET',undefined,cookie),403,who+'no company reporting');
   // Legacy delivery attachments carry no project link: fail closed unless it is their own upload.
   const f=new FormData();f.set('file',new File(['office only'],'legacy.txt',{type:'text/plain'}));

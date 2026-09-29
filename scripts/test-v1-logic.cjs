@@ -66,8 +66,8 @@ assert(!navDef.adminSubsFor('office').some(k=>['Team & Permissions','Integration
 assert.deepEqual(navDef.FIELD_SHELL_ROLES,['field','supervisor']);
 // Project/Site Engineer: delivery capabilities without money, rates, approvals, HR or administration.
 for(const r of ['project_engineer','site_engineer'])for(const c of ['commercial.view','commercial.edit','rates.edit','team.admin','entitlements.manage','org.admin','claim.approve','variation.approve','estimate.approve','tender.approve','swms.approve','pipeline.view','estimate.edit','docket.approve','schedule.edit','library.edit'])assert.equal(perm.can(r,c),false,r+' must not have '+c);
-for(const c of ['project.view','project.edit','schedule.view','hseq.edit','itp.complete','field.capture','document.upload'])assert(perm.can('project_engineer',c),'project_engineer needs '+c);
-for(const c of ['project.view','schedule.view','hseq.edit','itp.complete','field.capture','document.upload'])assert(perm.can('site_engineer',c),'site_engineer needs '+c);
+for(const c of ['project.view','project.edit','programme.edit','schedule.view','hseq.edit','itp.complete','field.capture','document.upload'])assert(perm.can('project_engineer',c),'project_engineer needs '+c);
+for(const c of ['project.view','programme.edit','schedule.view','hseq.edit','itp.complete','field.capture','document.upload'])assert(perm.can('site_engineer',c),'site_engineer needs '+c);
 // Project scope: engineers are limited to their project memberships; organisation-wide roles keep project.all.view.
 for(const r of ['project_engineer','site_engineer'])assert.equal(perm.can(r,'project.all.view'),false,r+' is project-scoped');
 for(const r of ['admin','office','estimator','scheduler','project_manager','supervisor','accounts','read_only'])assert(perm.can(r,'project.all.view'),r+' keeps organisation-wide project access');

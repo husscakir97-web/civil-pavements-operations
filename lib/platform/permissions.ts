@@ -23,7 +23,7 @@ export const CAPABILITIES=[
  'commercial.view','pipeline.view','pipeline.edit','tender.approve','tender.submit','tender.award',
  'workshop.view','workshop.edit','workshop.verify',
  'estimate.edit','estimate.approve',
- 'project.view','project.all.view','project.edit','project.baseline','project.close',
+ 'project.view','project.all.view','project.edit','programme.edit','project.baseline','project.close',
  'document.upload','document.approve',
  'hseq.view','hseq.edit','hseq.report','swms.approve','swms.acknowledge','itp.complete',
  'schedule.view','schedule.edit','resources.edit',
@@ -47,11 +47,11 @@ export const ROLE_CAPABILITIES:Record<Role,readonly Capability[]>={
  office:OFFICE,
  estimator:[...READ,'crm.create','pipeline.edit','estimate.edit','tender.submit','library.edit','document.upload','audit.view','variation.edit'],
  scheduler:['crm.create','workshop.view','project.view','project.all.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','knowledge.view','document.upload'],
- project_manager:[...READ,'crm.create','project.edit','project.baseline','project.close','schedule.edit','resources.edit','hseq.edit','hseq.report','swms.approve','document.approve','docket.approve','variation.edit','claim.edit','document.upload','itp.complete','audit.view'],
+ project_manager:[...READ,'crm.create','project.edit','programme.edit','project.baseline','project.close','schedule.edit','resources.edit','hseq.edit','hseq.report','swms.approve','document.approve','docket.approve','variation.edit','claim.edit','document.upload','itp.complete','audit.view'],
  // No 'project.all.view': these roles work only in projects where they are an active project
  // member (lib/platform/project-access.ts), and never see money or approvals.
- project_engineer:[...FIELD,'project.view','project.edit','schedule.view','hseq.view','hseq.edit','reports.view','knowledge.view','workshop.view'],
- site_engineer:[...FIELD,'project.view','schedule.view','hseq.view','hseq.edit','knowledge.view'],
+ project_engineer:[...FIELD,'project.view','project.edit','programme.edit','schedule.view','hseq.view','hseq.edit','reports.view','knowledge.view','workshop.view'],
+ site_engineer:[...FIELD,'project.view','programme.edit','schedule.view','hseq.view','hseq.edit','knowledge.view'],
  supervisor:[...FIELD,'project.view','project.all.view','schedule.view','hseq.view','hseq.edit','knowledge.view'],
  field:[...FIELD,'knowledge.view'],
  accounts:['commercial.view','project.view','project.all.view','reports.view','knowledge.view','claim.edit','claim.approve','invoice.manage','docket.approve'],

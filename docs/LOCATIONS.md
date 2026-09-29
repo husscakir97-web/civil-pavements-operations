@@ -8,7 +8,7 @@ where the exact place matters. **The address is the general site; the pin is the
 | Input | Where | Decision |
 |---|---|---|
 | Client site address | CRM → client → Sites (`client_sites`) | **Replaced**: AddressLocationPicker (map). Address text columns are kept as the readable snapshot. |
-| Quick site add in pickers | `SitePicker` inline add (`components/v1/lookup.tsx`) | Kept as fast free text. The full location is set in CRM. |
+| Quick site add in pickers | `SitePicker` inline add (`components/v1/lookup.tsx`) | **Replaced**: opens the same AddressLocationPicker inline, seeded with what the user already typed; saves the structured address and optional exact pin without leaving the workflow. |
 | CRM quick-create site address | New client form | Kept as free text (one line, optional). |
 | Project site address | Project → Setup (`jobs.site_address`) | **Inherited** from the CRM site; optional project-specific override (`jobs.location_id`). The free-text field is kept. |
 | Scheduling job site | Job editor (via the CRM site) | Inherits the site location. The location is shown in the editor. |
@@ -29,7 +29,7 @@ One row per owned location: `organisation_id`, `owner_type` (`client_site`, `pro
 `depot`, `company`, `incident`), `owner_id`, `location_type`, `label`.
 
 - **Address**: `formatted_address`, `address_line1/2`, `locality`, `state`, `postcode`, `country`.
-- **Provenance**: `provider`, `provider_place_id`, `precision` (e.g. `ROOFTOP`, `GEOMETRIC_CENTER`, `manual`), `source` (`autocomplete` / `manual` / `inherited`), `geocoded_at`, `reverse_geocoded_at`.
+- **Provenance**: `provider`, `provider_place_id`, `precision` / result granularity, `source` (`autocomplete` / `manual` / `inherited`), `geocoded_at`, `reverse_geocoded_at`. Place Details results use non-accuracy labels such as `ADDRESS`, `ROUTE`, `INTERSECTION` or `PLACE`; true geocoding accuracy labels such as `ROOFTOP` or `RANGE_INTERPOLATED` are only stored when the Geocoding API actually returned them.
 - **Points**: `geocoded_lat/lng` is the provider's point for the address. `pin_lat/lng` is the exact operational point. Both are `decimal(10,7)`.
 - **Pin**: `pin_adjusted` is true when the pin differs from the geocoded point. `pin_address` is the reverse-geocoded address of a moved pin.
 - **Lifecycle**: `revision`, `status`, `created_by`, `created_at`, `updated_at`.
@@ -82,7 +82,7 @@ A shift work point changes only that shift. Clearing it returns to the project/s
   location, addressComponents, types). On the server: `places:autocomplete` and `places/{id}` with a field mask.
 - **Geocoding API**: reverse geocoding (browser `Geocoder` or REST on the server).
 
-The legacy `google.maps.places.Autocomplete` widget and legacy `google.maps.Marker` are not used.
+The legacy `google.maps.places.Autocomplete` widget and legacy `google.maps.Marker` are not used. Google Place `types` describe the kind of result and are **not** treated as a guarantee of coordinate accuracy.
 
 ## Environment variables
 

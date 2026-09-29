@@ -28,7 +28,7 @@ function addDays(date:string,n:number) { const d=new Date(date+'T12:00:00Z'); d.
 type Conflict={code:string;severity:'block'|'warn';message:string;resourceId?:string};
 // `initialJobId` opens the planner filtered to one project (from the project workspace), with a way back.
 export function JobsPlanning({page,initialJobId,onBack}:{page:'Jobs'|'Planning';initialJobId?:string;onBack?:()=>void}) {
-  const session=useSession(),showMoney=session.can('commercial.view');
+  const session=useSession(),showMoney=session.can('commercial.view')&&session.module('commercial');
   const assignmentFields:Array<'hours'|'rate'|'payload'|'trips'>=showMoney?['hours','rate','payload','trips']:['hours','payload','trips'];
   const [conflicts,setConflicts]=useState<{code:string;severity:'block'|'warn';message:string}[]>([]); const [data,setData]=useState<Record<string,DeliveryRecord[]>>({}); const [loading,setLoading]=useState(true); const [error,setError]=useState('');
   const [editor,setEditor]=useState<DeliveryRecord|null>(null); const [shiftClient,setShiftClient]=useState(''); const [kind,setKind]=useState<'jobs'|'shifts'>('jobs'); const [saving,setSaving]=useState(false);

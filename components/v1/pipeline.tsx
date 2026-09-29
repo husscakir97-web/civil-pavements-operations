@@ -15,7 +15,7 @@ const EmbeddedEstimate=dynamic(()=>import('@/components/estimates-quotes').then(
 const TenderReviewAssistant=dynamic(()=>import('@/components/tender-review-assistant').then(m=>m.TenderReviewAssistant),{loading:()=><Loading label="Loading tender documents…"/>});
 
 export function OpportunitiesView(){
- const {navigate}=useNav();const {can}=useSession();const {busy,error,run}=useAction();
+ const {navigate,route}=useNav();const {can}=useSession();const {busy,error,run}=useAction();
  const {data}=useApi<{records:Array<{id:string;stage:string;estimated_value?:number|null}>}>('/api/registers/opportunities');
  const records=data?.records||[];
  const stages=[['lead','Leads'],['qualified','Qualified'],['bidding','Bidding'],['converted','Converted'],['lost','Lost']] as const;
@@ -23,7 +23,7 @@ export function OpportunitiesView(){
   <PageHeader title="Opportunities" subtitle="See where potential work sits, qualify it, then move it into the tender workflow without losing context." actions={<Btn variant="secondary" onClick={()=>navigate('Pipeline','Tenders')}>Open tenders<ArrowRight aria-hidden className="size-4"/></Btn>}/>
   <ErrorState error={error}/>
   <section aria-label="Opportunity pipeline summary" className="-mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-5 sm:overflow-visible sm:px-0">{stages.map(([key,label])=>{const list=records.filter(r=>String(r.stage).toLowerCase()===key);const value=list.reduce((sum,r)=>sum+(Number(r.estimated_value)||0),0);const tone=key==='lost'?'from-red-50 to-white border-red-100':key==='converted'?'from-emerald-50 to-white border-emerald-100':key==='bidding'?'from-amber-50 to-white border-amber-100':key==='qualified'?'from-violet-50 to-white border-violet-100':'from-sky-50 to-white border-sky-100';return <div key={key} className={`min-w-[148px] snap-start rounded-2xl border bg-gradient-to-br p-4 shadow-sm sm:min-w-0 ${tone}`}><div className="flex items-center justify-between gap-2"><p className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-600">{label}</p><span className={`size-2.5 rounded-full ${key==='lost'?'bg-red-400':key==='converted'?'bg-emerald-500':key==='bidding'?'bg-amber-500':key==='qualified'?'bg-violet-500':'bg-sky-500'}`}/></div><p className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-slate-950">{list.length}</p><p className="mt-1 text-xs font-medium text-slate-500">{value>0?money(value):'No value recorded'}</p></div>;})}</section>
-  <RegisterView register="opportunities" title="Opportunity register" description="Open an opportunity to update its owner, value, closing date or stage. Qualified work can be converted directly to a tender." rowActions={(r,refresh)=>{
+  <RegisterView register="opportunities" initialQuery={route.area&&route.sub==="Opportunities"?route.id:undefined} title="Opportunity register" description="Open an opportunity to update its owner, value, closing date or stage. Qualified work can be converted directly to a tender." rowActions={(r,refresh)=>{
    if(r.tender_id)return <Btn variant="ghost" onClick={()=>navigate('Pipeline','Tenders',String(r.tender_id))}>Open tender<ArrowRight aria-hidden className="size-4"/></Btn>;
    if(['qualified','bidding'].includes(String(r.stage))&&can('pipeline.edit'))return <Btn variant="secondary" busy={busy} onClick={()=>void run(()=>api<{tenderId:string}>('/api/tenders/register',{method:'POST',body:{opportunityId:r.id}}),t=>{refresh();navigate('Pipeline','Tenders',t.tenderId);})}>Convert to tender</Btn>;
    return null;

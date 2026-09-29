@@ -15,6 +15,7 @@ import { shiftStatements } from '@/lib/v1/resource-sync';
 import { projectScope } from '@/lib/platform/project-access';
 import { presentLocation, saveLocation, locationInput } from '@/lib/platform/locations';
 import { tx, exec as sqlExec } from '@/lib/platform/sql';
+import { notifyShiftChange } from '@/lib/platform/communications';
 export const dynamic = 'force-dynamic';
 const tables = ['jobs','shifts','workers','crews','plant','suppliers','subcontractors'] as const;
 async function load(db: Database, table: string): Promise<DeliveryRecord[]> {
@@ -149,6 +150,7 @@ async function handlePOST(request:Request) {
         await sqlExec('UPDATE shifts SET location_id=? WHERE organisation_id=? AND id=?',[lid,ORG(),id],conn);
       });
     }
+    if(body.kind==='shifts')await notifyShiftChange({id,name:record.name.trim(),status:record.status,metadata},existing).catch(()=>{});
     return Response.json({record:mayUseMoney?saved:withoutMoney(saved),warnings,conflicts},{status:existing?200:201});
   } catch(e) { console.error(e);return jsonError('Unable to save. Your changes are still in the form.',503); }
 }

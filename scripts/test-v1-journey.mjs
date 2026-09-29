@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import {createServer as httpServer} from 'node:http';
 import {spawn} from 'node:child_process';
+import {createHash as sha} from 'node:crypto';
 import {connect} from './mysql-config.mjs';
 if(!process.env.MYSQL_DATABASE?.endsWith('_test'))throw new Error('MYSQL_DATABASE must name a disposable database ending in _test');
 const run=(file,extra={})=>new Promise((resolve,reject)=>{const child=spawn(process.execPath,[file],{env:{...process.env,...extra},stdio:['ignore','pipe','pipe']});let log='';child.stdout.on('data',b=>log+=b);child.stderr.on('data',b=>log+=b);child.on('exit',code=>code===0?resolve(log):reject(new Error(log)));});
@@ -668,6 +669,62 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const docA=(await json(await upload(A.cookie,{contextType:'project',contextId:pA,projectId:pA,title:'Alpha drawing'}),201)).document;
  const docB=(await json(await upload(A.cookie,{contextType:'project',contextId:pB,projectId:pB,title:'Bravo drawing'}),201)).document;
  const docBContextOnly=(await json(await upload(A.cookie,{contextType:'project',contextId:pB,title:'Bravo context-only secret'}),201,'project-context document without project_id')).document;
+ // Tranche 7: contextual communication, acknowledgement receipts, notifications and secure external links.
+ const [[alphaShiftRow]]=await db.execute('SELECT metadata FROM shifts WHERE organisation_id=? AND id=?',[memberA.organisation_id,shiftA]);
+ const alphaShiftMeta=JSON.parse(alphaShiftRow.metadata);// A non-overlapping window: Casey already works Pipe laying day 1 (07:00–15:30) today; this test is about notifications, not double-booking.
+ alphaShiftMeta.start='16:00';alphaShiftMeta.finish='20:00';alphaShiftMeta.assignments=[{resourceId:workerId,category:'workers',name:'Casey Field',role:'Worker',hours:8,rate:88,payload:0,trips:0,userId:C.user.id}];
+ await db.execute('UPDATE shifts SET metadata=? WHERE organisation_id=? AND id=?',[JSON.stringify(alphaShiftMeta),memberA.organisation_id,shiftA]);
+ alphaShiftMeta.start='16:30';
+ await json(await call('/api/delivery','POST',{kind:'shifts',record:{id:shiftA,name:'Alpha kerb pour',status:'Planned',metadata:alphaShiftMeta}},A.cookie),200,'office changes assigned shift time');
+ const fieldInboxAfterChange=await json(await call('/api/communications/notifications','GET',undefined,C.cookie),200,'field shift-change notification');
+ assert(fieldInboxAfterChange.notifications.some(n=>n.kind==='shift_changed'&&n.title.includes('Alpha kerb pour')),'assigned worker receives shift-change notification');
+ const projectMessage=await json(await call('/api/communications','POST',{action:'send',contextType:'project',contextId:pA,body:'Confirm the hold point before concrete placement.',recipientUserIds:[R.user.id,S.user.id],mentionedUserIds:[R.user.id],requiresAck:true},A.cookie),200,'admin sends project acknowledgement');
+ const peThread=await json(await call('/api/communications?contextType=project&contextId='+pA,'GET',undefined,R.cookie),200,'PE opens project discussion');
+ assert(peThread.messages.some(m=>m.id===projectMessage.id&&m.requiresAck),'project discussion contains acknowledgement-required message');
+ assert(peThread.people.some(p=>p.id===S.user.id),'project discussion recipient list is project-scoped');
+ await json(await call('/api/communications','POST',{action:'acknowledge',messageId:projectMessage.id},R.cookie),200,'PE acknowledges project instruction');
+ const adminThread=await json(await call('/api/communications?contextType=project&contextId='+pA,'GET',undefined,A.cookie),200,'admin reads receipts');
+ const receipt=adminThread.messages.find(m=>m.id===projectMessage.id).receipts.find(x=>x.userId===R.user.id);assert(receipt.readAt&&receipt.acknowledgedAt,'read and acknowledgement receipts are retained');
+ await json(await call('/api/communications','POST',{action:'send',contextType:'project',contextId:pA,body:'Site setout is ready for review.',recipientUserIds:[R.user.id],mentionedUserIds:[R.user.id],requiresAck:false},S.cookie),200,'SE sends project update');
+ await json(await call('/api/communications?contextType=project&contextId='+pB,'GET',undefined,R.cookie),404,'PE cannot read sibling-project discussion');
+ await json(await call('/api/communications?contextType=project&contextId='+pA,'GET',undefined,B.cookie),404,'other tenant cannot read discussion');
+ const peInbox=await json(await call('/api/communications/notifications','GET',undefined,R.cookie),200,'PE notification inbox');
+ assert(peInbox.notifications.some(n=>n.title.includes('Scope Project Alpha')),'message creates an in-app notification');
+ await json(await call('/api/communications/notifications','PATCH',{action:'preferences',email:false,sms:true,quietStart:'21:00',quietEnd:'06:00',timezone:'Australia/Sydney'},R.cookie),200,'save notification preferences');
+ const prefs=await json(await call('/api/communications/notifications','GET',undefined,R.cookie),200);assert.equal(prefs.preferences.sms,true);assert.equal(prefs.preferences.quietStart,'21:00');
+ const shiftMessage=await json(await call('/api/communications','POST',{action:'send',contextType:'shift',contextId:shiftA,body:'Please acknowledge the shift details.',recipientUserIds:[C.user.id],mentionedUserIds:[C.user.id],requiresAck:true},A.cookie),200,'admin sends assigned field shift message');
+ const fieldThread=await json(await call('/api/communications?contextType=shift&contextId='+shiftA,'GET',undefined,C.cookie),200,'assigned field worker opens shift discussion');assert(fieldThread.messages.some(m=>m.id===shiftMessage.id));
+ await json(await call('/api/communications','POST',{action:'acknowledge',messageId:shiftMessage.id},C.cookie),200,'field worker acknowledges shift');
+ await json(await call('/api/communications','POST',{action:'send',contextType:'shift',contextId:shiftA,body:'On site and ready.',recipientUserIds:[],mentionedUserIds:[],requiresAck:false},C.cookie),200,'field worker replies in assigned shift');
+ await json(await call('/api/communications?contextType=shift&contextId='+shiftB,'GET',undefined,C.cookie),404,'field worker cannot read unassigned shift discussion');
+ await json(await call('/api/communications?contextType=project&contextId='+pA,'GET',undefined,C.cookie),403,'field worker shift communication does not grant project-wide discussion access');
+ const packDoc=(await json(await upload(A.cookie,{contextType:'project',contextId:pA,projectId:pA,title:'Alpha external job pack',visibility:'field'}),201,'field-visible external job pack')).document;
+ const officeOnlyDoc=(await json(await upload(A.cookie,{contextType:'project',contextId:pA,projectId:pA,title:'Alpha office secret',visibility:'office'}),201,'office-only project document')).document;
+ const otherAlphaShift=await addShift('Alpha other shift',pA,today);
+ const otherShiftEvidence=(await json(await upload(A.cookie,{contextType:'field',contextId:otherAlphaShift,projectId:pA,title:'Other shift field evidence',visibility:'field'}),201,'other shift field evidence')).document;
+ const link=await json(await call('/api/communications/external','POST',{action:'create',shiftId:shiftA,recipientName:'External Crew',recipientEmail:'external@example.invalid',recipientPhone:'0400000000',expiresDays:2},A.cookie),200,'create secure external shift link');
+ const rawToken=link.path.split('/').pop();assert(rawToken&&rawToken.length>20,'raw external token returned only at creation');
+ const [[tokenRow]]=await db.execute('SELECT * FROM external_access_tokens WHERE organisation_id=? AND id=?',[memberA.organisation_id,link.id]);assert.equal(tokenRow.token_hash,sha('sha256').update(rawToken).digest('hex'),'only the SHA-256 hash is stored');assert(!JSON.stringify(tokenRow).includes(rawToken),'raw token never persisted');
+ assert(!JSON.stringify(await json(await call('/api/communications/external?shiftId='+shiftA,'GET',undefined,A.cookie),200)).includes(rawToken),'raw token never re-exposed by the link manager');
+ let externalJob=await json(await call('/api/external/job?token='+encodeURIComponent(rawToken),'GET'),200,'external recipient opens job');
+ assert.equal(externalJob.shift.name,'Alpha kerb pour');assert(externalJob.documents.some(d=>d.id===packDoc.id),'field-visible job pack exposed');assert(!externalJob.documents.some(d=>d.id===officeOnlyDoc.id),'office-only document never exposed');assert(!externalJob.documents.some(d=>d.id===otherShiftEvidence.id),'field evidence from another shift in the same project is not exposed');
+ const externalReply=new FormData();externalReply.set('token',rawToken);externalReply.set('action','accepted');externalReply.set('operator','External Operator');externalReply.set('plant','EX-01');externalReply.set('note','Available as booked');
+ await json(await call('/api/external/job','POST',externalReply),201,'external recipient accepts and nominates resources');
+ const evidenceForm=new FormData();evidenceForm.set('token',rawToken);evidenceForm.set('file',new File(['%PDF-1.4 external'],'external-docket.pdf',{type:'application/pdf'}));
+ const evidence=await json(await call('/api/external/job','POST',evidenceForm),201,'external recipient uploads evidence');
+ assert.equal((await call('/api/external/document?token='+encodeURIComponent(rawToken)+'&id='+encodeURIComponent(evidence.id),'GET')).status,200,'external recipient can reopen returned evidence');
+ externalJob=await json(await call('/api/external/job?token='+encodeURIComponent(rawToken),'GET'),200);assert(externalJob.responses.some(r=>r.kind==='accepted'),'external response history retained');
+ const creatorInbox=await json(await call('/api/communications/notifications','GET',undefined,A.cookie),200,'link creator gets response notification');assert(creatorInbox.notifications.some(n=>n.kind==='external_response'&&n.body.includes('accepted')));
+ const links=await json(await call('/api/communications/external?shiftId='+shiftA,'GET',undefined,A.cookie),200);assert(links.links.some(x=>x.id===link.id&&x.lastResponse==='accepted'),'external link manager shows latest response');
+ await json(await call('/api/communications/external','POST',{action:'revoke',id:link.id},A.cookie),200,'revoke external link');
+ await json(await call('/api/external/job?token='+encodeURIComponent(rawToken),'GET'),404,'revoked external link fails closed');
+ const entitlementLink=await json(await call('/api/communications/external','POST',{action:'create',shiftId:shiftA,recipientName:'Expiry Test',expiresDays:2},A.cookie),200,'create entitlement test link'),entitlementToken=entitlementLink.path.split('/').pop();
+ await json(await call('/api/platform/entitlements','PUT',{module:'operations',status:'disabled'},A.cookie),200,'disable Operations');await json(await call('/api/external/job?token='+encodeURIComponent(entitlementToken),'GET'),404,'disabled Operations invalidates external shift links');await json(await call('/api/platform/entitlements','PUT',{module:'operations',status:'active'},A.cookie),200,'restore Operations');
+ await json(await call('/api/communications/external','POST',{action:'revoke',id:entitlementLink.id},A.cookie),200,'revoke entitlement test link');
+ const movedShift=await addShift('External moved-project check',pA,today);
+ const movedLink=await json(await call('/api/communications/external','POST',{action:'create',shiftId:movedShift,recipientName:'Moved project test',expiresDays:2},A.cookie),200,'create project-bound external link'),movedToken=movedLink.path.split('/').pop();
+ const [[movedRow]]=await db.execute('SELECT metadata FROM shifts WHERE organisation_id=? AND id=?',[memberA.organisation_id,movedShift]);const movedMeta=JSON.parse(movedRow.metadata);movedMeta.jobId=pB;await db.execute('UPDATE shifts SET metadata=? WHERE organisation_id=? AND id=?',[JSON.stringify(movedMeta),memberA.organisation_id,movedShift]);
+ await json(await call('/api/external/job?token='+encodeURIComponent(movedToken),'GET'),404,'moving a shift to another project invalidates the old external link');
  assert.equal((await upload(R.cookie,{contextType:'organisation',category:'General',title:'Engineer company upload'})).status,403,'Project Engineer document capability does not grant company document authority');
  assert.equal((await upload(C.cookie,{contextType:'project',contextId:pA,projectId:pA,title:'Field direct project upload'})).status,404,'Field worker central uploads fail closed and stay attached to field records');
  const pCollab={projectId:pA,startDate:today,durationDays:1,predecessorId:null,workPackage:'Delivery',resourceRequirement:'',plannedQuantity:0,quantityUnit:'',productionPerDay:0};
@@ -712,9 +769,10 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
   // Summaries are derived from the engineer's projects only.
   const ov=await json(await call('/api/platform/overview','GET',undefined,cookie),200,who+'overview');
   assert.equal(ov.projects.total,1,who+'overview counts only assigned projects');
-  assert.equal(ov.operations.upcomingShifts14d,2,who+'overview shifts only from assigned projects');
+  // Alpha has three in-window shifts (kerb pour, upcoming, other shift); Bravo's three must not be counted.
+  assert.equal(ov.operations.upcomingShifts14d,3,who+'overview shifts only from assigned projects');
   assert(!ov.commercial&&!ov.pipeline,who+'no commercial or pipeline summaries');
-  if(label==='project_engineer'){const rep=await json(await call('/api/reports/v1','GET',undefined,cookie),200,who+'reports');assert.equal(rep.projects.total,1,who+'reports scoped');assert.equal(rep.operations.upcomingShifts14d,2);}
+  if(label==='project_engineer'){const rep=await json(await call('/api/reports/v1','GET',undefined,cookie),200,who+'reports');assert.equal(rep.projects.total,1,who+'reports scoped');assert.equal(rep.operations.upcomingShifts14d,3,who+'report shifts only from assigned projects');}
   else await json(await call('/api/reports/v1','GET',undefined,cookie),403,who+'no company reporting');
   // Legacy delivery attachments carry no project link: fail closed unless it is their own upload.
   const f=new FormData();f.set('file',new File(['office only'],'legacy.txt',{type:'text/plain'}));

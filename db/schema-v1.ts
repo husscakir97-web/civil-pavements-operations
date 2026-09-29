@@ -2,7 +2,7 @@
 // Rules: every table carries organisation_id with an index; mutable entities
 // carry revision/status/created_at/updated_at; approved revisions are append-only.
 // Money is DECIMAL(15,2). Timestamps are ISO-8601 strings (matching legacy tables).
-import {mysqlTable,varchar,longtext,text,int,double,decimal,bigint,index,uniqueIndex} from 'drizzle-orm/mysql-core';
+import {mysqlTable,varchar,char,longtext,text,int,double,decimal,bigint,index,uniqueIndex} from 'drizzle-orm/mysql-core';
 
 const id=()=>varchar('id',{length:191}).primaryKey();
 const org=()=>varchar('organisation_id',{length:191}).notNull();
@@ -792,6 +792,40 @@ export const domainEvents=mysqlTable('domain_events',{
  entityType:varchar('entity_type',{length:40}).notNull(),entityId:ref('entity_id').notNull(),
  occurrenceId:ref('occurrence_id').notNull(),actorUserId:ref('actor_user_id').notNull(),createdAt:stamp('created_at').notNull(),
 },t=>[uniqueIndex('idx_domain_event_occurrence').on(t.organisationId,t.eventType,t.occurrenceId),index('idx_domain_events_org_time').on(t.organisationId,t.createdAt,t.id)]);
+
+// Core communications: contextual discussion, receipts/acknowledgements, inbox and
+// revocable external access. Business entities remain owned by their source modules.
+export const communicationThreads=mysqlTable('communication_threads',{
+ id:id(),organisationId:org(),contextType:varchar('context_type',{length:40}).notNull(),contextId:ref('context_id').notNull(),
+ projectId:ref('project_id'),title:varchar('title',{length:255}).notNull(),status:varchar('status',{length:20}).notNull().default('open'),
+ createdBy:ref('created_by').notNull(),createdAt:stamp('created_at').notNull(),updatedAt:stamp('updated_at').notNull(),
+},t=>[uniqueIndex('idx_communication_threads_context').on(t.organisationId,t.contextType,t.contextId),index('idx_communication_threads_project').on(t.organisationId,t.projectId,t.updatedAt)]);
+export const communicationMessages=mysqlTable('communication_messages',{
+ id:id(),organisationId:org(),threadId:ref('thread_id').notNull(),authorUserId:ref('author_user_id').notNull(),
+ parentMessageId:ref('parent_message_id'),body:text('body').notNull(),requiresAck:int('requires_ack').notNull().default(0),createdAt:stamp('created_at').notNull(),
+},t=>[index('idx_communication_messages_thread').on(t.organisationId,t.threadId,t.createdAt)]);
+export const communicationReceipts=mysqlTable('communication_receipts',{
+ id:id(),organisationId:org(),messageId:ref('message_id').notNull(),userId:ref('user_id').notNull(),mentioned:int('mentioned').notNull().default(0),
+ readAt:stamp('read_at'),acknowledgedAt:stamp('acknowledged_at'),createdAt:stamp('created_at').notNull(),
+},t=>[uniqueIndex('idx_communication_receipts_user_message').on(t.organisationId,t.messageId,t.userId),index('idx_communication_receipts_user').on(t.organisationId,t.userId,t.readAt,t.acknowledgedAt)]);
+export const notifications=mysqlTable('notifications',{
+ id:id(),organisationId:org(),userId:ref('user_id').notNull(),kind:varchar('kind',{length:40}).notNull(),title:varchar('title',{length:255}).notNull(),
+ body:varchar('body',{length:1000}).notNull(),contextType:varchar('context_type',{length:40}),contextId:ref('context_id'),projectId:ref('project_id'),
+ targetArea:varchar('target_area',{length:60}),targetSub:varchar('target_sub',{length:60}),targetId:ref('target_id'),targetTab:varchar('target_tab',{length:60}),
+ readAt:stamp('read_at'),createdAt:stamp('created_at').notNull(),
+},t=>[index('idx_notifications_user_unread').on(t.organisationId,t.userId,t.readAt,t.createdAt)]);
+export const notificationPreferences=mysqlTable('notification_preferences',{
+ id:id(),organisationId:org(),userId:ref('user_id').notNull(),inApp:int('in_app').notNull().default(1),email:int('email').notNull().default(0),sms:int('sms').notNull().default(0),
+ quietStart:varchar('quiet_start',{length:5}),quietEnd:varchar('quiet_end',{length:5}),timezone:varchar('timezone',{length:80}).notNull().default('Australia/Sydney'),updatedAt:stamp('updated_at').notNull(),
+},t=>[uniqueIndex('idx_notification_preferences_user').on(t.organisationId,t.userId)]);
+export const externalAccessTokens=mysqlTable('external_access_tokens',{
+ id:id(),organisationId:org(),tokenHash:char('token_hash',{length:64}).notNull(),contextType:varchar('context_type',{length:40}).notNull(),contextId:ref('context_id').notNull(),projectId:ref('project_id'),
+ recipientName:varchar('recipient_name',{length:180}),recipientEmail:varchar('recipient_email',{length:254}),recipientPhone:varchar('recipient_phone',{length:60}),scopes:varchar('scopes',{length:500}).notNull().default('view,acknowledge,respond,upload'),
+ expiresAt:stamp('expires_at').notNull(),revokedAt:stamp('revoked_at'),lastAccessedAt:stamp('last_accessed_at'),createdBy:ref('created_by').notNull(),createdAt:stamp('created_at').notNull(),
+},t=>[uniqueIndex('idx_external_access_tokens_hash').on(t.tokenHash),index('idx_external_access_tokens_context').on(t.organisationId,t.contextType,t.contextId,t.expiresAt)]);
+export const externalResponses=mysqlTable('external_responses',{
+ id:id(),organisationId:org(),tokenId:ref('token_id').notNull(),kind:varchar('kind',{length:30}).notNull(),payload:longtext('payload'),createdAt:stamp('created_at').notNull(),
+},t=>[index('idx_external_responses_token').on(t.organisationId,t.tokenId,t.createdAt)]);
 
 // Workshop is asset-scoped and does not require Operations.
 export const workshopOrders=mysqlTable('workshop_orders',{

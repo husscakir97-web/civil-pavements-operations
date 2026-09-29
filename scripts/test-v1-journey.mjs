@@ -128,6 +128,17 @@ try{
  // ---------------------------------------------------------------- Scenario B
  step='B win work';
  const upload=async(cookie,fields,name='evidence.pdf',content='%PDF-1.4 fixture')=>{const f=new FormData();for(const [k,v] of Object.entries(fields))f.set(k,v);f.set('file',new File([content],name,{type:'application/pdf'}));return call('/api/documents','POST',f,cookie);};
+ // Central Documents workspace: search/filter/version behavior over the existing secure file model.
+ const companyDoc=(await json(await upload(A.cookie,{contextType:'organisation',category:'Quality',title:'Journey Quality Manual'},'quality-manual-v1.pdf'),201,'company document v1')).document;
+ let documentSearch=await json(await call('/api/documents?q=Journey%20Quality','GET',undefined,A.cookie),200,'search company documents');
+ assert(documentSearch.documents.some(d=>d.id===companyDoc.id&&d.category==='Quality'),'document workspace searches title/category');
+ assert(documentSearch.documents.find(d=>d.id===companyDoc.id).uploadedByName,'document workspace resolves uploader');
+ assert.equal((await json(await call('/api/documents?category=Quality','GET',undefined,A.cookie),200)).documents.some(d=>d.id===companyDoc.id),true,'document category filter');
+ const companyDocV2=(await json(await upload(A.cookie,{contextType:'organisation',category:'Quality',title:'Journey Quality Manual',supersedesId:companyDoc.id},'quality-manual-v2.pdf'),201,'company document v2')).document;
+ documentSearch=await json(await call('/api/documents?q=Journey%20Quality','GET',undefined,A.cookie),200);
+ assert(!documentSearch.documents.some(d=>d.id===companyDoc.id)&&documentSearch.documents.some(d=>d.id===companyDocV2.id&&d.version===2),'current view shows only latest document version');
+ const allDocumentVersions=await json(await call('/api/documents?q=Journey%20Quality&all=1','GET',undefined,A.cookie),200);
+ assert(allDocumentVersions.documents.some(d=>d.id===companyDoc.id&&d.status==='superseded')&&allDocumentVersions.documents.some(d=>d.id===companyDocV2.id&&d.status==='current'),'superseded filter exposes document history');
  const insuranceDoc=(await json(await upload(A.cookie,{contextType:'library',category:'Insurance',title:'Public liability certificate'}),201)).document;
  await json(await upload(A.cookie,{contextType:'library'},'malware.exe'),415,'unsupported file type rejected');
  const lib=reg('library',A.cookie);
@@ -643,6 +654,7 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const shiftA=await addShift('Alpha kerb pour',pA,today),shiftB=await addShift('Bravo milling',pB,today),upA=await addShift('Alpha upcoming',pA,tomorrowDate),upB=await addShift('Bravo upcoming',pB,tomorrowDate);
  const docA=(await json(await upload(A.cookie,{contextType:'project',contextId:pA,projectId:pA,title:'Alpha drawing'}),201)).document;
  const docB=(await json(await upload(A.cookie,{contextType:'project',contextId:pB,projectId:pB,title:'Bravo drawing'}),201)).document;
+ const docBContextOnly=(await json(await upload(A.cookie,{contextType:'project',contextId:pB,title:'Bravo context-only secret'}),201,'project-context document without project_id')).document;
  const pCollab={projectId:pA,startDate:today,durationDays:1,predecessorId:null,workPackage:'Delivery',resourceRequirement:'',plannedQuantity:0,quantityUnit:'',productionPerDay:0};
  const peProgramme=await json(await call('/api/projects/program','POST',{...pCollab,name:'Alpha engineering prep',responsible:'user:'+R.user.id,status:'planned'},R.cookie),200,'PE owns programme activity');
  const seProgramme=await json(await call('/api/projects/program','POST',{...pCollab,name:'Alpha site setout',responsible:'user:'+S.user.id,status:'ready'},S.cookie),200,'SE updates own project programme');
@@ -666,7 +678,10 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
   assert.equal((await call('/api/documents?id='+docA.id,'GET',undefined,cookie)).status,200,who+'own project document');
   await json(await call('/api/documents?id='+docB.id,'GET',undefined,cookie),404,who+'guessed document of another project refused');
   assert.equal((await json(await call('/api/documents?projectId='+pB,'GET',undefined,cookie),200)).documents.length,0,who+'other project documents not listed');
-  assert(!(await json(await call('/api/search?q=Bravo','GET',undefined,cookie),200)).results.some(r=>r.projectId===pB||r.id===pB),who+'search excludes other projects');
+  const bravoSearch=(await json(await call('/api/search?q=Bravo','GET',undefined,cookie),200)).results;
+  assert(!bravoSearch.some(r=>r.projectId===pB||r.id===pB||r.id===docBContextOnly.id),who+'search excludes other projects including context-only documents');
+  const scopedDocs=await json(await call('/api/documents?q=Alpha%20drawing','GET',undefined,cookie),200,who+'central document search');
+  assert(scopedDocs.documents.some(d=>d.id===docA.id)&&!scopedDocs.documents.some(d=>d.id===docB.id),who+'central Documents workspace respects project scope');
   const day=await json(await call('/api/field/today','GET',undefined,cookie),200);
   const ids=[...day.today,...day.upcoming].map(s=>s.id);
   assert(ids.includes(shiftA)&&ids.includes(upA),who+'Today includes own project shifts');assert(!ids.includes(shiftB)&&!ids.includes(upB),who+'Today excludes other project shifts');

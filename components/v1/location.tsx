@@ -7,7 +7,7 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {Crosshair,MapPin,Navigation,RotateCcw} from 'lucide-react';
 import {api,field,Field,useSession} from './kit';
-import {Lookup,type LookupItem} from './lookup';
+import {Lookup,type LookupItem} from './lookup-control';
 import {directionsUrl,pinState,precisionLabel,samePoint,validPoint,roundPoint,placeResultKind,EMPTY_PARTS,APPROXIMATE,type LatLng,type LocationInput,type LocationView,type ResolvedPlace,type Suggestion} from '@/lib/v1/location';
 
 type Config={provider:'google'|'fake'|'none';mode:'browser'|'server'|'none';browserKey:string|null;mapId:string|null;region:string};
@@ -123,9 +123,9 @@ export const locationInputFrom=(v:LocationView|null|undefined)=>v?fromView(v):nu
  *  mode "compact": like "map" but the map opens on request.
  * `legacyText` shows an old free-text address that has not been structured yet.
  */
-export function AddressLocationPicker({label='Address',value,onChange,mode='map',readOnly,legacyText,hint}:{label?:string;value:LocationInput|null;onChange:(v:LocationInput|null)=>void;mode?:PickerMode;readOnly?:boolean;legacyText?:string|null;hint?:string}){
+export function AddressLocationPicker({label='Address',value,onChange,mode='map',readOnly,legacyText,hint,initialQuery=''}:{label?:string;value:LocationInput|null;onChange:(v:LocationInput|null)=>void;mode?:PickerMode;readOnly?:boolean;legacyText?:string|null;hint?:string;initialQuery?:string}){
  const config=useLocationConfig(),session=useSession(),{client,failed}=useProviderClient(config);
- const [items,setItems]=useState<Suggestion[]>([]),[loading,setLoading]=useState(false),[query,setQuery]=useState(''),[notice,setNotice]=useState(''),[showMap,setShowMap]=useState(mode==='map'),[manual,setManual]=useState(false);
+ const [items,setItems]=useState<Suggestion[]>([]),[loading,setLoading]=useState(false),[query,setQuery]=useState(initialQuery),[notice,setNotice]=useState(''),[showMap,setShowMap]=useState(mode==='map'),[manual,setManual]=useState(false);
  const searching=Boolean(client)&&!failed;
  // Debounced search: one provider request per pause in typing, never per keystroke.
  useEffect(()=>{

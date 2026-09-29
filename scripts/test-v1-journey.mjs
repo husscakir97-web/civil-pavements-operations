@@ -669,7 +669,7 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const docB=(await json(await upload(A.cookie,{contextType:'project',contextId:pB,projectId:pB,title:'Bravo drawing'}),201)).document;
  const docBContextOnly=(await json(await upload(A.cookie,{contextType:'project',contextId:pB,title:'Bravo context-only secret'}),201,'project-context document without project_id')).document;
  assert.equal((await upload(R.cookie,{contextType:'organisation',category:'General',title:'Engineer company upload'})).status,403,'Project Engineer document capability does not grant company document authority');
- assert.equal((await upload(C.cookie,{contextType:'project',contextId:pA,projectId:pA,title:'Field direct project upload'})).status,403,'Field worker central uploads stay attached to field records');
+ assert.equal((await upload(C.cookie,{contextType:'project',contextId:pA,projectId:pA,title:'Field direct project upload'})).status,404,'Field worker central uploads fail closed and stay attached to field records');
  const pCollab={projectId:pA,startDate:today,durationDays:1,predecessorId:null,workPackage:'Delivery',resourceRequirement:'',plannedQuantity:0,quantityUnit:'',productionPerDay:0};
  const peProgramme=await json(await call('/api/projects/program','POST',{...pCollab,name:'Alpha engineering prep',responsible:'user:'+R.user.id,status:'planned'},R.cookie),200,'PE owns programme activity');
  const seProgramme=await json(await call('/api/projects/program','POST',{...pCollab,name:'Alpha site setout',responsible:'user:'+S.user.id,status:'ready'},S.cookie),200,'SE updates own project programme');

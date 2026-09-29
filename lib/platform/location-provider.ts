@@ -7,7 +7,7 @@
 //  - fake:   deterministic fixtures for CI and local tests (no network, no billing).
 //  - none:   no provider — manual structured address and optional coordinates.
 import type {LatLng,ResolvedPlace,Suggestion} from '@/lib/v1/location';
-import {mapAddressComponents,roundPoint} from '@/lib/v1/location';
+import {mapAddressComponents,roundPoint,placeResultKind} from '@/lib/v1/location';
 
 export interface LocationProvider{
  readonly name:string;
@@ -66,7 +66,6 @@ async function gfetch(url:string,init:RequestInit){
  if(!r.ok)throw new ProviderUnavailable();
  return r.json() as Promise<Record<string,unknown>>;
 }
-const precisionFromTypes=(types:string[]|undefined)=>types?.includes('street_address')||types?.includes('premise')||types?.includes('subpremise')?'ROOFTOP':types?.includes('route')?'GEOMETRIC_CENTER':'APPROXIMATE';
 export function googleServerProvider(key:string):LocationProvider{
  return {
   name:'google',
@@ -77,7 +76,7 @@ export function googleServerProvider(key:string):LocationProvider{
   async place(placeId,sessionToken){
    const j=await gfetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}${sessionToken?`?sessionToken=${encodeURIComponent(sessionToken)}`:''}`,{headers:{'X-Goog-Api-Key':key,'X-Goog-FieldMask':FIELD_MASK}});
    const loc=j.location as {latitude:number;longitude:number}|undefined;
-   return {provider:'google',placeId:String(j.id||placeId),formattedAddress:String(j.formattedAddress||''),...mapAddressComponents(j.addressComponents as never),point:loc?roundPoint({lat:loc.latitude,lng:loc.longitude}):null,precision:precisionFromTypes(j.types as string[])};
+   return {provider:'google',placeId:String(j.id||placeId),formattedAddress:String(j.formattedAddress||''),...mapAddressComponents(j.addressComponents as never),point:loc?roundPoint({lat:loc.latitude,lng:loc.longitude}):null,precision:placeResultKind(j.types as string[])};
   },
   async geocode(address,region){
    const j=await gfetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&region=${region}&key=${key}`,{});

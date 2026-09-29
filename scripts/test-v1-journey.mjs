@@ -914,6 +914,7 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  lLp=(await json(await call('/api/projects/workspace?id='+lJob.id,'GET',undefined,A.cookie),200)).project;
  await json(await call('/api/projects/workspace','PATCH',{id:lLp.id,revision:lLp.revision,useSiteLocation:true},A.cookie),200);
  lLp=(await json(await call('/api/projects/workspace?id='+lJob.id,'GET',undefined,A.cookie),200)).project;assert.equal(lLp.locationSource,'site');
+ lDShift=(await json(await call('/api/delivery','GET',undefined,A.cookie),200)).shifts.find(x=>x.id===lShift.id);assert.equal(lDShift.metadata.locationSource,'site','shift provenance follows the CRM site when no project/shift override exists');
  assert.equal((await call('/api/projects/workspace?id='+lJob.id,'GET',undefined,B.cookie)).status,404,'foreign project location unreachable');
  // Depots: organisation-scoped with an exact location.
  const lDepot=await json(await call('/api/platform/depots','POST',{depot:{name:'Ingleburn yard',location:lPicked}},A.cookie),200,'create depot');

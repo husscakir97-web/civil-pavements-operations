@@ -10,6 +10,7 @@ import {easternDate} from '@/lib/reporting';
 import {coverage,type Requirement} from '@/lib/v1/shift-requirements';
 import {projectScope,memberProjectIds} from '@/lib/platform/project-access';
 import {shiftAudience,shiftVisible} from '@/lib/platform/shift-scope';
+import {responsibleToken} from '@/lib/v1/program';
 
 export type HomeItem={key:string;title:string;detail:string;area:string;target?:{type:string;id:string;tab?:string};severity:'info'|'warning'|'danger'};
 /** A real count from workflow state, e.g. "17 / 18" tomorrow's shifts fully resourced. Never a score. */
@@ -60,6 +61,10 @@ export async function homeFeed(){
   if(mineIds.length){const led=await query<{id:string;name:string;stage:string}>("SELECT id,name,COALESCE(stage,'setup') AS stage FROM jobs WHERE organisation_id=? AND id IN (?) AND COALESCE(stage,'') NOT IN ('closed') AND LOWER(status)<>'archived' ORDER BY name LIMIT 8",[org,mineIds]);myProjects.push(...led);}
   const ready=await query<{id:string;title:string;project_id:string;due_date:string|null}>(`SELECT id,title,project_id,due_date FROM project_checklist_items WHERE organisation_id=? AND owner_user_id=? AND status='open'${inScope('project_id')} ORDER BY due_date IS NULL,due_date LIMIT 5`,[org,a.userId,...sp()]);
   for(const r of ready)mine.push({key:`readiness-${r.id}`,title:`Readiness: ${r.title}`,detail:r.due_date?`Due ${r.due_date}`:'Assigned to you',area:'Projects',target:{type:'project',id:r.project_id,tab:'setup'},severity:r.due_date&&r.due_date<today?'danger':'info'});
+  if(can(a.role,'programme.edit')){
+   const programme=await query<{id:string;name:string;project_id:string;project_name:string;start_date:string;status:string}>(`SELECT p.id,p.name,p.project_id,j.name AS project_name,p.start_date,p.status FROM program_activities p JOIN jobs j ON j.organisation_id=p.organisation_id AND j.id=p.project_id WHERE p.organisation_id=? AND p.responsible=? AND p.status<>'complete'${inScope('p.project_id')} ORDER BY p.start_date,p.name LIMIT 8`,[org,responsibleToken(a.userId),...sp()]);
+   for(const x of programme)mine.push({key:`programme-${x.id}`,title:`Programme: ${x.name}`,detail:`${x.project_name} · ${x.status.replace('_',' ')} · starts ${x.start_date}`,area:'Projects',target:{type:'project',id:x.project_id,tab:'programme'},severity:x.start_date<today?'warning':'info'});
+  }
   for(const p of closeout)attention.push({key:`project-closeout-${p.id}`,title:`Close out project: ${p.name}`,detail:'Finish the closeout checklist',area:'Projects',target:{type:'project',id:p.id,tab:'closeout'},severity:'info'});
  })());
  if(on('ims'))tasks.push((async()=>{

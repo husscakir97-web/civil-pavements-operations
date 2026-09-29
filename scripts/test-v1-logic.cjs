@@ -51,6 +51,11 @@ const matrix={
 for(const [r,{yes,no}] of Object.entries(matrix)){for(const [p,m] of yes)assert(gate(r,p,m),`${r} should pass ${p}/${m||'core'}`);for(const [p,m] of no)assert(!gate(r,p,m),`${r} must not pass ${p}/${m||'core'}`);}
 for(const r of ['scheduler','supervisor','field','read_only'])assert.equal(perm.can(r,'commercial.view'),false,r+' never sees money');
 assert.equal(perm.can('estimator','estimate.approve'),false);assert.equal(perm.can('project_manager','claim.approve'),false);assert.equal(perm.can('accounts','claim.approve'),true);
+for(const r of perm.ROLES)assert.equal(perm.can(r,'communication.view'),true,r+' can read authorised contextual communication');
+for(const r of ['admin','office','estimator','scheduler','project_manager','project_engineer','site_engineer','supervisor','field','accounts'])assert.equal(perm.can(r,'communication.send'),true,r+' can send within an authorised context');
+assert.equal(perm.can('read_only','communication.send'),false,'read-only cannot send');
+for(const r of ['admin','office','scheduler','project_manager'])assert.equal(perm.can(r,'external.share'),true,r+' may create external job links');
+for(const r of ['estimator','project_engineer','site_engineer','supervisor','field','accounts','read_only'])assert.equal(perm.can(r,'external.share'),false,r+' cannot create external job links');
 // Admin navigation is capability-driven: no role sees administration it cannot use.
 const navDef=load('lib/v1/navigation.ts');
 // Intended change (navigation tranche): People/Plant moved to Resources, Company Library to Documents.

@@ -21,8 +21,9 @@ type Conflict={code:string;severity:'block'|'warn';message:string;resourceId?:st
 export function ScheduleResourceRail({shift,data,busy,onAssign,onUnassign}:{shift:DeliveryRecord|null;data:Record<string,DeliveryRecord[]>;busy?:boolean;onAssign:(resource:DeliveryRecord,category:string)=>void|Promise<void>;onUnassign:(resourceId:string)=>void|Promise<void>}){
  const [category,setCategory]=useState<Category>('workers'),[query,setQuery]=useState(''),[checking,setChecking]=useState(false);
  const [availability,setAvailability]=useState<Record<string,ResourceAvailability>>({});
- const list=data[category]||[],assigned=shift?assignments(shift):[];
- const requirements=(shift?.metadata.requirements||[]) as Requirement[];
+ const list=useMemo(()=>data[category]||[],[data,category]);
+ const assigned=useMemo(()=>shift?assignments(shift):[],[shift]);
+ const requirements=useMemo(()=>(shift?.metadata.requirements||[]) as Requirement[],[shift?.metadata.requirements]);
  const resourceText=(r:DeliveryRecord)=>[r.name,...Object.values(r.metadata).filter(v=>typeof v==='string'||typeof v==='number') as Array<string|number>];
  const resourceIds=(r:DeliveryRecord)=>[r.metadata.plantNumber,r.metadata.rego,r.metadata.registration,r.metadata.employeeNumber] as Array<string|undefined>;
  const filtered=useMemo(()=>filterLookup(list,query,resourceText,resourceIds,r=>r.name),[list,query]);

@@ -576,6 +576,15 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  await expect('estimator',[['GET','/api/tenders/register',200],['GET','/api/estimates',200],['GET','/api/commercial/claims?projectId='+projectId,200],['GET','/api/operations/resources?kind=workers',200],['POST','/api/operations/resources',403,{action:'savePlant',plant:{name:'x',status:'Available'}}],['GET','/api/team',403],['POST','/api/estimates/approval',403,{estimateId,action:'approve'}]]);
  await expect('scheduler',[['GET','/api/operations/resources?kind=workers',200],['GET','/api/commercial/claims?projectId='+projectId,403],['GET','/api/estimates',403],['GET','/api/tenders/register',403],['GET','/api/dockets',403],['GET','/api/platform/knowledge',200],['POST','/api/platform/knowledge',403,{action:'savePack',pack:{}}]]);await noRates('scheduler');
  const sched=await json(await call('/api/operations/resources?kind=workers','GET',undefined,R.cookie),200);assert(sched.workers.every(w=>!('hourly_rate' in w)),'scheduler never receives worker rates');
+ // Operational saves must preserve hidden assignment pricing server-side. A scheduler cannot erase
+ // or forge a rate by saving the rate-stripped schedule payload.
+ const schedDelivery=await json(await call('/api/delivery','GET',undefined,R.cookie),200),schedShift=schedDelivery.shifts.find(s=>s.id===shift.id);
+ assert(schedShift&&!JSON.stringify(schedShift).includes('"rate"'),'scheduler receives the existing shift without rate');
+ const forgedAssignments=(schedShift.metadata.assignments||[]).map(a=>({...a,rate:9999}));
+ const schedSaved=await json(await call('/api/delivery','POST',{kind:'shifts',record:{...schedShift,metadata:{...schedShift.metadata,assignments:forgedAssignments}}},R.cookie),200,'scheduler operational save');
+ assert(!JSON.stringify(schedSaved).includes('"rate"'),'scheduler save response still hides rates');
+ const [[pricedShift]]=await db.execute('SELECT metadata FROM shifts WHERE id=?',[shift.id]);const pricedMeta=JSON.parse(pricedShift.metadata);
+ assert.equal(Number(pricedMeta.assignments.find(a=>a.resourceId===workerId).rate),88,'server preserves hidden assignment rate instead of browser-forged value');
  await expect('project_manager',[['GET',`/api/projects/control?id=${projectId}`,200],['GET','/api/commercial/claims?projectId='+projectId,200],['POST','/api/estimates/approval',403,{estimateId,action:'approve'}],['GET','/api/team',403],['GET','/api/tenders/register',200]]);
  await expect('supervisor',[['GET','/api/field/today',200],['GET','/api/commercial/claims?projectId='+projectId,403],['GET','/api/dockets',403],['GET','/api/estimates',403]]);await noRates('supervisor');
  await expect('accounts',[['GET','/api/commercial/claims?projectId='+projectId,200],['GET','/api/dockets',200],['GET','/api/tenders/register',403],['POST','/api/operations/resources',403,{action:'savePlant',plant:{name:'x',status:'Available'}}],['GET','/api/estimates',403]]);

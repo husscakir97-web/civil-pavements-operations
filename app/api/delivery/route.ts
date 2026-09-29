@@ -51,6 +51,7 @@ async function handlePOST(request:Request) {
     const body=await request.json() as {kind:string;record:DeliveryRecord;check?:boolean;candidates?:Array<{category:string;resourceId:string}>};
     if (!['jobs','shifts'].includes(body.kind)) return jsonError('Invalid record type.');
     const db=requireEstimateDb(); const actor=await requireActor(request, db, 'write'); const record=body.record;
+    const mayUseMoney=can(actor.role,'commercial.view')&&usable(await getEntitlements(actor.organisationId),'commercial');
     // Read-only availability check for the planner: evaluates the draft shift and candidate
     // resources with the same conflict engine used on save. Nothing is written.
     if(body.check && body.kind==='shifts'){
@@ -104,6 +105,19 @@ async function handlePOST(request:Request) {
       if(stage?.stage==='closed') return jsonError('This project is closed. Reopen it before scheduling work.',409);
       const byTable=await Promise.all(tables.slice(2).map(t=>load(db,t)));
       const resources=byTable.flat();
+      // Non-commercial planners never receive rates. Preserve the server-side rate for an
+      // existing assignment, and source the resource's stored rate for a newly assigned item.
+      // This prevents an operational save from erasing or forging hidden commercial data.
+      if(!mayUseMoney){
+        const previous=existing?assignments(existing):[];
+        const incoming=assignments(saved);
+        metadata.assignments=incoming.map(a=>{
+          const old=previous.find(p=>p.resourceId===a.resourceId&&p.category===a.category);
+          const resource=resources.find(r=>r.id===a.resourceId);
+          const stored=old?.rate??Number(resource?.metadata.hourlyRate??resource?.metadata.rate??0);
+          return {...a,rate:Number(stored)||0};
+        });
+      }
       warnings=shiftWarnings(saved,jobs,await load(db,'shifts'),resources);
       // Deterministic conflict engine over typed resources (double-booking, inactive,
       // competencies, plant compliance). Blocks apply to Planned / Ready / In Progress.
@@ -135,7 +149,7 @@ async function handlePOST(request:Request) {
         await sqlExec('UPDATE shifts SET location_id=? WHERE organisation_id=? AND id=?',[lid,ORG(),id],conn);
       });
     }
-    return Response.json({record:saved,warnings,conflicts},{status:existing?200:201});
+    return Response.json({record:mayUseMoney?saved:withoutMoney(saved),warnings,conflicts},{status:existing?200:201});
   } catch(e) { console.error(e);return jsonError('Unable to save. Your changes are still in the form.',503); }
 }
 

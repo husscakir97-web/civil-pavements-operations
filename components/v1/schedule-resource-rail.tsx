@@ -27,8 +27,7 @@ export function ScheduleResourceRail({shift,data,busy,onAssign,onUnassign}:{shif
  const resourceIds=(r:DeliveryRecord)=>[r.metadata.plantNumber,r.metadata.rego,r.metadata.registration,r.metadata.employeeNumber] as Array<string|undefined>;
  const filtered=useMemo(()=>filterLookup(list,query,resourceText,resourceIds,r=>r.name),[list,query]);
  const hasWindow=Boolean(shift?.metadata.date&&shift.metadata.start&&shift.metadata.finish);
- const activeAvailability=hasWindow?availability:{};
- const ranked=useMemo(()=>rankResources(filtered,category,requirements,assigned,activeAvailability),[filtered,category,requirements,assigned,activeAvailability]);
+ const ranked=useMemo(()=>rankResources(filtered,category,requirements,assigned,hasWindow?availability:{}),[filtered,category,requirements,assigned,hasWindow,availability]);
  useEffect(()=>{
   if(!shift?.metadata.date||!shift.metadata.start||!shift.metadata.finish)return;
   const abort=new AbortController(),timer=setTimeout(async()=>{
@@ -66,7 +65,7 @@ export function ScheduleResourceRail({shift,data,busy,onAssign,onUnassign}:{shif
    <div className="relative mt-1"><Search aria-hidden className="pointer-events-none absolute left-3 top-2.5 size-4 text-slate-400"/><Input className="pl-9" type="search" placeholder="Name, plant no., rego, employee no." value={query} onChange={e=>setQuery(e.target.value)}/></div>
    <p className="mt-2 text-xs text-slate-500">{checking?'Checking availability…':'Available matches are suggested first.'}</p>
    <div className="mt-2 grid gap-1.5">
-    {ranked.slice(0,40).map(r=>{const a=activeAvailability[r.id],isAssigned=assignedIds.has(r.id),blocked=a?.tone==='block';return <Button key={r.id} type="button" variant="outline" disabled={busy||isAssigned||blocked} title={a?.text} className={`h-auto min-h-12 justify-start px-3 py-2 text-left ${blocked?'border-red-200 bg-red-50/50':a?.tone==='warn'?'border-amber-200 bg-amber-50/50':''}`} onClick={()=>void onAssign(r,category)}>
+    {ranked.slice(0,40).map(r=>{const a=hasWindow?availability[r.id]:undefined,isAssigned=assignedIds.has(r.id),blocked=a?.tone==='block';return <Button key={r.id} type="button" variant="outline" disabled={busy||isAssigned||blocked} title={a?.text} className={`h-auto min-h-12 justify-start px-3 py-2 text-left ${blocked?'border-red-200 bg-red-50/50':a?.tone==='warn'?'border-amber-200 bg-amber-50/50':''}`} onClick={()=>void onAssign(r,category)}>
       <UserRoundPlus aria-hidden className="size-4 shrink-0"/><span className="min-w-0 flex-1"><span className="block truncate font-medium">{r.name}</span><span className={`block truncate text-xs font-normal ${blocked?'text-red-700':a?.tone==='warn'?'text-amber-800':'text-slate-500'}`}>{isAssigned?'Already assigned':a?.text||'Checking…'}</span></span>{(blocked||a?.tone==='warn')&&<TriangleAlert aria-hidden className={`size-4 shrink-0 ${blocked?'text-red-600':'text-amber-600'}`}/>}
      </Button>;})}
     {!ranked.length&&<p className="rounded-lg border border-dashed p-3 text-sm text-slate-500">No matching {CATEGORIES.find(c=>c.key===category)?.label.toLowerCase()}.</p>}

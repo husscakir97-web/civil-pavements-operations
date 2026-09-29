@@ -196,6 +196,8 @@ export async function revokeExternalLink(id:string){
 async function externalToken(raw:string){
  const hash=tokenHash(raw),row=await one("SELECT * FROM external_access_tokens WHERE token_hash=? AND context_type='shift'",[hash]);
  if(!row||row.revoked_at||String(row.expires_at)<=new Date().toISOString())fail(404,'This job link is invalid or has expired.');
+ const entitlements=await getEntitlements(String(row.organisation_id));
+ if(!usable(entitlements,'operations'))fail(404,'This job link is invalid or has expired.');
  await exec('UPDATE external_access_tokens SET last_accessed_at=? WHERE id=?',[nowIso(),row.id]);
  return row!;
 }

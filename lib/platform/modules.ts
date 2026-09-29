@@ -35,7 +35,7 @@ const contract=(key:ModuleKey,ownedEntities:string[],workspace:ModuleContract['w
 /** Implemented modules only. Future products must not be provisioned or advertised as usable. */
 export const MODULE_REGISTRY:Record<ModuleKey,ModuleContract>={
  workshop:contract('workshop',['workshop_orders','workshop_entries'],{area:'Resource Work',sub:'Workshop'},['workshop.view','workshop.edit','workshop.verify'],{publishedEvents:['workshop.defect.created','workshop.repair.recorded','workshop.verified']}),
- core:contract('core',['organisations','users','documents','knowledge_packs','audit_log','domain_events'],{area:'Home'},['org.admin','knowledge.view'],{kind:'core',coreDependencies:[]}),
+ core:contract('core',['organisations','users','documents','knowledge_packs','audit_log','domain_events','communication_threads','communication_messages','communication_receipts','notifications','notification_preferences','external_access_tokens','external_responses'],{area:'Home'},['org.admin','knowledge.view','communication.view','communication.send'],{kind:'core',coreDependencies:[]}),
  pipeline:contract('pipeline',['opportunities','tenders','tender_requirements'],{area:'Win Work',sub:'Tenders'},['pipeline.view','pipeline.edit','tender.award'],{optionalSeams:['award.project'],reporting:['pipeline']}),
  estimating:contract('estimating',['estimates','estimate_revisions'],{area:'Win Work',sub:'Estimates'},['estimate.edit','estimate.approve'],{optionalSeams:['award.project']}),
  projects:contract('projects',['jobs','project_baselines','project_checklist_items','cost_transactions'],{area:'Prepare Work',sub:'Projects'},['project.view','project.edit'],{publishedEvents:['project.awarded'],optionalSeams:['award.project','docket.cost','project.ims'],reporting:['projects']}),

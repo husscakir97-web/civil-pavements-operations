@@ -46,8 +46,8 @@ export function publicDocument(r:Row){return {id:r.id,title:r.title,fileName:r.f
 
 export async function storeDocument(file:File,meta:{contextType:DocumentContext;contextId?:string|null;projectId?:string|null;category?:string;title?:string;visibility?:'office'|'field';supersedesId?:string|null;source?:string}){
  const actor=actorContext.getStore()!;
- const entitlements=await getEntitlements(actor.organisationId),module=DOCUMENT_CONTEXT_MODULE[meta.contextType];
- if(!writable(entitlements,module))fail(403,'This module is read-only or disabled. Existing documents remain available where permitted.');
+ const entitlements=await getEntitlements(actor.organisationId),moduleKey=DOCUMENT_CONTEXT_MODULE[meta.contextType];
+ if(!writable(entitlements,moduleKey))fail(403,'This module is read-only or disabled. Existing documents remain available where permitted.');
  if(!file.size)fail(400,'The file is empty.');
  if(file.size>MAX_DOCUMENT_BYTES)fail(413,'Files must be 40 MB or smaller.');
  if(actor.role==='field'&&meta.contextType!=='field')fail(404,'Not found.');
@@ -111,9 +111,9 @@ export async function openDocument(id:string){
  const row=await one('SELECT * FROM documents WHERE organisation_id=? AND id=?',[actor.organisationId,id]);
  if(!row)fail(404,'Document not found.');
  if(actor.role==='field'&&row!.visibility!=='field')fail(403,'This file is available to office staff only.');
- const context=row!.context_type as DocumentContext,module=DOCUMENT_CONTEXT_MODULE[context];
+ const context=row!.context_type as DocumentContext,moduleKey=DOCUMENT_CONTEXT_MODULE[context];
  if(actor.role==='field'&&!fieldDocumentContextsForAccess(entitlements).includes(context))fail(404,'Document not found.');
- if(!module||!usable(entitlements,module))fail(404,'Document not found.');
+ if(!moduleKey||!usable(entitlements,moduleKey))fail(404,'Document not found.');
  if(actor.role!=='field'&&!can(actor.role,CONTEXT_CAPABILITY[context]??'org.admin'))fail(403,'You are not authorised to open this document.');
  if(!await canAccessProject(documentProject(row!)))fail(404,'Document not found.');
  const object=await bucket.get(row!.storage_key);

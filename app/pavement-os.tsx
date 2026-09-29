@@ -68,6 +68,7 @@ const AREAS: Area[] = [
     { key: "Opportunities", module: "pipeline", capability: "pipeline.view" },
     { key: "Tenders", module: "pipeline", capability: "pipeline.view" },
     { key: "Estimates", module: "estimating", anyOf: ["pipeline.view","estimate.edit"] },
+    { key: "Clients", anyOf: ["pipeline.view","project.view"] },
   ], preload: loaders.engines },
   { key: "Prepare Work", label: "Prepare Work", icon: ClipboardCheck, engineNumber: 2, defaultSub: "Overview", subs: [
     { key: "Overview", anyOf: ["project.view","hseq.view","library.edit"] },
@@ -190,10 +191,10 @@ function WorkspaceShell() {
   const k = resolvedRoute.area === "Search" ? "Search" : area?.key;
   if (k === "Search") content = <SearchV1 />;
   else if (k === "Home") content = <HomeV1 />;
-  else if (k === "Win Work") content = sub === "Overview" ? <EngineOverview engine="Win Work" /> : sub === "Tenders" ? <TendersView /> : sub === "Estimates" ? <EstimatesQuotes key={route.id || "all"} initialEstimateId={route.id} /> : <OpportunitiesView />;
+  else if (k === "Win Work") content = sub === "Overview" ? <EngineOverview engine="Win Work" /> : sub === "Tenders" ? <TendersView /> : sub === "Estimates" ? <EstimatesQuotes key={route.id || "all"} initialEstimateId={route.id} /> : sub === "Clients" ? <ClientsRegister key={route.id || "all"} initialQuery={route.id} /> : <OpportunitiesView key={route.id || "all"} />;
   else if (k === "Prepare Work" && sub === "Programme") content = <Program />;
   else if (k === "Prepare Work") content = sub === "Overview" ? <EngineOverview engine="Prepare Work" /> : sub === "Projects" ? <ProjectsView /> : sub === "IMS & HSEQ" ? <HseqArea /> : <LibraryArea />;
-  else if (k === "Resource Work") content = sub === "Overview" ? <EngineOverview engine="Resource Work" /> : sub === "Workshop" ? <Workshop /> : sub === "Resources" ? <ResourcesArea key="resources" other={<OperationsPage module="Resources" initialResource="crews" resourceTypes={otherResources} onNavigate={legacyNavigate} />} /> : <JobsPlanning key={`schedule-${route.id || "all"}`} page="Planning" initialJobId={route.id} onBack={route.id ? () => navigate("Prepare Work", "Projects", route.id) : undefined} />;
+  else if (k === "Resource Work") content = sub === "Overview" ? <EngineOverview engine="Resource Work" /> : sub === "Workshop" ? <Workshop /> : sub === "Resources" ? <ResourcesArea key={`resources-${route.tab || ""}-${route.id || ""}`} initial={route.tab === "plant" ? "plant" : "workers"} initialQuery={route.id} other={<OperationsPage module="Resources" initialResource="crews" resourceTypes={otherResources} onNavigate={legacyNavigate} />} /> : <JobsPlanning key={`schedule-${route.id || "all"}`} page="Planning" initialJobId={route.id} onBack={route.id ? () => navigate("Prepare Work", "Projects", route.id) : undefined} />;
   else if (k === "Deliver Work" && sub === "Programme") content = <Program />;
   else if (k === "Deliver Work") content = sub === "Overview" ? <EngineOverview engine="Deliver Work" /> : sub === "Dockets" ? <DocketDashboard /> : <ProjectsView />;
   else if (k === "Control Money") content = sub === "Overview" ? <EngineOverview engine="Control Money" /> : <CommercialArea />;
@@ -226,7 +227,9 @@ function WorkspaceShell() {
 }
 
 function LibraryArea() {
+  const { route } = useNav();
   const [tab, setTab] = useState<"items" | "responses">("items");
-  return <div><Tabs label="Company library" active={tab} onChange={setTab} tabs={[{ key: "items", label: "Library items" }, { key: "responses", label: "Responses, templates & plans" }]} />{tab === "items" ? <LibraryRegister /> : <PreparationWorkspace scope="company" />}</div>;
+  return <div><Tabs label="Company library" active={tab} onChange={setTab} tabs={[{ key: "items", label: "Library items" }, { key: "responses", label: "Responses, templates & plans" }]} />{tab === "items" ? <LibraryRegister key={route.id || "all"} initialQuery={route.id} /> : <PreparationWorkspace scope="company" />}</div>;
 }
-const LibraryRegister = dynamic(() => import("@/components/v1/register-view").then(m => function Library() { return <m.RegisterView register="library" description="Policies, procedures, certifications, licences, insurances, capability statements, CVs, project examples and standard tender responses. Tender returnables link to these items." />; }), { loading });
+const ClientsRegister = dynamic(() => import("@/components/v1/clients").then(m => m.ClientsArea), { loading });
+const LibraryRegister = dynamic(() => import("@/components/v1/register-view").then(m => function Library({ initialQuery }: { initialQuery?: string }) { return <m.RegisterView register="library" initialQuery={initialQuery} description="Policies, procedures, certifications, licences, insurances, capability statements, CVs, project examples and standard tender responses. Tender returnables link to these items." />; }), { loading });

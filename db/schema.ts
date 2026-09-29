@@ -47,6 +47,19 @@ export const clients=mysqlTable('clients',{
  contactName:longtext('contact_name').notNull().default(sql`('')`),
  email:longtext('email').notNull().default(sql`('')`),
  phone:longtext('phone').notNull().default(sql`('')`),
+
+ // Core client (0006). Created once, selected everywhere; transactions keep a
+ // client_name snapshot alongside client_id.
+ legalName:varchar('legal_name',{length:255}),
+ abn:varchar('abn',{length:20}),
+ accountReference:varchar('account_reference',{length:80}),
+ paymentTermsDays:int('payment_terms_days'),
+ notes:text('notes'),
+ status:varchar('status',{length:20}).notNull().default('active'),
+ revision:int('revision').notNull().default(1),
+ createdBy:varchar('created_by',{length:191}),
+ createdAt:varchar('created_at',{length:40}),
+ updatedAt:varchar('updated_at',{length:40}),
 },t=>[index('idx_clients_org').on(t.organisationId)]);
 
 export const commercialRecords=mysqlTable('commercial_records',{
@@ -250,7 +263,9 @@ export const jobs=mysqlTable('jobs',{
  closedBy:varchar('closed_by',{length:191}),
  revision:int('revision').notNull().default(1),
  updatedAt:varchar('updated_at',{length:40}),
-},t=>[index('idx_jobs_org').on(t.organisationId),index('idx_jobs_org_stage').on(t.organisationId,t.stage),uniqueIndex('idx_jobs_source_tender').on(t.organisationId,t.sourceTenderId),uniqueIndex('idx_jobs_source_estimate').on(t.organisationId,t.sourceEstimateId)]);
+ clientId:varchar('client_id',{length:191}),
+ siteId:varchar('site_id',{length:191}),
+},t=>[index('idx_jobs_org_client').on(t.organisationId,t.clientId),index('idx_jobs_org').on(t.organisationId),index('idx_jobs_org_stage').on(t.organisationId,t.stage),uniqueIndex('idx_jobs_source_tender').on(t.organisationId,t.sourceTenderId),uniqueIndex('idx_jobs_source_estimate').on(t.organisationId,t.sourceEstimateId)]);
 
 export const opportunities=mysqlTable('opportunities',{
  id:varchar('id',{length:191}).primaryKey(),
@@ -274,7 +289,9 @@ export const opportunities=mysqlTable('opportunities',{
  revision:int('revision').notNull().default(1),
  createdBy:varchar('created_by',{length:191}),
  updatedAt:varchar('updated_at',{length:40}),
-},t=>[index('idx_opportunities_org').on(t.organisationId),index('idx_opportunities_org_stage').on(t.organisationId,t.stage)]);
+ clientId:varchar('client_id',{length:191}),
+ siteId:varchar('site_id',{length:191}),
+},t=>[index('idx_opportunities_org_client').on(t.organisationId,t.clientId),index('idx_opportunities_org').on(t.organisationId),index('idx_opportunities_org_stage').on(t.organisationId,t.stage)]);
 
 export const organisations=mysqlTable('organisations',{
  id:varchar('id',{length:191}).primaryKey(),

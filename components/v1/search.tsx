@@ -7,8 +7,9 @@ import {useNav} from './nav';
 
 type Result={id:string;name:string;type:string;status:string;detail:string;area:string;projectId:string|null;tenderId?:string|null};
 export function SearchV1(){
- const {navigate}=useNav();const {role}=useSession();
- const [q,setQ]=useState(''),[results,setResults]=useState<Result[]|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ const {navigate,route}=useNav();const {role}=useSession();
+ // Home's search box opens this page with the query in the route id.
+ const [q,setQ]=useState(route.area==='Search'&&route.id?route.id:''),[results,setResults]=useState<Result[]|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const term=q.trim();
  useEffect(()=>{
   if(term.length<2)return;

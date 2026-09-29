@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic';
 import {ArrowRight,Plus,Trophy} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,Section,PageHeader,NextAction,Progress,Stat,money,dateText,humanStatus} from './kit';
+import {ClientPicker,SitePicker,PersonPicker,ClientContactCard} from './lookup';
 import {AiAssist} from './ai';
 import {RegisterView,usePeople,DocumentInput} from './register-view';
 import {EstimateApprovalPanel} from './estimating';
@@ -14,7 +15,7 @@ const EmbeddedEstimate=dynamic(()=>import('@/components/estimates-quotes').then(
 const TenderReviewAssistant=dynamic(()=>import('@/components/tender-review-assistant').then(m=>m.TenderReviewAssistant),{loading:()=><Loading label="Loading tender documents…"/>});
 
 export function OpportunitiesView(){
- const {navigate}=useNav();const {can}=useSession();const {busy,error,run}=useAction();
+ const {navigate,route}=useNav();const {can}=useSession();const {busy,error,run}=useAction();
  const {data}=useApi<{records:Array<{id:string;stage:string;estimated_value?:number|null}>}>('/api/registers/opportunities');
  const records=data?.records||[];
  const stages=[['lead','Leads'],['qualified','Qualified'],['bidding','Bidding'],['converted','Converted'],['lost','Lost']] as const;
@@ -22,7 +23,7 @@ export function OpportunitiesView(){
   <PageHeader title="Opportunities" subtitle="See where potential work sits, qualify it, then move it into the tender workflow without losing context." actions={<Btn variant="secondary" onClick={()=>navigate('Pipeline','Tenders')}>Open tenders<ArrowRight aria-hidden className="size-4"/></Btn>}/>
   <ErrorState error={error}/>
   <section aria-label="Opportunity pipeline summary" className="-mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-5 sm:overflow-visible sm:px-0">{stages.map(([key,label])=>{const list=records.filter(r=>String(r.stage).toLowerCase()===key);const value=list.reduce((sum,r)=>sum+(Number(r.estimated_value)||0),0);const tone=key==='lost'?'from-red-50 to-white border-red-100':key==='converted'?'from-emerald-50 to-white border-emerald-100':key==='bidding'?'from-amber-50 to-white border-amber-100':key==='qualified'?'from-violet-50 to-white border-violet-100':'from-sky-50 to-white border-sky-100';return <div key={key} className={`min-w-[148px] snap-start rounded-2xl border bg-gradient-to-br p-4 shadow-sm sm:min-w-0 ${tone}`}><div className="flex items-center justify-between gap-2"><p className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-600">{label}</p><span className={`size-2.5 rounded-full ${key==='lost'?'bg-red-400':key==='converted'?'bg-emerald-500':key==='bidding'?'bg-amber-500':key==='qualified'?'bg-violet-500':'bg-sky-500'}`}/></div><p className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-slate-950">{list.length}</p><p className="mt-1 text-xs font-medium text-slate-500">{value>0?money(value):'No value recorded'}</p></div>;})}</section>
-  <RegisterView register="opportunities" title="Opportunity register" description="Open an opportunity to update its owner, value, closing date or stage. Qualified work can be converted directly to a tender." rowActions={(r,refresh)=>{
+  <RegisterView register="opportunities" initialQuery={route.area&&route.sub==="Opportunities"?route.id:undefined} title="Opportunity register" description="Open an opportunity to update its owner, value, closing date or stage. Qualified work can be converted directly to a tender." rowActions={(r,refresh)=>{
    if(r.tender_id)return <Btn variant="ghost" onClick={()=>navigate('Pipeline','Tenders',String(r.tender_id))}>Open tender<ArrowRight aria-hidden className="size-4"/></Btn>;
    if(['qualified','bidding'].includes(String(r.stage))&&can('pipeline.edit'))return <Btn variant="secondary" busy={busy} onClick={()=>void run(()=>api<{tenderId:string}>('/api/tenders/register',{method:'POST',body:{opportunityId:r.id}}),t=>{refresh();navigate('Pipeline','Tenders',t.tenderId);})}>Convert to tender</Btn>;
    return null;
@@ -30,7 +31,7 @@ export function OpportunitiesView(){
  </div>;
 }
 
-type Tender={awardBlockers?:string[];id:string;opportunityId:string;reference:string|null;title:string;clientName:string|null;ownerUserId:string|null;ownerName:string|null;stage:string;stageLabel:string;dueDate:string|null;location:string|null;scopeSummary:string|null;estimateId:string|null;approvalStatus:string;approvedAt:string|null;approvalNotes:string|null;submittedAt:string|null;submissionMethod:string|null;submissionVersion:string|null;submissionNotes:string|null;submissionOverrideReason:string|null;outcomeAt:string|null;outcomeReason:string|null;projectId:string|null;revision:number;estimatedValue?:number|null;approvedSellPrice?:number|null;approvedMarginPct?:number|null;completion:number;nextAction:string|null;checks:Array<{key:string;label:string;ok:boolean;detail:string|null}>;stats:{documents:number;requirements:number;suggested:number;mandatoryOpen:number;returnables:number;returnablesMandatoryOpen:number;clarificationsOpen:number;nextClarificationDue:string|null;estimateState:string|null;bidDecision:string;approvedRevisionNumber:number|null}};
+type Tender={awardBlockers?:string[];id:string;opportunityId:string;reference:string|null;title:string;clientName:string|null;clientId?:string|null;siteId?:string|null;ownerUserId:string|null;ownerName:string|null;stage:string;stageLabel:string;dueDate:string|null;location:string|null;scopeSummary:string|null;estimateId:string|null;approvalStatus:string;approvedAt:string|null;approvalNotes:string|null;submittedAt:string|null;submissionMethod:string|null;submissionVersion:string|null;submissionNotes:string|null;submissionOverrideReason:string|null;outcomeAt:string|null;outcomeReason:string|null;projectId:string|null;revision:number;estimatedValue?:number|null;approvedSellPrice?:number|null;approvedMarginPct?:number|null;completion:number;nextAction:string|null;checks:Array<{key:string;label:string;ok:boolean;detail:string|null}>;stats:{documents:number;requirements:number;suggested:number;mandatoryOpen:number;returnables:number;returnablesMandatoryOpen:number;clarificationsOpen:number;nextClarificationDue:string|null;estimateState:string|null;bidDecision:string;approvedRevisionNumber:number|null}};
 
 export function TendersView(){
  const {route,navigate}=useNav();
@@ -77,14 +78,14 @@ function TenderRegister(){
 
 function TenderForm({tender,onDone}:{tender?:Tender;onDone:(id?:string)=>void}){
  const people=usePeople();const {can}=useSession();const {busy,error,run}=useAction();
- const [v,setV]=useState({title:tender?.title||'',clientName:tender?.clientName||'',reference:tender?.reference||'',dueDate:tender?.dueDate?.slice(0,10)||'',estimatedValue:tender?.estimatedValue??'',ownerUserId:tender?.ownerUserId||'',location:tender?.location||'',scopeSummary:tender?.scopeSummary||''});
- const set=(k:string,val:string)=>setV(s=>({...s,[k]:val}));
+ const [v,setV]=useState({title:tender?.title||'',clientName:tender?.clientName||'',clientId:tender?.clientId||null as string|null,siteId:tender?.siteId||null as string|null,reference:tender?.reference||'',dueDate:tender?.dueDate?.slice(0,10)||'',estimatedValue:tender?.estimatedValue??'',ownerUserId:tender?.ownerUserId||'',location:tender?.location||'',scopeSummary:tender?.scopeSummary||''});
+ const set=(k:string,val:string|null)=>setV(s=>({...s,[k]:val}));
  const body={...v,estimatedValue:v.estimatedValue===''?null:Number(v.estimatedValue),dueDate:v.dueDate||null,ownerUserId:v.ownerUserId||null};
  return <form className="grid gap-4 p-5" onSubmit={e=>{e.preventDefault();void run(async()=>tender?(await api('/api/tenders/workspace',{method:'PATCH',body:{...body,id:tender.id,revision:tender.revision}}),tender.id):(await api<{tenderId:string}>('/api/tenders/register',{method:'POST',body})).tenderId,id=>onDone(id));}}>
   <Field label="Tender title" required><input className={field} required value={v.title} onChange={e=>set('title',e.target.value)}/></Field>
-  <div className="grid gap-4 sm:grid-cols-2"><Field label="Client"><input className={field} value={v.clientName} onChange={e=>set('clientName',e.target.value)}/></Field><Field label="Client reference"><input className={field} value={v.reference} onChange={e=>set('reference',e.target.value)}/></Field>
+  <div className="grid gap-4 sm:grid-cols-2"><ClientPicker value={v.clientId} legacyName={v.clientId?null:tender?.clientName} onChange={c=>setV(s=>({...s,clientId:c?.id??null,clientName:c?.name??s.clientName,siteId:c?.sites.length===1?c.sites[0].id:c&&c.sites.some(x=>x.id===s.siteId)?s.siteId:null,location:c?.sites.length===1&&!s.location?c.sites[0].label:s.location}))}/><Field label="Client reference"><input className={field} value={v.reference} onChange={e=>set('reference',e.target.value)}/></Field>
   <Field label="Closing date"><input className={field} type="date" value={v.dueDate} onChange={e=>set('dueDate',e.target.value)}/></Field>{can('commercial.view')&&<Field label="Estimated value"><input className={field} type="number" value={String(v.estimatedValue)} onChange={e=>set('estimatedValue',e.target.value)}/></Field>}
-  <Field label="Owner"><select className={field} value={v.ownerUserId} onChange={e=>set('ownerUserId',e.target.value)}><option value="">Unassigned</option>{people.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field><Field label="Location"><input className={field} value={v.location} onChange={e=>set('location',e.target.value)}/></Field></div>
+  <PersonPicker label="Owner" people={people} value={v.ownerUserId} onChange={id=>set('ownerUserId',id||'')}/>{v.clientId&&<SitePicker clientId={v.clientId} value={v.siteId} onChange={x=>setV(s=>({...s,siteId:x?.id??null,location:x?x.label:s.location}))}/>}<Field label="Location"><input className={field} value={v.location} onChange={e=>set('location',e.target.value)}/></Field></div>
   <Field label="Scope summary"><textarea className={`${field} min-h-24`} value={v.scopeSummary} onChange={e=>set('scopeSummary',e.target.value)}/></Field>
   <ErrorState error={error}/>
   <div className="flex gap-2"><Btn busy={busy} type="submit">{tender?'Save':'Create tender'}</Btn><Btn variant="secondary" type="button" onClick={()=>onDone()}>Cancel</Btn></div>
@@ -147,7 +148,7 @@ function IntakeTab({t,closed,onChanged}:{t:Tender;closed:boolean;onChanged:()=>v
  const [editing,setEditing]=useState(false);const {can}=useSession();
  return <div className="grid gap-4">
   <Section title="Tender details" actions={!closed&&can('pipeline.edit')&&<Btn variant="secondary" onClick={()=>setEditing(true)}>Edit details</Btn>}>
-   <dl className="grid gap-3 text-sm sm:grid-cols-3"><div><dt className="text-slate-500">Client</dt><dd>{t.clientName||'Not recorded'}</dd></div><div><dt className="text-slate-500">Location</dt><dd>{t.location||'Not recorded'}</dd></div><div><dt className="text-slate-500">Closing</dt><dd>{dateText(t.dueDate)}</dd></div><div className="sm:col-span-3"><dt className="text-slate-500">Scope summary</dt><dd className="whitespace-pre-wrap">{t.scopeSummary||'Not recorded'}</dd></div></dl>
+   <dl className="grid gap-3 text-sm sm:grid-cols-3"><div><dt className="text-slate-500">Client</dt><dd>{t.clientName||'Not recorded'}</dd></div><div><dt className="text-slate-500">Location</dt><dd>{t.location||'Not recorded'}</dd></div><div><dt className="text-slate-500">Closing</dt><dd>{dateText(t.dueDate)}</dd></div><div className="sm:col-span-3"><dt className="text-slate-500">Scope summary</dt><dd className="whitespace-pre-wrap">{t.scopeSummary||'Not recorded'}</dd></div></dl><div className="mt-3"><ClientContactCard clientId={t.clientId}/></div>
   </Section>
   <TenderReviewAssistant opportunityId={t.opportunityId} opportunityName={t.title}/>
   <Sheet open={editing} onOpenChange={setEditing}><SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-lg"><SheetTitle className="border-b px-5 py-4 text-lg font-semibold">Tender details</SheetTitle><SheetDescription className="sr-only">Edit tender</SheetDescription>{editing&&<TenderForm tender={t} onDone={()=>{setEditing(false);onChanged();}}/>}</SheetContent></Sheet>

@@ -21,10 +21,10 @@ const specs:Spec[]=[
  {table:'project_variations',type:'Variation',module:'commercial',capability:'commercial.view',name:'title',status:'status',detail:'reference',match:['title','reference','client_reference'],area:'Commercial',project:'project_id'},
  {table:'progress_claims',type:'Claim',module:'commercial',capability:'commercial.view',name:"CONCAT('Claim ',number,' — ',period)",status:'status',detail:'period',match:['period'],area:'Commercial',project:'project_id'},
  {table:'client_invoices',type:'Invoice',module:'commercial',capability:'invoice.manage',name:'invoice_number',status:'status',detail:'invoice_date',match:['invoice_number'],area:'Commercial',project:'project_id'},
- {table:'library_items',type:'Library item',module:'core',capability:'project.view',name:'title',status:'status',detail:'category',match:['title','description','category'],area:'Admin/Company Library'},
+ {table:'library_items',type:'Library item',module:'core',capability:'project.view',name:'title',status:'status',detail:"CONCAT_WS(' · ',category,owner_name,IF(expiry_date IS NULL,NULL,CONCAT('expires ',expiry_date)))",match:['title','description','category','owner_name','content','(SELECT d.file_name FROM documents d WHERE d.id=library_items.document_id AND d.organisation_id=library_items.organisation_id)'],area:'Admin/Company Library'},
  {table:'documents',type:'Document',module:'core',capability:'project.view',name:'title',status:'status',detail:'file_name',match:['title','file_name','category'],area:'Documents',project:'project_id'},
- {table:'workers',type:'Worker',module:'operations',capability:'schedule.view',name:'name',status:'status',detail:"''",match:['name'],filter:"AND LOWER(status)<>'archived'",area:'Operations/Resources'},
- {table:'plant',type:'Plant',module:'operations',capability:'schedule.view',name:'name',status:'status',detail:"''",match:['name'],filter:"AND LOWER(status)<>'archived'",area:'Operations/Resources'},
+ {table:'workers',type:'Worker',module:'operations',capability:'schedule.view',name:'name',status:'status',detail:"CONCAT_WS(' · ',employee_number,role_title,location)",match:['name','employee_number','role_title','email'],filter:"AND LOWER(status)<>'archived'",area:'Operations/Resources'},
+ {table:'plant',type:'Plant',module:'operations',capability:'schedule.view',name:'name',status:'status',detail:"CONCAT_WS(' · ',plant_number,registration,category,CONCAT_WS(' ',make,model),location)",match:['name','plant_number','registration','category','make','model','description','location'],filter:"AND LOWER(status)<>'archived'",area:'Operations/Resources'},
  {table:'dockets',type:'Docket',module:'dockets',capability:'docket.approve',name:'docket_no',status:'status',detail:"CONCAT_WS(' · ',client,project,po_number)",match:['docket_no','client','project','po_number'],filter:"AND LOWER(status)<>'archived'",area:'Operations/Dockets',project:"JSON_UNQUOTE(JSON_EXTRACT(links,'$.jobId'))"},
 ];
 
@@ -35,12 +35,15 @@ async function handleGET(request:Request){
   if(q.length<2)return Response.json({results:[]});
   const entitlements=await getEntitlements(actor.organisationId);
   const allowed=specs.filter(s=>usable(entitlements,s.module)&&(s.capability==='field'?true:can(actor.role,s.capability)));
-  const like=`%${q.replace(/[\\%_]/g,m=>'\\'+m)}%`;
+  // Legacy tables use utf8mb4_bin (case-sensitive), so fields and terms are lower-cased.
+  // Every word must appear in one of the record's searchable fields, so
+  // "public liability" finds "Public & Products Liability Insurance".
+  const terms=q.toLowerCase().split(/\s+/).filter(Boolean).slice(0,6).map(t=>`%${t.replace(/[\\%_]/g,m=>'\\'+m)}%`);
   const groups=await Promise.all(allowed.map(async spec=>{
    const docContexts=documentContextsFor(actor.role).map(c=>`'${c}'`).join(',')||"''";
    const fieldDocs=spec.table==='documents'?(actor.role==='field'?" AND visibility='field'":` AND context_type IN (${docContexts})`):'';
    const fieldSwms=spec.table==='swms'&&actor.role==='field'?' AND issued_revision_id IS NOT NULL':'';
-   const r=await db.prepare(`SELECT id,${spec.name} AS name,${spec.status} AS status,${spec.detail} AS detail${spec.project?`,${spec.project} AS project_id`:''}${spec.tender?`,${spec.tender} AS tender_id`:''} FROM ${spec.table} WHERE organisation_id=? ${spec.filter||''}${fieldDocs}${fieldSwms} AND (${spec.match.map(c=>`${c} LIKE ?`).join(' OR ')}) LIMIT 10`).bind(actor.organisationId,...spec.match.map(()=>like)).all<Record<string,unknown>>();
+   const r=await db.prepare(`SELECT id,${spec.name} AS name,${spec.status} AS status,${spec.detail} AS detail${spec.project?`,${spec.project} AS project_id`:''}${spec.tender?`,${spec.tender} AS tender_id`:''} FROM ${spec.table} WHERE organisation_id=? ${spec.filter||''}${fieldDocs}${fieldSwms} AND ${terms.map(()=>`(${spec.match.map(c=>`LOWER(${c}) LIKE ?`).join(' OR ')})`).join(' AND ')} LIMIT 10`).bind(actor.organisationId,...terms.flatMap(t=>spec.match.map(()=>t))).all<Record<string,unknown>>();
    return r.results.map(x=>({id:String(x.id),name:String(x.name??''),status:String(x.status??''),detail:String(x.detail??'').slice(0,200),type:spec.type,area:spec.area,projectId:x.project_id?String(x.project_id):null,tenderId:x.tender_id?String(x.tender_id):null}));
   }));
   return Response.json({results:groups.flat().slice(0,80)},{headers:{'Cache-Control':'private, no-store'}});

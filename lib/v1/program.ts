@@ -26,3 +26,16 @@ export function moveActivity(ids:readonly string[],id:string,delta:number){
 export function orderActivities<T extends {sequence?:number|null;start_date:string;name:string}>(rows:T[]){
  return [...rows].sort((a,b)=>(a.sequence??Number.MAX_SAFE_INTEGER)-(b.sequence??Number.MAX_SAFE_INTEGER)||a.start_date.localeCompare(b.start_date)||a.name.localeCompare(b.name));
 }
+
+
+/** Explicit user assignment stored in the existing responsible column. Legacy free-text values stay readable. */
+export const responsibleToken=(userId:string)=>`user:${userId}`;
+export const responsibleUserId=(value:string|null|undefined)=>String(value||'').startsWith('user:')?String(value).slice(5):null;
+
+/** Drag/drop reorder: move one id immediately before another id. */
+export function moveActivityTo(ids:readonly string[],id:string,targetId:string){
+ if(id===targetId)return [...ids];
+ const out=ids.filter(x=>x!==id),target=out.indexOf(targetId);
+ if(target<0)return [...ids];
+ out.splice(target,0,id);return out;
+}

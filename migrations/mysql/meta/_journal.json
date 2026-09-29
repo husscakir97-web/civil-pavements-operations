@@ -120,6 +120,13 @@
       "when": 1790666793508,
       "tag": "0016_crm_completion",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1790676390750,
+      "tag": "0017_core_locations",
+      "breakpoints": true
     }
   ]
 }

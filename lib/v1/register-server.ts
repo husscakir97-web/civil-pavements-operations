@@ -13,6 +13,8 @@ import {requireModule} from '@/lib/platform/entitlements';
 import {getPool} from '@/lib/platform/database';
 import {resolveClientContext,visibleClientIds} from '@/lib/platform/clients';
 import {canAccessProject,projectFilter} from '@/lib/platform/project-access';
+import {saveLocation,loadLocations,locationInput} from '@/lib/platform/locations';
+import type {LocationInput} from '@/lib/v1/location';
 const getPoolConn=()=>getPool();
 
 const actor=()=>actorContext.getStore()!;
@@ -34,10 +36,16 @@ function fieldSchema(f:FieldDef):ZodTypeAny{
   case 'date':return opt(z.preprocess(blank,z.string().regex(/^\d{4}-\d{2}-\d{2}$/,`${f.label} must be a date.`)));
   case 'datetime':return opt(z.preprocess(blank,z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/,`${f.label} must be a date and time.`).transform(s=>s.slice(0,16))));
   case 'select':return opt(z.preprocess(blank,z.enum(f.options as [string,...string[]])));
+  case 'location':return locationInput.nullable().optional();
   case 'boolean':return z.preprocess(v=>v===true||v===1||v==='1'||v==='true'?1:0,z.number()).optional();
   default:return opt(z.preprocess(blank,z.string().max(191)));
  }
 }
+
+// Location fields accept a structured location and store only its id on the record.
+function takeLocations(def:RegisterDef,values:Row){const out:[FieldDef,LocationInput|null][]=[];for(const f of def.fields)if(f.type==='location'&&f.key in values){out.push([f,values[f.key] as LocationInput|null]);delete values[f.key];}return out;}
+async function storeLocations(def:RegisterDef,id:string,pending:[FieldDef,LocationInput|null][],existing:Row|null,conn:Conn){const set:Row={};for(const [f,v] of pending)set[f.key]=v?await saveLocation(conn,{type:'incident',id,locationType:def.key},v,existing?.[f.key]):null;return set;}
+async function withLocations(def:RegisterDef,rows:Row[],conn?:Conn){const fields=def.fields.filter(f=>f.type==='location');if(!fields.length)return rows;const locs=await loadLocations(rows.flatMap(r=>fields.map(f=>r[f.key])),conn);return rows.map(r=>({...r,location:fields.map(f=>locs.get(r[f.key])).find(Boolean)??null}));}
 
 function writableFields(def:RegisterDef,role:string){
  const full=can(role,def.edit);
@@ -140,7 +148,7 @@ export async function listRegister(key:string,params:URLSearchParams){
  // Cross-project listings (all=1, optional-project registers) are narrowed to the actor's projects; org-level rows stay.
  if(!parentId&&joinProject){const f=await projectFilter('t.project_id',values,{allowNull:def.scope==='optional-project'});if(f)where.push(f.replace(/^ AND /,''));}
  const rows=await query(`SELECT t.*${joinProject?',j.name AS project_name':''} FROM ${def.table} t ${joinProject?'LEFT JOIN jobs j ON j.id=t.project_id AND j.organisation_id=t.organisation_id':''} WHERE ${where.join(' AND ')} ORDER BY ${def.key==='itp_items'?'t.sequence,t.created_at':'t.created_at DESC'} LIMIT 500`,values);
- return {register:def.key,records:rows.map(r=>project(def,r,actor().role))};
+ return {register:def.key,records:(await withLocations(def,rows)).map(r=>project(def,r,actor().role))};
 }
 
 async function nextReference(def:RegisterDef,parent:Row,conn:PoolConnection){
@@ -161,6 +169,7 @@ export async function createRecord(key:string,parentId:string|null,input:Record<
  const values:Row=legacyNulls(def,Object.fromEntries(Object.entries(parsed.data as Row).filter(([,v])=>v!==null&&v!==undefined)));
  const work=async(conn:PoolConnection)=>{
   const parent=await resolveParent(def,parentId,conn,true) as Row;
+  const pendingLocations=takeLocations(def,values);
   await validateRefs(def,values,conn);
   await derive(def,values,null,conn);
   if(def.key==='clients'&&await one('SELECT id FROM clients WHERE organisation_id=? AND LOWER(TRIM(name))=LOWER(?) LIMIT 1',[a.organisationId,values.name],conn))fail(409,'A client with this name already exists. Search for it instead.');
@@ -169,7 +178,7 @@ export async function createRecord(key:string,parentId:string|null,input:Record<
   const col=scopeColumn(def);if(col&&parent[col])row[col]=parent[col];
   if(def.scope==='itp')row.project_id=parent.project_id;
   if(def.machine)row[stateCol(def)]=opts.initialState||MACHINES[def.machine].initial;
-  Object.assign(row,await nextReference(def,parent,conn));
+  Object.assign(row,await nextReference(def,parent,conn),await storeLocations(def,id,pendingLocations,null,conn));
   if(def.key==='requirements'){delete row.created_by;row.opportunity_id=parent.opportunityId;row.origin=opts.origin||'manual';row.requirement_type=row.category||'Project-specific';}
   if(def.key==='opportunities'){row.status=row.stage;row.metadata=JSON.stringify({client:row.client_name,estimatedValue:row.estimated_value,probability:row.probability,tenderCloseDate:row.closing_date});}
   if(def.key==='incidents')row.reported_by=a.userId;
@@ -181,7 +190,7 @@ export async function createRecord(key:string,parentId:string|null,input:Record<
   const cols=Object.keys(row);
   await exec(`INSERT INTO ${def.table} (${cols.join(',')}) VALUES (${cols.map(()=>'?').join(',')})`,cols.map(c=>row[c]),conn);
   await audit({event:`${def.key}.created`,entityType:def.key,entityId:id,projectId:(row.project_id as string)||null,summary:`${def.singular} created: ${String(row[def.titleField]??'').slice(0,120)}`,after:values},conn);
-  return {record:project(def,{...row,...(await one(`SELECT * FROM ${def.table} WHERE id=?`,[id],conn))},a.role)};
+  return {record:project(def,(await withLocations(def,[{...row,...(await one(`SELECT * FROM ${def.table} WHERE id=?`,[id],conn))}],conn))[0],a.role)};
  };
  return opts.conn?work(opts.conn):tx(work);
 }
@@ -213,6 +222,8 @@ export async function updateRecord(key:string,id:string,revision:number,input:Re
   if(Number(row.revision)!==Number(revision))fail(409,'This record was changed by someone else. Refresh to see the latest version.');
   if(def.lockedStates?.includes(row[stateCol(def)]))fail(409,`${def.singular} is ${row[stateCol(def)]} and can no longer be edited.`);
   if(def.key==='itp_items'&&['pass','fail','na'].includes(row.status)&&!can(a.role,'document.approve'))fail(409,'This inspection point is complete. Ask a manager to reopen it.');
+  const pendingLocations=takeLocations(def,values);
+  Object.assign(values,await storeLocations(def,id,pendingLocations,row,conn));
   await validateRefs(def,values,conn);
   await derive(def,values,row,conn);
   if(!Object.keys(values).length)return {record:project(def,row,a.role)};
@@ -222,7 +233,7 @@ export async function updateRecord(key:string,id:string,revision:number,input:Re
   await exec(`UPDATE ${def.table} SET ${cols.map(c=>`${c}=?`).join(',')},revision=revision+1,updated_at=? WHERE organisation_id=? AND id=? AND revision=?`,[...cols.map(c=>values[c]),now,a.organisationId,id,revision],conn);
   const before=Object.fromEntries(cols.map(c=>[c,row[c]]));
   await audit({event:`${def.key}.updated`,entityType:def.key,entityId:id,projectId:row.project_id||null,summary:`${def.singular} updated`,before,after:values},conn);
-  return {record:project(def,await one(`SELECT * FROM ${def.table} WHERE id=?`,[id],conn) as Row,a.role)};
+  return {record:project(def,(await withLocations(def,[await one(`SELECT * FROM ${def.table} WHERE id=?`,[id],conn) as Row],conn))[0],a.role)};
  });
 }
 

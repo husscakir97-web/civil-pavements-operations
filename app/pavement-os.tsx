@@ -56,6 +56,7 @@ const SearchV1 = dynamic(() => loaders.search().then(m => m.SearchV1), { loading
 const FieldToday = dynamic(() => loaders.field().then(m => m.FieldToday), { loading });
 const ResourcesArea = dynamic(() => loaders.resources().then(m => m.ResourcesArea), { loading });
 const FieldWorkspace = dynamic(() => loaders.fieldRecords().then(m => m.FieldWorkspace), { loading });
+const DepotsArea = dynamic(() => import("@/components/v1/depots").then(m => m.DepotsArea), { loading });
 const EngineOverview = dynamic(() => loaders.engines().then(m => m.EngineOverview), { loading });
 
 type Area = NavArea & { icon: LucideIcon; preload: () => Promise<unknown> };
@@ -164,7 +165,7 @@ function WorkspaceShell() {
   else if (k === "Pipeline") content = sub === "Tenders" ? <TendersView /> : sub === "Estimates" ? <EstimatesQuotes key={route.id || "all"} initialEstimateId={route.id} /> : <OpportunitiesView key={route.id || "all"} />;
   else if (k === "Projects") content = sub === "Programme" ? <Program /> : <ProjectsView />;
   else if (k === "Schedule") content = <JobsPlanning key={`schedule-${route.id || "all"}`} page="Planning" initialJobId={route.id} onBack={route.id ? () => navigate("Projects", "Projects", route.id) : undefined} />;
-  else if (k === "Resources") content = sub === "Workshop" ? <Workshop /> : sub === "Crews" ? other(["crews"]) : sub === "Suppliers & Subcontractors" ? other(["suppliers", "subcontractors"]) : <ResourcesArea key={`${sub}-${route.id || ""}`} only initial={sub === "Plant & Equipment" ? "plant" : "workers"} initialQuery={route.id} />;
+  else if (k === "Resources") content = sub === "Workshop" ? <Workshop /> : sub === "Crews" ? other(["crews"]) : sub === "Suppliers & Subcontractors" ? other(["suppliers", "subcontractors"]) : sub === "Depots" ? <DepotsArea /> : <ResourcesArea key={`${sub}-${route.id || ""}`} only initial={sub === "Plant & Equipment" ? "plant" : "workers"} initialQuery={route.id} />;
   else if (k === "Commercial") content = sub === "Dockets" ? <DocketDashboard /> : <CommercialArea />;
   else if (k === "IMS & HSEQ") content = <HseqArea />;
   else if (k === "Documents") content = <LibraryArea />;

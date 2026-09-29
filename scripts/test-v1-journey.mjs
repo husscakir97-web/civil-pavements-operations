@@ -40,7 +40,7 @@ await new Promise(r=>ext.listen(0,'127.0.0.1',r));
 const EXT=`http://127.0.0.1:${ext.address().port}`,OPERATOR=`operator-${suffix}@example.invalid`,BILLING_SECRET='fixture-billing-secret';
 Object.assign(process.env,{ABR_GUID:'fixture-guid',ABR_BASE_URL:`${EXT}/abr/`,AI_ENABLED:'true',AI_PROVIDER:'anthropic',AI_API_KEY:'fixture-key',AI_MODEL:'fixture-model',AI_BASE_URL:EXT,BILLING_PROVIDER:'fixture-billing',BILLING_WEBHOOK_SECRET:BILLING_SECRET,PLATFORM_OPERATOR_EMAILS:OPERATOR});
 const PORT=33191,base=`http://localhost:${PORT}`;
-Object.assign(process.env,{R2_ENDPOINT:`http://127.0.0.1:${s3.address().port}`,R2_ACCESS_KEY_ID:'fixture',R2_SECRET_ACCESS_KEY:'fixture',R2_BUCKET_NAME:'test-bucket',EMAIL_ENABLED:'false',BETTER_AUTH_SECRET:'journey-test-secret-with-at-least-32-characters',BETTER_AUTH_URL:base});
+Object.assign(process.env,{R2_ENDPOINT:`http://127.0.0.1:${s3.address().port}`,R2_ACCESS_KEY_ID:'fixture',R2_SECRET_ACCESS_KEY:'fixture',R2_BUCKET_NAME:'test-bucket',EMAIL_ENABLED:'false',LOCATION_PROVIDER:'fake',BETTER_AUTH_SECRET:'journey-test-secret-with-at-least-32-characters',BETTER_AUTH_URL:base});
 const app=spawn(process.execPath,['node_modules/next/dist/bin/next','start','-p',String(PORT),'--hostname','127.0.0.1'],{env:process.env,stdio:['ignore','pipe','pipe']});
 let appLog='';app.stdout.on('data',b=>appLog+=b);app.stderr.on('data',b=>appLog+=b);
 let step='startup';
@@ -854,6 +854,81 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const full=await json(await call('/api/platform/clients?id='+riverside.id,'GET',undefined,A.cookie),200);assert(full.tenders.some(t=>t.id===tenderId),'client work shows its tender');assert(full.projects.active.some(p=>p.id===projectId)||full.projects.completed.some(p=>p.id===projectId));
  const tpl=await call('/api/platform/clients/import?template=1','GET',undefined,A.cookie);assert.equal(tpl.status,200);const tb=new ExcelJS.Workbook();await tb.xlsx.load(Buffer.from(await tpl.arrayBuffer()));assert.deepEqual(tb.worksheets.map(w=>w.name),['Instructions','Clients','Contacts','Sites']);
  console.log('PASS K CRM: bulk import 100 new/50 update/10 exact/5 possible/5 invalid with contacts+sites, preview writes nothing, decisions, audit, idempotent re-run; quick create by ABN/name; inactive; legacy linking never guesses; merge; tenant isolation; search; PE client scope; scheduler job from CRM; module-aware history; template; CRM create/edit/manage by role; merge keeps one primary contact with duplicate warnings');
+ // ---------------------------------------------------------------- Scenario L: Core locations — address search, exact pin, inheritance, scope
+ step='L locations';
+ const lLoc=(q,cookie=A.cookie)=>call('/api/platform/locations?'+new URLSearchParams(q),'GET',undefined,cookie);
+ const lCfg=await json(await lLoc({op:'config'}),200);assert.equal(lCfg.provider,'fake');assert.equal(lCfg.browserKey,null,'no browser key is configured in CI');
+ assert.deepEqual((await json(await lLoc({op:'autocomplete',q:'24'}),200)).suggestions,[],'short queries do not hit the provider');
+ const lSugg=(await json(await lLoc({op:'autocomplete',q:'24 York Road Ingleburn',session:'s1'}),200)).suggestions;assert.equal(lSugg[0].placeId,'fake-york-rd-ingleburn');
+ const lYork=(await json(await lLoc({op:'place',id:lSugg[0].placeId,session:'s1'}),200)).place;assert.equal(lYork.addressLine1,'24 York Road');assert.equal(lYork.postcode,'2565');
+ await json(await lLoc({op:'autocomplete',q:'offline'}),503,'provider offline is reported, not a crash');
+ await json(await lLoc({op:'reverse',lat:'-1',lng:'-1'}),503,'reverse failure is reported so the picker keeps the pin');
+ assert.equal((await json(await lLoc({op:'reverse',lat:'-12.3',lng:'130.8'}),200)).place,null,'no invented address for unknown points');
+ const lYard=(await json(await lLoc({op:'reverse',lat:'-33.999',lng:'150.862'}),200)).place;assert.match(lYard.formattedAddress,/Yard entrance/);
+ await json(await lLoc({op:'reverse',lat:'0',lng:'0'}),400,'null island is rejected');
+ assert.equal((await lLoc({op:'config'},'')).status,401,'location endpoints need a session');
+ const lPicked={...lYork,provider:'fake',source:'autocomplete',geocoded:lYork.point,pin:lYork.point};
+ const lClient=(await json(await cr({action:'create',client:{name:`Location Client ${suffix}`}}),201)).client;
+ const lSite=(await json(await cr({action:'createSite',site:{clientId:lClient.id,name:'Ingleburn depot upgrade',location:lPicked}}),201)).site;
+ assert.equal(lSite.address,lYork.formattedAddress,'address text snapshot filled from the location');assert.equal(lSite.location.placeId,'fake-york-rd-ingleburn');assert.equal(lSite.location.pinAdjusted,false);
+ // Moving the pin keeps the geocoded point and records the reverse-geocoded pin address.
+ const lMoved=(await json(await cr({action:'updateSite',id:lSite.id,revision:lSite.revision,site:{location:{...lPicked,pin:{lat:-33.999,lng:150.862},pinAddress:lYard.formattedAddress}}}),200)).site;
+ assert.equal(lMoved.location.pinAdjusted,true);assert.equal(lMoved.location.geocoded.lat,-33.9985);assert.equal(lMoved.location.pin.lat,-33.999);assert.equal(lMoved.location.pinAddress,lYard.formattedAddress);assert.equal(lMoved.location.id,lSite.location.id,'the same location is updated');
+ assert.equal(lMoved.address,lYork.formattedAddress,'the site address stays the general address');
+ const [[lrow]]=await db.execute('SELECT organisation_id,owner_type,owner_id FROM locations WHERE id=?',[lMoved.location.id]);assert.deepEqual({...lrow},{organisation_id:memberA.organisation_id,owner_type:'client_site',owner_id:lSite.id});
+ // Tenant isolation: organisation B cannot read or update the site or reach the location.
+ assert(!JSON.stringify(await json(await call('/api/platform/clients?view=sites&q=Ingleburn','GET',undefined,B.cookie),200)).includes(lSite.id),'no cross-tenant site search');
+ assert.notEqual((await cr({action:'updateSite',id:lSite.id,revision:lMoved.revision,site:{location:lPicked}},B.cookie)).status,200,'foreign site update refused');
+ assert.equal((await call('/api/platform/locations/'+lMoved.location.id,'GET',undefined,A.cookie)).status,404,'there is no global location endpoint');
+ // Legacy site without a location still loads; manual entry with coordinates has no provider data.
+ const lLegacySite=(await json(await cr({action:'createSite',site:{clientId:lClient.id,address:'Old quarry access road'}}),201)).site;assert.equal(lLegacySite.location,null);
+ const lManualSite=(await json(await cr({action:'createSite',site:{clientId:lClient.id,name:'Lot 7',location:{addressLine1:'Lot 7 Quarry Road',addressLine2:null,locality:'Marulan',state:'NSW',postcode:'2579',country:'AU',source:'manual',placeId:'forged',provider:'fake',geocoded:{lat:-34.7,lng:150},pin:{lat:-34.71,lng:150.01}}}}),201)).site;
+ assert.equal(lManualSite.location.placeId,null);assert.equal(lManualSite.location.geocoded,null);assert.equal(lManualSite.location.precision,'manual');assert.equal(lManualSite.location.pin.lat,-34.71);
+ await json(await cr({action:'createSite',site:{clientId:lClient.id,name:'Bad pin',location:{addressLine1:null,addressLine2:null,locality:null,state:null,postcode:null,country:null,source:'manual',pin:{lat:0,lng:0}}}}),400,'invalid coordinates refused');
+ // Project inherits the site location; a project override never rewrites the CRM site.
+ const lJob=(await json(await call('/api/delivery','POST',{kind:'jobs',record:{id:'',name:`Location job ${suffix}`,status:'Planning',metadata:{clientId:lClient.id,siteId:lSite.id}}},A.cookie),201)).record;
+ let lLp=(await json(await call('/api/projects/workspace?id='+lJob.id,'GET',undefined,A.cookie),200)).project;
+ assert.equal(lLp.locationSource,'site');assert.equal(lLp.location.id,lMoved.location.id);
+ const lDover=(await json(await lLoc({op:'place',id:(await json(await lLoc({op:'autocomplete',q:'Dover Road Rose Bay'}),200)).suggestions[0].placeId}),200)).place;
+ lLp=(await json(await call('/api/projects/workspace','PATCH',{id:lLp.id,revision:lLp.revision,location:{...lDover,provider:'fake',source:'autocomplete',geocoded:lDover.point,pin:{lat:-33.8741,lng:151.2702},pinAddress:'120 Dover Road, Rose Bay NSW 2029, Australia'}},A.cookie),200)).project??lLp;
+ lLp=(await json(await call('/api/projects/workspace?id='+lJob.id,'GET',undefined,A.cookie),200)).project;
+ assert.equal(lLp.locationSource,'project');assert.equal(lLp.location.precision,'GEOMETRIC_CENTER');assert.equal(lLp.location.pinAdjusted,true);assert.equal(lLp.siteLocation.id,lMoved.location.id);
+ const [[siteAfter]]=await db.execute('SELECT location_id,address FROM client_sites WHERE id=?',[lSite.id]);assert.equal(siteAfter.location_id,lMoved.location.id,'CRM site untouched');assert.equal(siteAfter.address,lYork.formattedAddress);
+ const [[siteLocAfter]]=await db.execute('SELECT pin_lat FROM locations WHERE id=?',[lMoved.location.id]);assert.equal(Number(siteLocAfter.pin_lat),-33.999);
+ // Delivery: shifts inherit the project location; a work point changes only that shift.
+ const lShift=(await json(await call('/api/delivery','POST',{kind:'shifts',record:{id:'',name:'Location shift',status:'Planned',metadata:{jobId:lJob.id,date:today,start:'18:00',finish:'22:00',location:'Northbound lane, chainage 120',assignments:[]}}},A.cookie),201)).record;
+ let lDl=await json(await call('/api/delivery','GET',undefined,A.cookie),200);let lDShift=lDl.shifts.find(x=>x.id===lShift.id);
+ assert.equal(lDShift.metadata.locationSource,'project');assert.equal(lDShift.metadata.locationView.id,lLp.location.id);assert.equal(lDShift.metadata.location,'Northbound lane, chainage 120','free-text work area kept');
+ await json(await call('/api/delivery','POST',{kind:'shifts',record:{...lDShift,metadata:{...lDShift.metadata,workPoint:{...lPicked,pin:{lat:-33.999,lng:150.862}}}}},A.cookie),200,'shift work point');
+ lDl=await json(await call('/api/delivery','GET',undefined,A.cookie),200);lDShift=lDl.shifts.find(x=>x.id===lShift.id);
+ assert.equal(lDShift.metadata.locationSource,'shift');assert.equal(lDShift.metadata.locationView.pin.lat,-33.999);assert.equal(lDShift.metadata.workPoint,undefined,'work point is not stored in metadata');
+ assert.equal(lDl.jobs.find(x=>x.id===lJob.id).metadata.locationView.id,lLp.location.id,'the project keeps its own location');
+ const [[shiftLoc]]=await db.execute('SELECT l.owner_type,l.owner_id FROM shifts s JOIN locations l ON l.id=s.location_id WHERE s.id=?',[lShift.id]);assert.deepEqual({...shiftLoc},{owner_type:'shift',owner_id:lShift.id});
+ await json(await call('/api/delivery','POST',{kind:'shifts',record:{...lDShift,metadata:{...lDShift.metadata,workPoint:{addressLine1:null,addressLine2:null,locality:null,state:null,postcode:null,country:null,source:'manual',pin:{lat:200,lng:1}}}}},A.cookie),400,'invalid work point refused');
+ // Field Today: exact work point with a Directions link to the pin.
+ const lToday=await json(await call('/api/field/today','GET',undefined,A.cookie),200);const lTShift=[...lToday.today,...lToday.upcoming].find(x=>x.id===lShift.id);
+ assert(lTShift,'shift visible on Today');assert.equal(lTShift.workLocation.directions,'https://www.google.com/maps/dir/?api=1&destination=-33.9990000,150.8620000');
+ await json(await call('/api/delivery','POST',{kind:'shifts',record:{...lDShift,metadata:{...lDShift.metadata,workPoint:null}}},A.cookie),200,'clear work point');
+ lDShift=(await json(await call('/api/delivery','GET',undefined,A.cookie),200)).shifts.find(x=>x.id===lShift.id);assert.equal(lDShift.metadata.locationSource,'project');
+ // Reset the project to the site location.
+ lLp=(await json(await call('/api/projects/workspace?id='+lJob.id,'GET',undefined,A.cookie),200)).project;
+ await json(await call('/api/projects/workspace','PATCH',{id:lLp.id,revision:lLp.revision,useSiteLocation:true},A.cookie),200);
+ lLp=(await json(await call('/api/projects/workspace?id='+lJob.id,'GET',undefined,A.cookie),200)).project;assert.equal(lLp.locationSource,'site');
+ assert.equal((await call('/api/projects/workspace?id='+lJob.id,'GET',undefined,B.cookie)).status,404,'foreign project location unreachable');
+ // Depots: organisation-scoped with an exact location.
+ const lDepot=await json(await call('/api/platform/depots','POST',{depot:{name:'Ingleburn yard',location:lPicked}},A.cookie),200,'create depot');
+ const lDepots=(await json(await call('/api/platform/depots','GET',undefined,A.cookie),200)).depots;assert.equal(lDepots.find(d=>d.id===lDepot.id).location.placeId,'fake-york-rd-ingleburn');
+ assert(!(await json(await call('/api/platform/depots','GET',undefined,B.cookie),200)).depots.some(d=>d.id===lDepot.id),'depots stay in their organisation');
+ assert.equal((await call('/api/platform/depots','POST',{id:lDepot.id,depot:{name:'Hijack'}},B.cookie)).status,404,'foreign depot update');
+ assert.equal((await call('/api/platform/depots','POST',{depot:{name:'Field depot'}},C.cookie)).status,403,'field users cannot change depots');
+ // Company registered address: structured with a text snapshot.
+ await json(await call('/api/platform/onboarding','PUT',{registered_location:lPicked},A.cookie),200);
+ const lProf=(await json(await call('/api/platform/onboarding','GET',undefined,A.cookie),200)).profile;assert.equal(lProf.registered_address,lYork.formattedAddress);assert.equal(lProf.registered_location.postcode,'2565');
+ // Incident: exact location plus free-text specific location; field users can record it.
+ const lInc=await json(await reg('incidents',C.cookie).create(projectId,{incident_type:'near miss',occurred_at:`${today}T11:00`,description:'Plant reversed near pedestrians',location_description:'Gate 2, near the wash bay',location_id:{...lPicked,pin:{lat:-33.999,lng:150.862}}}),201,'incident with location');
+ assert.equal(lInc.record.location.pinAdjusted,true);assert.equal(lInc.record.location_description,'Gate 2, near the wash bay');
+ const lIncList=(await json(await reg('incidents',A.cookie).list('?parentId='+projectId),200)).records;assert.equal(lIncList.find(r=>r.id===lInc.record.id).location.pin.lat,-33.999);
+ console.log('PASS L locations: fake provider autocomplete/place/reverse, offline + reverse failure, no invented addresses, site location with exact pin (geocoded kept), tenant isolation, no global endpoint, legacy + manual entry, project inheritance/override without rewriting CRM, shift work point, Field Today directions, depots, company address, incident location');
 
  // ---------------------------------------------------------------- Scenario H: ABN register, AI orchestration, billing
  step='H ABN';

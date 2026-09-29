@@ -85,9 +85,9 @@ const subs=(role,area,mods)=>(appNav.navFor(access(role,mods)).find(a=>a.key===a
 assert.deepEqual(areas('admin'),['Home','CRM','Pipeline','Projects','Schedule','Resources','Commercial','IMS & HSEQ','Documents','Reports','Admin']);
 assert(!areas('admin').some(k=>ENGINES.some(e=>e.key===k)),'no engine names in primary navigation');
 assert.deepEqual(subs('admin','Pipeline'),['Opportunities','Tenders','Estimates']);
-assert.deepEqual(subs('admin','Resources'),['People','Plant & Equipment','Crews','Suppliers & Subcontractors','Workshop']);
+assert.deepEqual(subs('admin','Resources'),['People','Plant & Equipment','Crews','Suppliers & Subcontractors','Depots','Workshop']);
 assert.deepEqual(areas('project_engineer'),['Home','Today','CRM','Projects','Schedule','Resources','IMS & HSEQ','Documents','Reports']);
-assert.deepEqual(subs('project_engineer','Resources'),['People','Plant & Equipment','Crews','Suppliers & Subcontractors','Workshop']);
+assert.deepEqual(subs('project_engineer','Resources'),['People','Plant & Equipment','Crews','Suppliers & Subcontractors','Depots','Workshop']);
 assert.deepEqual(subs('project_engineer','Reports'),['Reports','Lifecycle']);
 assert.deepEqual(areas('site_engineer'),['Home','Today','CRM','Projects','Schedule','Resources','IMS & HSEQ','Documents']);
 for(const r of ['project_engineer','site_engineer'])for(const k of ['Commercial','Pipeline','Admin'])assert(!areas(r).includes(k),r+' must not see '+k);
@@ -98,7 +98,7 @@ assert(!areas('office').includes('Today')&&!areas('scheduler').includes('Today')
 assert.deepEqual(areas('admin',['ims']),['Home','IMS & HSEQ','Documents','Reports','Admin']);
 assert.deepEqual(subs('admin','Reports',['ims']),['Lifecycle']);
 assert.deepEqual(areas('admin',['operations']),['Home','CRM','Schedule','Resources','Documents','Reports','Admin']);
-assert.deepEqual(subs('admin','Resources',['operations']),['People','Plant & Equipment','Crews','Suppliers & Subcontractors']);
+assert.deepEqual(subs('admin','Resources',['operations']),['People','Plant & Equipment','Crews','Suppliers & Subcontractors','Depots']);
 assert.deepEqual(areas('admin',['pipeline','estimating']),['Home','CRM','Pipeline','Documents','Reports','Admin']);
 assert.deepEqual(subs('admin','Pipeline',['estimating']),['Estimates']);
 assert.deepEqual(subs('admin','Admin',['ims']),['Company','Civil Knowledge','Team & Permissions','Integrations','Settings'],'rates hidden without estimating');
@@ -421,4 +421,40 @@ const {parsePastedItems}=load('lib/v1/estimate-paste.ts');
 const pasted=parsePastedItems('Description\tQty\tUnit\tRate\nProfile 50mm\t1,200\tm2\t$4.50\nAC14\t180\tt\t165\tmaterial\tWearing\nbad row\tx\tm\t1',  'General',i=>'i'+i);
 assert.equal(pasted.items.length,2);assert.equal(pasted.items[0].quantity,1200);assert.equal(pasted.items[0].rate,4.5);assert.equal(pasted.items[0].category,'other');assert.equal(pasted.items[1].category,'material');assert.equal(pasted.items[1].section,'Wearing');assert.deepEqual(pasted.skipped,[4]);
 console.log('PASS estimate paste: header skipped, $ and thousands parsed, category/section, bad rows reported');
+(async()=>{
+ const L=load('lib/v1/location.ts'),P=load('lib/platform/location-provider.ts'),S=load('lib/platform/locations.ts');
+ // Address components map from both Places (New) and Geocoding shapes; free text is never parsed into parts.
+ const parts=L.mapAddressComponents([{longText:'24',shortText:'24',types:['street_number']},{longText:'York Road',shortText:'York Rd',types:['route']},{longText:'Ingleburn',shortText:'Ingleburn',types:['locality']},{longText:'New South Wales',shortText:'NSW',types:['administrative_area_level_1']},{longText:'2565',shortText:'2565',types:['postal_code']},{longText:'Australia',shortText:'AU',types:['country']}]);
+ assert.deepEqual(parts,{addressLine1:'24 York Road',addressLine2:null,locality:'Ingleburn',state:'NSW',postcode:'2565',country:'AU'});
+ const noNumber=L.mapAddressComponents([{long_name:'Dover Road',short_name:'Dover Rd',types:['route']},{long_name:'Rose Bay',short_name:'Rose Bay',types:['locality']}]);
+ assert.equal(noNumber.addressLine1,'Dover Road','no street number is invented');
+ assert.deepEqual(L.mapAddressComponents(null),L.EMPTY_PARTS);
+ assert.equal(L.validPoint({lat:0,lng:0}),false);assert.equal(L.validPoint({lat:-91,lng:0}),false);assert.equal(L.validPoint({lat:-33.9,lng:150.8}),true);
+ assert.equal(L.pinState({geocoded:null,pin:null}),'none');assert.equal(L.pinState({geocoded:{lat:-33,lng:150},pin:{lat:-33,lng:150}}),'address');
+ assert.equal(L.pinState({geocoded:{lat:-33,lng:150},pin:{lat:-33.001,lng:150}}),'adjusted');assert.equal(L.pinState({geocoded:null,pin:{lat:-33,lng:150}}),'manual');
+ assert.equal(L.directionsUrl({pin:{lat:-33.999,lng:150.862},geocoded:{lat:-33.9985,lng:150.8612}}),'https://www.google.com/maps/dir/?api=1&destination=-33.9990000,150.8620000','directions go to the exact pin');
+ assert.equal(L.directionsUrl(null),null);
+ // Provider modes: no key means manual entry; a browser key never implies a server key.
+ assert.deepEqual(P.locationConfig({}),{provider:'none',mode:'none',browserKey:null,mapId:null,region:'au'});
+ assert.equal(P.locationConfig({LOCATION_PROVIDER:'fake'}).mode,'server');
+ const g=P.locationConfig({GOOGLE_MAPS_BROWSER_KEY:'browser-key'});assert.equal(g.provider,'google');assert.equal(g.mode,'browser');assert.equal(g.mapId,'DEMO_MAP_ID');
+ assert.equal(P.serverProvider({GOOGLE_MAPS_BROWSER_KEY:'browser-key'}),null,'the browser key is never used server-side');
+ assert.equal(P.serverProvider({}),null);
+ // Fake provider fixtures (CI makes no Google calls).
+ const fp=P.fakeProvider,sug=await fp.autocomplete('24 York Road Ingleburn','t','au');assert.equal(sug[0].placeId,'fake-york-rd-ingleburn');
+ const place=await fp.place('fake-york-rd-ingleburn','t');assert.equal(place.precision,'ROOFTOP');
+ await assert.rejects(fp.autocomplete('offline','t','au'),P.ProviderUnavailable);
+ assert.equal(await fp.reverse({lat:-12.3,lng:130.8}),null,'unknown points get no invented address');
+ await assert.rejects(fp.reverse({lat:-1,lng:-1}));
+ // Column rules: pin defaults to the geocoded point; a moved pin keeps the geocoded point; manual clears provider data.
+ const base={...place,placeId:place.placeId,provider:'fake',source:'autocomplete',geocoded:place.point,pin:null};
+ const c1=S.locationColumns(base);assert.equal(c1.pin_lat,c1.geocoded_lat);assert.equal(c1.pin_adjusted,0);assert.equal(c1.provider_place_id,'fake-york-rd-ingleburn');assert.equal(c1.pin_address,null);
+ const c2=S.locationColumns({...base,pin:{lat:-33.999,lng:150.862},pinAddress:'Yard entrance, York Road'});assert.equal(c2.pin_adjusted,1);assert.equal(c2.geocoded_lat,-33.9985);assert.equal(c2.pin_address,'Yard entrance, York Road');assert.ok(c2.reverse_geocoded_at);
+ const c3=S.locationColumns({...base,pin:place.point,pinAddress:'ignored'});assert.equal(c3.pin_adjusted,0,'reset pin to address');assert.equal(c3.pin_address,null);
+ const c4=S.locationColumns({...base,source:'manual',pin:{lat:-33.9,lng:150.9}});assert.equal(c4.provider_place_id,null);assert.equal(c4.geocoded_lat,null);assert.equal(c4.precision,'manual');assert.equal(c4.source,'manual');assert.equal(c4.pin_adjusted,0);
+ const c5=S.locationColumns({...L.EMPTY_PARTS,addressLine1:'Lot 7 Quarry Road',locality:'Marulan',source:'manual'});assert.equal(c5.formatted_address,'Lot 7 Quarry Road, Marulan');assert.equal(c5.pin_lat,null);
+ assert.throws(()=>S.locationColumns({...L.EMPTY_PARTS,source:'manual'}),'an empty location is rejected');
+ assert.throws(()=>S.locationColumns({...L.EMPTY_PARTS,source:'manual',pin:{lat:0,lng:0}}));
+ console.log('PASS locations: address components, pin state, directions, provider modes, fake provider, geocoded vs exact pin columns, manual entry');
+})().catch(e=>{console.error(e);process.exit(1);});
 console.log('PASS V1 logic: lifecycle guards, capability matrix and eleven-role route gate, primary navigation, legacy route resolution, Home quick actions, ABN checksum, forecast/claim/GST/retention arithmetic, risk ratings, register identifiers, estimate items, docket cost lines, legacy stage mapping, scheduling conflict engine, legacy resource mapping');

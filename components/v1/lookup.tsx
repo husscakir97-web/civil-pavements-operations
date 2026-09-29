@@ -69,7 +69,7 @@ export function Lookup({label,items,value,onChange,placeholder,disabled,loading,
 // One client/contact/site master (Core) behind three pickers used everywhere. Client search runs
 // on the server (thousands of clients never load into the browser); a client's own sites and
 // contacts load with it. Recently chosen clients are offered first.
-export type Site={id:string;clientId:string|null;name:string;address:string|null;label:string;status?:string;suburb?:string|null;state?:string|null;postcode?:string|null;siteContact?:string|null;accessNotes?:string|null;revision?:number};
+export type Site={id:string;clientId:string|null;name:string;address:string|null;label:string;status?:string;suburb?:string|null;state?:string|null;postcode?:string|null;siteContact?:string|null;accessNotes?:string|null;revision?:number;location?:import('@/lib/v1/location').LocationView|null};
 export type Contact={id:string;clientId:string;name:string;firstName?:string|null;lastName?:string|null;role:string|null;department?:string|null;email:string|null;phone:string|null;mobile:string|null;isPrimary:boolean;status?:string;notes?:string|null;revision:number};
 export type Client={id:string;name:string;legalName:string|null;abn:string|null;clientCode?:string|null;contactName:string;email:string;phone:string;website?:string|null;tags?:string[];ownerUserId?:string|null;notes?:string|null;status:string;revision:number;sites:Site[];contacts?:Contact[];paymentTermsDays?:number|null;creditStatus?:string|null;billingEmail?:string|null;accountReference?:string|null};
 

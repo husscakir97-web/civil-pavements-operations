@@ -13,6 +13,8 @@ import { evaluateShift, availability, blocking, loadResources, loadNearbyShifts,
 import { RESOURCE_CATEGORIES } from '@/lib/v1/resource-mapping';
 import { shiftStatements } from '@/lib/v1/resource-sync';
 import { projectScope } from '@/lib/platform/project-access';
+import { presentLocation, saveLocation, locationInput } from '@/lib/platform/locations';
+import { tx, exec as sqlExec } from '@/lib/platform/sql';
 export const dynamic = 'force-dynamic';
 const tables = ['jobs','shifts','workers','crews','plant','suppliers','subcontractors'] as const;
 async function load(db: Database, table: string): Promise<DeliveryRecord[]> {
@@ -20,13 +22,27 @@ async function load(db: Database, table: string): Promise<DeliveryRecord[]> {
   // Typed identifiers (0004) fill gaps in legacy metadata so the planner can search by plant number, rego or employee number.
   const typed=(row:Record<string,unknown>)=>Object.fromEntries(Object.entries({plantNumber:row.plant_number,rego:row.registration,category:row.category,make:row.make,model:row.model,employeeNumber:row.employee_number,roleTitle:row.role_title}).filter(([,v])=>v!=null&&v!==''));
   // Core client/site/contact links on jobs are the typed columns: they win over any older metadata copy.
-  const links=(row:Record<string,unknown>)=>table==='jobs'?Object.fromEntries(Object.entries({clientId:row.client_id,siteId:row.site_id,contactId:row.contact_id}).filter(([,v])=>v!=null&&v!=='')):{};
+  const links=(row:Record<string,unknown>)=>table==='jobs'||table==='shifts'?Object.fromEntries(Object.entries(table==='jobs'?{clientId:row.client_id,siteId:row.site_id,contactId:row.contact_id,locationId:row.location_id}:{locationId:row.location_id}).filter(([,v])=>v!=null&&v!=='')):{};
   return r.results.map(r => ({id:String(r.id), name:String(r.name), status:String(r.status), metadata:{...typed(r),...safeJson<Meta>(r.metadata,{}),...links(r)}, createdAt:String(r.created_at)}));
+}
+// Effective location for the schedule: a shift's own work point, else its project's location
+// (project override, else the client site's). Read through the organisation-scoped wrapper.
+async function attachLocations(db: Database, jobs: DeliveryRecord[], shifts: DeliveryRecord[]) {
+  const siteIds=[...new Set(jobs.map(j=>String(j.metadata.siteId||'')).filter(Boolean))];
+  const sites=siteIds.length?(await db.prepare(`SELECT id,location_id FROM client_sites WHERE organisation_id=? AND id IN (${siteIds.map(()=>'?').join(',')})`).bind(ORG(),...siteIds).all<{id:string;location_id:string|null}>()).results:[];
+  const siteLoc=new Map(sites.map(x=>[x.id,x.location_id]));
+  const ids=[...new Set([...jobs.map(j=>j.metadata.locationId),...shifts.map(x=>x.metadata.locationId),...sites.map(x=>x.location_id)].map(x=>String(x||'')).filter(Boolean))];
+  const rows=ids.length?(await db.prepare(`SELECT * FROM locations WHERE organisation_id=? AND id IN (${ids.map(()=>'?').join(',')})`).bind(ORG(),...ids).all<Record<string,unknown>>()).results:[];
+  const byId=new Map(rows.map(r=>[String(r.id),presentLocation(r)]));
+  const jobLoc=new Map<string,ReturnType<typeof presentLocation>|null>();
+  for(const j of jobs){const own=byId.get(String(j.metadata.locationId||''))??null,site=byId.get(String(siteLoc.get(String(j.metadata.siteId||''))||''))??null;const loc=own||site;jobLoc.set(j.id,loc);j.metadata.locationView=loc;j.metadata.locationSource=own?'project':site?'site':null;}
+  for(const x of shifts){const own=byId.get(String(x.metadata.locationId||''))??null;x.metadata.locationView=own||jobLoc.get(String(x.metadata.jobId||''))||null;x.metadata.locationSource=own?'shift':x.metadata.locationView?'project':null;}
 }
 async function handleGET(request: Request) {
   try { const db=requireEstimateDb(); const actor=await requireActor(request, db, 'field-read'); if(actor.role==='field'){const [jobs,shifts]=await Promise.all([load(db,'jobs'),load(db,'shifts')]);return Response.json({jobs:jobs.map(r=>fieldDelivery(r,'jobs')),shifts:shifts.map(r=>fieldDelivery(r,'shifts')),workers:[],crews:[],plant:[],suppliers:[],subcontractors:[]},{headers:{'Cache-Control':'private, no-store'}});} const rows=await Promise.all(tables.map(t=>load(db,t)));
     // Project-scoped roles see the schedule of their own projects only (jobs and shifts); resource registers are unchanged.
     const scope=await projectScope(actor); if(scope){rows[0]=rows[0].filter(j=>scope.includes(j.id));rows[1]=rows[1].filter(s=>scope.includes(String(s.metadata.jobId||'')));}
+    await attachLocations(db,rows[0],rows[1]);
     const money=can(actor.role,'commercial.view')&&usable(await getEntitlements(actor.organisationId),'commercial'); return Response.json(Object.fromEntries(tables.map((t,i)=>[t,money?rows[i]:rows[i].map(withoutMoney)])),{headers:{'Cache-Control':'private, no-store'}}); }
   catch(e) { console.error(e); return jsonError('Unable to load dispatch records. Please retry.',503); }
 }
@@ -49,6 +65,12 @@ async function handlePOST(request:Request) {
     if(record.id && !existing) return jsonError('Record no longer exists.',404);
     const id=existing?.id || crypto.randomUUID();
     const metadata=body.kind==='jobs' ? mergeJob(existing?.metadata || {},record.metadata || {}) : {...existing?.metadata,...record.metadata};
+    // A shift may carry its own exact work point (a Core location owned by the shift); it is stored
+    // in the locations table, not in legacy metadata. null clears it (back to the project/site location).
+    const hasWorkPoint=body.kind==='shifts'&&record.metadata&&'workPoint' in record.metadata;
+    const workPoint=hasWorkPoint?(record.metadata as Record<string,unknown>).workPoint:undefined;
+    for(const k of ['workPoint','locationView','locationSource','locationId'])delete (metadata as Record<string,unknown>)[k];
+    if(workPoint&&!locationInput.safeParse(workPoint).success)return jsonError('Check the work point: enter an address or valid coordinates.');
     const saved={...record,id,metadata};
     let warnings:string[]=[];
     let conflicts:Conflict[]=[];
@@ -106,6 +128,13 @@ async function handlePOST(request:Request) {
     const now=new Date().toISOString();
     const write=existing ? db.prepare(`UPDATE ${body.kind} SET name=?,status=?,metadata=? WHERE id=? AND organisation_id=?`).bind(record.name.trim(),record.status,JSON.stringify(metadata),id,ORG()) : db.prepare(`INSERT INTO ${body.kind} (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)`).bind(id,ORG(),record.name.trim(),record.status,JSON.stringify(metadata),now);
     await db.batch([write,...sync.map(s=>db.prepare(s.sql).bind(...s.params)),db.prepare('INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(),ORG(),`${body.kind}.${existing?'updated':'created'}`,'recorded',JSON.stringify({recordId:id}),now)]);
+    if(hasWorkPoint){
+      await tx(async conn=>{
+        const cur=await db.prepare('SELECT location_id FROM shifts WHERE organisation_id=? AND id=?').bind(ORG(),id).first<{location_id:string|null}>();
+        const lid=workPoint?await saveLocation(conn,{type:'shift',id,locationType:'work_point'},locationInput.parse(workPoint) as never,cur?.location_id):null;
+        await sqlExec('UPDATE shifts SET location_id=? WHERE organisation_id=? AND id=?',[lid,ORG(),id],conn);
+      });
+    }
     return Response.json({record:saved,warnings,conflicts},{status:existing?200:201});
   } catch(e) { console.error(e);return jsonError('Unable to save. Your changes are still in the form.',503); }
 }

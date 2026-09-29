@@ -11,6 +11,8 @@ import {audit} from './audit';
 import {fail} from './http';
 import {query,one,exec,tx,nowIso,uuid,type Conn,type Row} from './sql';
 import {getPool} from './database';
+import {saveLocation,loadLocations,locationInput} from './locations';
+import type {LocationView,LocationInput} from '@/lib/v1/location';
 import {orgWideProjects,memberProjectIds} from './project-access';
 import {matchClient,matchContact,matchSite,strongAbn,abnDigits,collapse,legacyClientFor,nameKey} from '@/lib/v1/crm-match';
 
@@ -30,13 +32,13 @@ function needEdit(){if(!canEditClients(actor().role))fail(403,'You are not autho
 function needManage(){if(!canManageClients(actor().role))fail(403,'You are not authorised to administer the client master.');}
 
 export type ContactSummary={id:string;clientId:string;name:string;firstName:string|null;lastName:string|null;role:string|null;department:string|null;email:string|null;phone:string|null;mobile:string|null;isPrimary:boolean;status:string;notes:string|null;revision:number};
-export type SiteSummary={id:string;clientId:string|null;name:string;address:string|null;suburb:string|null;state:string|null;postcode:string|null;siteContact:string|null;accessNotes:string|null;status:string;label:string;revision:number};
+export type SiteSummary={location?:LocationView|null;locationId?:string|null;id:string;clientId:string|null;name:string;address:string|null;suburb:string|null;state:string|null;postcode:string|null;siteContact:string|null;accessNotes:string|null;status:string;label:string;revision:number};
 export type ClientSummary={id:string;name:string;legalName:string|null;abn:string|null;clientCode:string|null;contactName:string;email:string;phone:string;website:string|null;tags:string[];ownerUserId:string|null;notes:string|null;status:string;mergedIntoId:string|null;revision:number;sites:SiteSummary[];contacts:ContactSummary[];
  /** Commercial fields: present only for roles with commercial access. */
  paymentTermsDays?:number|null;creditStatus?:string|null;billingEmail?:string|null;accountReference?:string|null};
 
 export const siteLabel=(s:{name:string;address?:string|null;suburb?:string|null})=>[s.name,s.address&&s.address!==s.name?s.address:null,s.suburb].filter(Boolean).join(', ');
-const site=(r:Row):SiteSummary=>({id:r.id,clientId:r.client_id??null,name:r.name,address:r.address??null,suburb:r.suburb??null,state:r.state??null,postcode:r.postcode??null,siteContact:r.site_contact??null,accessNotes:r.access_notes??null,status:r.status||'active',label:siteLabel(r as {name:string}),revision:Number(r.revision||1)});
+const site=(r:Row):SiteSummary=>({locationId:r.location_id??null,id:r.id,clientId:r.client_id??null,name:r.name,address:r.address??null,suburb:r.suburb??null,state:r.state??null,postcode:r.postcode??null,siteContact:r.site_contact??null,accessNotes:r.access_notes??null,status:r.status||'active',label:siteLabel(r as {name:string}),revision:Number(r.revision||1)});
 const contact=(r:Row):ContactSummary=>({id:r.id,clientId:r.client_id,name:r.name,firstName:r.first_name??null,lastName:r.last_name??null,role:r.role??null,department:r.department??null,email:r.email??null,phone:r.phone??null,mobile:r.mobile??null,isPrimary:Boolean(Number(r.is_primary)),status:r.status||'active',notes:r.notes??null,revision:Number(r.revision||1)});
 function client(r:Row,sites:SiteSummary[],contacts:ContactSummary[]=[]):ClientSummary{
  const out:ClientSummary={id:r.id,name:r.name,legalName:r.legal_name??null,abn:r.abn??null,clientCode:r.client_code??null,contactName:r.contact_name||'',email:r.email||'',phone:r.phone||'',website:r.website??null,tags:String(r.tags||'').split(',').map(t=>t.trim()).filter(Boolean),ownerUserId:r.owner_user_id??null,notes:r.notes??null,status:r.status||'active',mergedIntoId:r.merged_into_id??null,revision:Number(r.revision||1),sites,contacts};
@@ -59,12 +61,18 @@ export async function visibleClientIds(conn?:Conn):Promise<string[]|null>{
 async function scopeSql(column:string,params:unknown[],conn?:Conn){const ids=await visibleClientIds(conn);if(!ids)return '';params.push(ids.length?ids:['-']);return ` AND ${column} IN (?)`;}
 async function assertVisible(id:string,conn?:Conn){const ids=await visibleClientIds(conn);if(ids&&!ids.includes(id))fail(404,'Client not found.');}
 
+/** Attach each site's structured location (legacy sites without one keep their address text). */
+async function withLocations<T extends SiteSummary>(sites:T[],conn?:Conn):Promise<T[]>{
+ const map=await loadLocations(sites.map(x=>x.locationId),conn);
+ return sites.map(x=>({...x,location:x.locationId?map.get(x.locationId)??null:null}));
+}
 async function attach(rows:Row[],conn:Conn=getPool(),includeInactive=false){
  const org=actor().organisationId,ids=rows.map(r=>r.id);
  const status=includeInactive?"status<>'archived'":"status='active'";
  const sites=ids.length?await query(`SELECT * FROM client_sites WHERE organisation_id=? AND client_id IN (?) AND ${includeInactive?"status<>'merged'":"status='active'"} ORDER BY name`,[org,ids],conn):[];
  const contacts=ids.length?await query(`SELECT * FROM client_contacts WHERE organisation_id=? AND client_id IN (?) AND ${status} ORDER BY is_primary DESC,name`,[org,ids],conn):[];
- return rows.map(r=>client(r,sites.filter(s=>s.client_id===r.id).map(site),contacts.filter(c=>c.client_id===r.id).map(contact)));
+ const located=await withLocations(sites.map(site),conn);
+ return rows.map(r=>client(r,located.filter(s=>s.clientId===r.id),contacts.filter(c=>c.client_id===r.id).map(contact)));
 }
 
 /**
@@ -112,7 +120,9 @@ export async function searchCrm(view:'contacts'|'sites',q='',page=1){
  const table=view==='contacts'?'client_contacts':'client_sites';
  const rows=await query(`SELECT x.*,c.name AS client_name FROM ${table} x JOIN clients c ON c.organisation_id=x.organisation_id AND c.id=x.client_id WHERE x.organisation_id=?${where} ORDER BY x.status='active' DESC,x.name LIMIT ${size+1} OFFSET ${offset}`,params);
  const more=rows.length>size;
- return {view,page,more,items:rows.slice(0,size).map(r=>({...(view==='contacts'?contact(r):site(r)),clientName:r.client_name}))};
+ const page0=rows.slice(0,size);
+ const items=view==='contacts'?page0.map(r=>({...contact(r),clientName:r.client_name})):(await withLocations(page0.map(r=>({...site(r),clientName:r.client_name as string}))));
+ return {view,page,more,items};
 }
 
 const opt=(n:number)=>z.string().trim().max(n).nullish();
@@ -124,7 +134,7 @@ export const clientInput=z.object({
  site:z.object({name:opt(255),address:z.string().trim().min(1).max(500)}).nullish(),
  contact:z.object({name:z.string().trim().min(1).max(160),email:opt(254),phone:opt(60),role:opt(120)}).nullish(),
 });
-export const siteInput=z.object({clientId:opt(191),name:opt(255),address:opt(500),suburb:opt(120),state:opt(20),postcode:opt(10),siteContact:opt(160),accessNotes:z.string().trim().max(5000).nullish()}).refine(s=>Boolean(s.name||s.address),'Enter a site name or address.');
+export const siteInput=z.object({location:locationInput.nullish(),clientId:opt(191),name:opt(255),address:opt(500),suburb:opt(120),state:opt(20),postcode:opt(10),siteContact:opt(160),accessNotes:z.string().trim().max(5000).nullish()}).refine(s=>Boolean(s.name||s.address||s.location),'Enter a site name or address.');
 const COMMERCIAL_KEYS=['paymentTermsDays','creditStatus','billingEmail','accountReference'] as const;
 const CLIENT_COLUMNS:Record<string,string>={name:'name',legalName:'legal_name',abn:'abn',clientCode:'client_code',contactName:'contact_name',email:'email',phone:'phone',website:'website',notes:'notes',tags:'tags',ownerUserId:'owner_user_id',paymentTermsDays:'payment_terms_days',creditStatus:'credit_status',billingEmail:'billing_email',accountReference:'account_reference',status:'status'};
 const NOT_NULL_TEXT=['contact_name','email','phone'];
@@ -210,22 +220,25 @@ export async function bulkUpdateClients(ids:string[],change:{status?:'active'|'i
 async function insertSite(v:z.infer<typeof siteInput>,conn:Conn){
  const a=actor(),org=a.organisationId;
  if(v.clientId&&!await one("SELECT id FROM clients WHERE organisation_id=? AND id=? AND status<>'merged'",[org,v.clientId],conn))fail(400,'Client not found.');
+ // A structured location fills the site's address text (kept as the readable snapshot).
+ if(v.location){const l=v.location;v={...v,address:v.address||l.formattedAddress||l.addressLine1||null,suburb:v.suburb||l.locality||null,state:v.state||l.state||null,postcode:v.postcode||l.postcode||null};}
  const name=(v.name||v.address||'').trim().slice(0,255);
  if(v.clientId){
   const existing=await query("SELECT id,client_id,name,address,status FROM client_sites WHERE organisation_id=? AND client_id=?",[org,v.clientId],conn);
   const m=matchSite(v.clientId,{name,address:v.address},existing.map(s=>({id:s.id,clientId:s.client_id,name:s.name,address:s.address,status:s.status})));
-  if(m.kind==='exact')return site((await one('SELECT * FROM client_sites WHERE organisation_id=? AND id=?',[org,m.match!.id],conn))!);
+  if(m.kind==='exact')return (await withLocations([site((await one('SELECT * FROM client_sites WHERE organisation_id=? AND id=?',[org,m.match!.id],conn))!)],conn))[0];
  }else{
   const dup=await one("SELECT * FROM client_sites WHERE organisation_id=? AND client_id IS NULL AND LOWER(name)=LOWER(?) AND status='active' LIMIT 1",[org,name],conn);
   if(dup)return site(dup);
  }
  const id=uuid(),now=nowIso();
  await exec('INSERT INTO client_sites (id,organisation_id,client_id,name,address,suburb,state,postcode,site_contact,access_notes,status,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,org,v.clientId||null,name,v.address||null,v.suburb||null,v.state||null,v.postcode||null,v.siteContact||null,v.accessNotes||null,'active',1,a.userId,now,now],conn);
- await audit({event:'client_site.created',entityType:'client_site',entityId:id,summary:`Site added: ${name}`,after:v},conn);
- return site((await one('SELECT * FROM client_sites WHERE id=?',[id],conn))!);
+ if(v.location){const lid=await saveLocation(conn,{type:'client_site',id,locationType:'site'},{...v.location,label:name} as LocationInput);await exec('UPDATE client_sites SET location_id=? WHERE organisation_id=? AND id=?',[lid,org,id],conn);}
+ await audit({event:'client_site.created',entityType:'client_site',entityId:id,summary:`Site added: ${name}`,after:{...v,location:v.location?{formattedAddress:v.location.formattedAddress,pin:v.location.pin}:null}},conn);
+ return (await withLocations([site((await one('SELECT * FROM client_sites WHERE id=?',[id],conn))!)],conn))[0];
 }
 export async function createSite(input:z.infer<typeof siteInput>){needCreate();const v=siteInput.parse(input);return tx(async conn=>({site:await insertSite(v,conn)}));}
-export const sitePatch=z.object({name:opt(255),address:opt(500),suburb:opt(120),state:opt(20),postcode:opt(10),siteContact:opt(160),accessNotes:z.string().trim().max(5000).nullish(),status:z.enum(['active','inactive']).optional()});
+export const sitePatch=z.object({location:locationInput.nullish(),name:opt(255),address:opt(500),suburb:opt(120),state:opt(20),postcode:opt(10),siteContact:opt(160),accessNotes:z.string().trim().max(5000).nullish(),status:z.enum(['active','inactive']).optional()});
 export async function updateSite(id:string,revision:number,input:z.infer<typeof sitePatch>){
  needEdit();
  const a=actor(),v=sitePatch.parse(input);
@@ -236,12 +249,17 @@ export async function updateSite(id:string,revision:number,input:z.infer<typeof 
   const map:Record<string,string>={name:'name',address:'address',suburb:'suburb',state:'state',postcode:'postcode',siteContact:'site_contact',accessNotes:'access_notes',status:'status'};
   const set:Row={};for(const [k,col] of Object.entries(map))if((v as Row)[k]!==undefined)set[col]=(v as Row)[k]||null;
   if(set.name===null)fail(400,'A site name is required.');
+  // A new or moved location updates the structured record and the site's address snapshot.
+  if(v.location){
+   const l=v.location,lid=await saveLocation(conn,{type:'client_site',id,locationType:'site'},{...l,label:set.name??row!.name} as LocationInput,row!.location_id);
+   set.location_id=lid;if(v.address===undefined&&(l.formattedAddress||l.addressLine1))set.address=l.formattedAddress||l.addressLine1;if(v.suburb===undefined&&l.locality)set.suburb=l.locality;if(v.state===undefined&&l.state)set.state=l.state;if(v.postcode===undefined&&l.postcode)set.postcode=l.postcode;
+  }
   const cols=Object.keys(set);
   if(cols.length){
    await exec(`UPDATE client_sites SET ${cols.map(c=>`${c}=?`).join(',')},revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?`,[...cols.map(c=>set[c]),nowIso(),a.organisationId,id],conn);
    await audit({event:v.status==='inactive'?'client_site.inactivated':v.status==='active'&&row!.status!=='active'?'client_site.reactivated':'client_site.updated',entityType:'client_site',entityId:id,summary:`Site updated: ${row!.name}`,before:Object.fromEntries(cols.map(c=>[c,row![c]])),after:set},conn);
   }
-  return {site:site((await one('SELECT * FROM client_sites WHERE id=?',[id],conn))!)};
+  return {site:(await withLocations([site((await one('SELECT * FROM client_sites WHERE id=?',[id],conn))!)],conn))[0]};
  });
 }
 

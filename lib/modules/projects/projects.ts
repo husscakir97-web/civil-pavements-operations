@@ -13,6 +13,8 @@ import {imsBlockers} from '@/lib/ims-readiness';
 import {safeJson} from '@/lib/estimates-db';
 import {resolveClientContext} from '@/lib/platform/clients';
 import {assertProjectAccess,projectFilter} from '@/lib/platform/project-access';
+import {saveLocation,loadLocations,locationInput} from '@/lib/platform/locations';
+import type {LocationInput} from '@/lib/v1/location';
 
 const actor=()=>actorContext.getStore()!;
 export function legacyProjectStage(status:string){
@@ -103,17 +105,30 @@ export async function nextProjectAction(p:Row,r:{blockers:string[];percent:numbe
  return null;
 }
 
+/**
+ * Project locations: a project uses its client site's location unless it has its own override
+ * (jobs.location_id). The site's location is never changed from a project.
+ */
+export async function projectLocations(rows:Row[],conn?:Conn){
+ const org=actor().organisationId,siteIds=[...new Set(rows.map(r=>r.site_id).filter(Boolean))];
+ const sites=siteIds.length?await query('SELECT id,location_id FROM client_sites WHERE organisation_id=? AND id IN (?)',[org,siteIds],conn):[];
+ const siteLoc=new Map(sites.map(x=>[x.id as string,x.location_id as string|null]));
+ const map=await loadLocations([...rows.map(r=>r.location_id),...sites.map(x=>x.location_id)],conn);
+ return (r:Row)=>{const own=r.location_id?map.get(r.location_id)??null:null,sl=r.site_id?siteLoc.get(r.site_id):null,site=sl?map.get(sl)??null:null;return {location:own||site,locationSource:own?'project':site?'site':null,siteLocation:site};};
+}
 export async function listProjects(){
  const params:unknown[]=[actor().organisationId],scope=await projectFilter('id',params);
  const rows=await query(`SELECT * FROM jobs WHERE organisation_id=? AND LOWER(status)<>'archived'${scope} ORDER BY (COALESCE(stage,'')='closed'),created_at DESC LIMIT 300`,params);
- return Promise.all(rows.map(async p=>{const r=await readiness(p.id);return presentProject(p,{readiness:r.percent,blockerCount:r.blockers.length,nextAction:await nextProjectAction(p,r)});}));
+ const loc=await projectLocations(rows);
+ return Promise.all(rows.map(async p=>{const r=await readiness(p.id);return presentProject(p,{readiness:r.percent,blockerCount:r.blockers.length,nextAction:await nextProjectAction(p,r),...loc(p)});}));
 }
 
 export async function getProject(id:string){
  const p=await loadProject(id);const org=actor().organisationId;
  const [r,baselines]=await Promise.all([readiness(id),query('SELECT id,revision,reason,source_type,tender_id,estimate_id,estimate_revision_id,contract_value,budget_labour,budget_plant,budget_material,budget_subcontract,budget_other,budget_indirect,budget_total,scope,assumptions,exclusions,clarifications,created_by,created_at FROM project_baselines WHERE organisation_id=? AND project_id=? ORDER BY revision',[org,id])]);
  const money=can(actor().role,'commercial.view');
- return {project:presentProject(p,{readiness:r.percent,nextAction:await nextProjectAction(p,r)}),readiness:r,closeout:['practical_completion','closeout','closed'].includes(stageOf(p))?await closeoutStatus(id):null,
+ const loc=(await projectLocations([p]))(p);
+ return {project:presentProject(p,{readiness:r.percent,nextAction:await nextProjectAction(p,r),...loc}),readiness:r,closeout:['practical_completion','closeout','closed'].includes(stageOf(p))?await closeoutStatus(id):null,
   baselines:baselines.map(b=>{const base={id:b.id,revision:b.revision,reason:b.reason,sourceType:b.source_type,tenderId:b.tender_id,estimateId:b.estimate_id,estimateRevisionId:b.estimate_revision_id,scope:b.scope,assumptions:b.assumptions,exclusions:b.exclusions,clarifications:safeJson(b.clarifications,[]),createdAt:b.created_at};return money?{...base,contractValue:Number(b.contract_value),budget:{labour:Number(b.budget_labour),plant:Number(b.budget_plant),material:Number(b.budget_material),subcontract:Number(b.budget_subcontract),other:Number(b.budget_other),indirect:Number(b.budget_indirect),total:Number(b.budget_total)}}:base;})};
 }
 
@@ -134,6 +149,9 @@ export async function updateProject(id:string,revision:number,input:Row){
    if('siteId' in input){set.site_id=ctx.siteId;if(ctx.siteLabel&&!('siteAddress' in input))set.site_address=ctx.siteLabel;}
   }
   if(set.name!==undefined&&!String(set.name||'').trim())fail(400,'A project name is required.');
+  // Project-specific location override, or back to the client site's location. The CRM site is untouched.
+  if(input.useSiteLocation===true)set.location_id=null;
+  else if(input.location){const l=locationInput.parse(input.location) as LocationInput;set.location_id=await saveLocation(conn,{type:'project',id,locationType:'project'},{...l,label:l.label||String(p.name)},p.location_id);if(l.formattedAddress&&!('site_address' in set))set.site_address=l.formattedAddress;}
   const cols=Object.keys(set);if(!cols.length)return;
   const meta={...safeJson<Row>(p.metadata,{})};if('client_name' in set)meta.client=set.client_name;if('site_address' in set)meta.site=set.site_address;if('start_date' in set)meta.startDate=set.start_date;if('project_manager_name' in set)meta.projectManager=set.project_manager_name;
   await exec(`UPDATE jobs SET ${cols.map(c=>`${c}=?`).join(',')},metadata=?,revision=COALESCE(revision,1)+1,updated_at=? WHERE organisation_id=? AND id=?`,[...cols.map(c=>set[c]),JSON.stringify(meta),nowIso(),a.organisationId,id],conn);

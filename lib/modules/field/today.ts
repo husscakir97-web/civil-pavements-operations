@@ -12,16 +12,20 @@ import {safeJson} from '@/lib/estimates-db';
 import {easternDate} from '@/lib/reporting';
 import {shiftAudience,shiftVisible,assignedToShift} from '@/lib/platform/shift-scope';
 import {assertProjectAccess} from '@/lib/platform/project-access';
+import {loadLocations} from '@/lib/platform/locations';
+import {directionsUrl} from '@/lib/v1/location';
 
 const actor=()=>actorContext.getStore()!;
 
 export async function today(days=7){
  const a=actor(),org=a.organisationId,start=easternDate(new Date()),end=new Date(Date.parse(start)+days*86400000).toISOString().slice(0,10);
- const all=await query("SELECT s.id,s.name,s.status,s.metadata,s.created_at,s.updated_at,j.id AS job_id,j.name AS job_name,j.project_number,j.stage AS job_stage,j.status AS job_status,j.metadata AS job_metadata,j.site_address FROM shifts s LEFT JOIN jobs j ON j.id=JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.jobId')) AND j.organisation_id=s.organisation_id WHERE s.organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.date'))>=? AND JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.date'))<=? AND s.status NOT IN ('Cancelled','Archived','Draft') ORDER BY JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.date')),JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.start'))",[org,start,end]);
+ const all=await query("SELECT s.id,s.name,s.status,s.metadata,s.created_at,s.updated_at,s.location_id AS shift_location_id,j.location_id AS job_location_id,(SELECT cs.location_id FROM client_sites cs WHERE cs.organisation_id=j.organisation_id AND cs.id=j.site_id) AS site_location_id,j.id AS job_id,j.name AS job_name,j.project_number,j.stage AS job_stage,j.status AS job_status,j.metadata AS job_metadata,j.site_address FROM shifts s LEFT JOIN jobs j ON j.id=JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.jobId')) AND j.organisation_id=s.organisation_id WHERE s.organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.date'))>=? AND JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.date'))<=? AND s.status NOT IN ('Cancelled','Archived','Draft') ORDER BY JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.date')),JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.start'))",[org,start,end]);
  const audience=await shiftAudience(a);
  // Only shifts this person should see are enriched and returned (field: assigned; engineers: assigned or their projects).
  const shifts=all.filter(s=>{const m=safeJson<Row>(s.metadata,{});return a.role==='field'||shiftVisible(audience,{supervisorUserId:m.supervisorUserId,assignments:m.assignments,jobId:s.job_id});});
  const jobIds=[...new Set(shifts.map(s=>s.job_id).filter(Boolean))];
+ // Exact work point: the shift's own point, else the project's, else the client site's (field users need no CRM access).
+ const locs=await loadLocations(shifts.flatMap(s=>[s.shift_location_id,s.job_location_id,s.site_location_id]));
  const [swms,records,dockets]=await Promise.all([
   jobIds.length?query("SELECT s.id,s.project_id,s.reference,s.title,s.activity,s.issued_revision_id,(SELECT COUNT(*) FROM swms_acknowledgements k WHERE k.organisation_id=s.organisation_id AND k.swms_revision_id=s.issued_revision_id AND k.user_id=?) AS mine FROM swms s WHERE s.organisation_id=? AND s.project_id IN (?) AND s.issued_revision_id IS NOT NULL",[a.userId,org,jobIds]):[],
   shifts.length?query('SELECT shift_id,status,revision FROM field_records WHERE organisation_id=? AND shift_id IN (?)',[org,shifts.map(s=>s.id)]):[],
@@ -35,6 +39,7 @@ export async function today(days=7){
   const projectSwms=swms.filter(w=>w.project_id===s.job_id).map(w=>({id:w.id,reference:w.reference,title:w.title,activity:w.activity,revisionId:w.issued_revision_id,acknowledged:Number(w.mine)>0}));
   const job=safeJson<Row>(s.job_metadata,{});
   return {id:s.id,name:s.name,status:s.status,version:s.updated_at||s.created_at,date:m.date,start:m.start,finish:m.finish,location:m.location||s.site_address||job.site||'',supervisor:m.supervisor||'',activity:m.scope||job.scope||'',instructions:m.instructions||'',preStart:m.preStart||'',siteContact:m.siteContact||'',crew:assignments.map(x=>({name:x.name,role:x.role,category:x.category})),
+   workLocation:(()=>{const l=locs.get(s.shift_location_id)||locs.get(s.job_location_id)||locs.get(s.site_location_id)||null;return l?{formattedAddress:l.formattedAddress,pin:l.pin,geocoded:l.geocoded,pinAdjusted:l.pinAdjusted,directions:directionsUrl(l)}:null;})(),
    project:s.job_id?{id:s.job_id,name:s.job_name,number:s.project_number,closed:s.job_stage==='closed'}:null,assignedToMe:assigned,swms:projectSwms,swmsOutstanding:projectSwms.filter(w=>!w.acknowledged).length,
    fieldRecord:records.find(r=>r.shift_id===s.id)?{status:records.find(r=>r.shift_id===s.id)!.status}:null,dockets:dockets.filter(d=>d.shift_id===s.id).map(d=>({id:d.id,docketNo:d.docket_no,status:d.status}))};
  });

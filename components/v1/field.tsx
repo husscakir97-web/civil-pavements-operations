@@ -8,10 +8,11 @@ import {api,useAction,ErrorState,Loading,Btn,Field,field,EmptyState,Pill} from '
 import {useCachedApi,useDraft,useOffline,OfflineBanner,requestId,isNetworkFailure} from './offline';
 import {SwmsPanel} from './swms';
 import {RegisterView} from './register-view';
+import {LocationSummary} from './location';
 
 const ShiftRecord=dynamic(()=>import('@/components/field-workspace').then(m=>m.FieldWorkspace),{loading:()=><Loading label="Opening the shift record…"/>});
 
-type Shift={id:string;name:string;status:string;version:string|null;date:string;start:string;finish:string;location:string;supervisor:string;activity:string;instructions:string;siteContact:string;crew:Array<{name:string;role:string;category:string}>;project:{id:string;name:string;number:string|null;closed:boolean}|null;assignedToMe:boolean;swms:Array<{id:string;reference:string;title:string;acknowledged:boolean}>;swmsOutstanding:number;fieldRecord:{status:string}|null;dockets:Array<{id:string;docketNo:string;status:string}>};
+type Shift={workLocation?:{formattedAddress:string|null;pin:{lat:number;lng:number}|null;geocoded:{lat:number;lng:number}|null;pinAdjusted:boolean;directions:string|null}|null;id:string;name:string;status:string;version:string|null;date:string;start:string;finish:string;location:string;supervisor:string;activity:string;instructions:string;siteContact:string;crew:Array<{name:string;role:string;category:string}>;project:{id:string;name:string;number:string|null;closed:boolean}|null;assignedToMe:boolean;swms:Array<{id:string;reference:string;title:string;acknowledged:boolean}>;swmsOutstanding:number;fieldRecord:{status:string}|null;dockets:Array<{id:string;docketNo:string;status:string}>};
 type Today={date:string;today:Shift[];otherToday:Shift[];upcoming:Shift[]};
 
 export function FieldToday(){
@@ -26,7 +27,7 @@ export function FieldToday(){
  if(shift)return <ShiftDetail shift={shift} onBack={()=>{setSelected(null);refresh();}} onChanged={refresh}/>;
  const card=(s:Shift)=><li key={s.id}><button onClick={()=>setSelected(s.id)} className="w-full rounded-2xl border bg-white p-4 text-left shadow-sm active:bg-slate-50">
   <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="text-lg font-semibold leading-6">{s.project?.name||s.name}</p><p className="text-sm text-slate-600">{s.start}–{s.finish}{s.date!==data?.date?` · ${s.date}`:''}</p></div><Pill tone={s.fieldRecord?.status==='Submitted'?'success':'info'}>{s.fieldRecord?.status==='Submitted'?'Submitted':s.status}</Pill></div>
-  {s.location&&<p className="mt-2 flex items-center gap-1 text-sm text-slate-700"><MapPin aria-hidden className="size-4"/>{s.location}</p>}
+  {(s.workLocation?.formattedAddress||s.location)&&<p className="mt-2 flex items-center gap-1 text-sm text-slate-700"><MapPin aria-hidden className="size-4"/>{s.workLocation?.formattedAddress||s.location}</p>}
   {s.activity&&<p className="mt-1 text-sm text-slate-700">{s.activity}</p>}
   {s.swmsOutstanding>0&&<p className="mt-2 flex items-center gap-1 text-sm font-medium text-amber-800"><ShieldCheck aria-hidden className="size-4"/>{s.swmsOutstanding} SWMS to acknowledge before starting</p>}
  </button></li>;
@@ -54,7 +55,7 @@ function ShiftDetail({shift,onBack,onChanged}:{shift:Shift;onBack:()=>void;onCha
   <section className="rounded-2xl border bg-white p-4">
    <p className="text-xs uppercase tracking-wide text-slate-500">{shift.project?.number||'Shift'} · {shift.start}–{shift.finish}</p>
    <h1 className="text-xl font-semibold">{shift.project?.name||shift.name}</h1>
-   {shift.location&&<p className="mt-1 flex items-center gap-1 text-sm text-slate-700"><MapPin aria-hidden className="size-4"/>{shift.location}</p>}
+   {shift.workLocation?<div className="mt-2"><LocationSummary location={{...shift.workLocation,source:'manual'} as never}/>{shift.location&&shift.location!==shift.workLocation.formattedAddress&&<p className="mt-1 text-xs text-slate-600">Work area: {shift.location}</p>}</div>:shift.location&&<p className="mt-1 flex items-center gap-1 text-sm text-slate-700"><MapPin aria-hidden className="size-4"/>{shift.location}</p>}
    {shift.activity&&<p className="mt-2 text-sm font-medium">{shift.activity}</p>}
    {shift.instructions&&<p className="mt-2 whitespace-pre-wrap rounded-lg bg-amber-50 p-2 text-sm text-amber-950">{shift.instructions}</p>}
    <details className="mt-2 text-sm"><summary className="cursor-pointer py-1 text-slate-600">Supervisor, crew and site contact</summary><dl className="mt-1 grid gap-2"><div><dt className="text-slate-500">Supervisor</dt><dd>{shift.supervisor||'Not recorded'}</dd></div>{shift.crew.length>0&&<div><dt className="text-slate-500">Crew and plant</dt><dd>{shift.crew.map(c=>`${c.name}${c.role?` (${c.role})`:''}`).join(', ')}</dd></div>}{shift.siteContact&&<div><dt className="text-slate-500">Site contact</dt><dd>{shift.siteContact}</dd></div>}</dl></details>

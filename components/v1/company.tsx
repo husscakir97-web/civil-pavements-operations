@@ -4,6 +4,8 @@ import {useState} from 'react';
 import {Check} from 'lucide-react';
 import {api,useApi,useAction,useSession,ErrorState,Loading,Btn,Field,FieldGroup,field,Section,PageHeader,dateText} from './kit';
 import {BUSINESS_ACTIVITIES,REGIONS,WORKFORCE,PROJECT_SIZES,TENDERING,HSEQ_MATURITY,ESTIMATING,ONBOARDING_STEPS} from '@/lib/v1/onboarding';
+import {AddressLocationPicker} from './location';
+import type {LocationInput} from '@/lib/v1/location';
 
 type Profile=Record<string,unknown>&{completed?:boolean;onboarding_step?:number};
 const listToText=(v:unknown)=>Array.isArray(v)?v.join('\n'):'';
@@ -33,8 +35,8 @@ function Step({step,draft,set,abn}:{step:number;draft:Profile;set:(k:string,v:un
   <Field label="Trading name"><input className={field} value={t('trading_name')} onChange={e=>set('trading_name',e.target.value)}/></Field>
   <Field label="ABN" hint={abn.message||'11 digits. We check the ATO checksum now; you can confirm it against the ABN Register from the company profile.'}><input className={field} inputMode="numeric" value={t('abn')} onChange={e=>set('abn',e.target.value)} aria-invalid={abn.valid===false}/></Field>
   <div/>
-  <Field label="Registered address"><textarea className={`${field} min-h-20`} value={t('registered_address')} onChange={e=>set('registered_address',e.target.value)}/></Field>
-  <Field label="Operating address"><textarea className={`${field} min-h-20`} value={t('operating_address')} onChange={e=>set('operating_address',e.target.value)}/></Field>
+  <AddressLocationPicker label="Registered address" mode="address" value={(draft.registered_location as LocationInput|null)??null} legacyText={draft.registered_location?null:t('registered_address')||null} onChange={v=>{set('registered_location',v);set('registered_address',v?.formattedAddress||[v?.addressLine1,v?.locality,v?.state,v?.postcode].filter(Boolean).join(', ')||'');}}/>
+  <AddressLocationPicker label="Operating address" mode="address" value={(draft.operating_location as LocationInput|null)??null} legacyText={draft.operating_location?null:t('operating_address')||null} onChange={v=>{set('operating_location',v);set('operating_address',v?.formattedAddress||[v?.addressLine1,v?.locality,v?.state,v?.postcode].filter(Boolean).join(', ')||'');}}/>
  </div>;
  if(step===1)return <div className="grid gap-5">
   <FieldGroup label="Business activities"><Chips options={BUSINESS_ACTIVITIES} value={(draft.business_activities as string[])||[]} onChange={v=>set('business_activities',v)}/></FieldGroup>
@@ -73,7 +75,7 @@ function OnboardingForm({initial,onDone}:{initial:Profile;onDone:()=>void}){
  const [draft,setDraft]=useState<Profile>(initial),[step,setStep]=useState(Math.min(Number(initial.onboarding_step||0),3));
  const {busy,error,run}=useAction();const abn=useAbn(String(draft.abn||''));
  const set=(k:string,v:unknown)=>setDraft(d=>({...d,[k]:v}));
- const payload=(extra:Record<string,unknown>)=>{const p:Record<string,unknown>={...extra};for(const k of ['legal_name','trading_name','abn','registered_address','operating_address','business_activities','disciplines','operating_regions','workforce_size','typical_project_size','plant_summary','key_clients','certifications','tendering_activity','hseq_maturity','estimating_approach'])if(draft[k]!==undefined&&draft[k]!==null&&draft[k]!=='')p[k]=draft[k];return p;};
+ const payload=(extra:Record<string,unknown>)=>{const p:Record<string,unknown>={...extra};for(const k of ['legal_name','trading_name','abn','registered_address','operating_address','registered_location','operating_location','business_activities','disciplines','operating_regions','workforce_size','typical_project_size','plant_summary','key_clients','certifications','tendering_activity','hseq_maturity','estimating_approach'])if(draft[k]!==undefined&&draft[k]!==null&&draft[k]!=='')p[k]=draft[k];return p;};
  const save=(next:number,complete=false)=>run(()=>api('/api/platform/onboarding',{method:'PUT',body:payload({onboarding_step:next,...(complete?{complete:true}:{})})}),async()=>{if(complete){await refresh();onDone();}else setStep(next);});
  return <div className="mx-auto max-w-3xl">
   <PageHeader title="Set up your organisation" subtitle="A few questions so Infrastruct fits the way you work. You can skip anything that is not critical and finish later in Admin → Company."/>

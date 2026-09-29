@@ -51,6 +51,8 @@ export const organisationProfiles=mysqlTable('organisation_profiles',{
  abnVerification:varchar('abn_verification',{length:40}).notNull().default('format-checked'),
  registeredAddress:text('registered_address'),
  operatingAddress:text('operating_address'),
+ registeredLocationId:ref('registered_location_id'),
+ operatingLocationId:ref('operating_location_id'),
  businessActivities:text('business_activities'),
  disciplines:text('disciplines'),
  operatingRegions:text('operating_regions'),
@@ -115,6 +117,47 @@ export const libraryItems=mysqlTable('library_items',{
  ...lifecycle(),
 },t=>[index('idx_library_org_category').on(t.organisationId,t.category)]);
 
+// ---------------------------------------------------------------- core locations (0017)
+// One structured location model for every business address (client sites, projects, shift
+// work points, depots, company addresses, incidents). An address identifies the general site;
+// the pin identifies exactly where the work is: the provider's geocoded point is kept next to
+// the operational pin the user chose. owner_type/owner_id record which record a location
+// belongs to, so access is always decided through that owner (there is no global lookup).
+const coord=(name:string)=>decimal(name,{precision:10,scale:7});
+export const locations=mysqlTable('locations',{
+ id:id(),organisationId:org(),
+ ownerType:varchar('owner_type',{length:30}).notNull(),
+ ownerId:ref('owner_id').notNull(),
+ locationType:varchar('location_type',{length:30}).notNull().default('site'),
+ label:varchar('label',{length:255}),
+ formattedAddress:varchar('formatted_address',{length:500}),
+ addressLine1:varchar('address_line1',{length:255}),
+ addressLine2:varchar('address_line2',{length:255}),
+ locality:varchar('locality',{length:120}),
+ state:varchar('state',{length:60}),
+ postcode:varchar('postcode',{length:20}),
+ country:varchar('country',{length:2}),
+ provider:varchar('provider',{length:20}),
+ providerPlaceId:varchar('provider_place_id',{length:255}),
+ precision:varchar('precision',{length:30}),
+ geocodedLat:coord('geocoded_lat'),geocodedLng:coord('geocoded_lng'),
+ pinLat:coord('pin_lat'),pinLng:coord('pin_lng'),
+ pinAdjusted:int('pin_adjusted').notNull().default(0),
+ pinAddress:varchar('pin_address',{length:500}),
+ source:varchar('source',{length:20}).notNull().default('manual'),
+ geocodedAt:stamp('geocoded_at'),
+ reverseGeocodedAt:stamp('reverse_geocoded_at'),
+ ...lifecycle(),
+},t=>[index('idx_locations_org').on(t.organisationId),index('idx_locations_org_owner').on(t.organisationId,t.ownerType,t.ownerId)]);
+
+// Depots and yards: operational bases (future proximity, travel and mobilisation).
+export const depots=mysqlTable('depots',{
+ id:id(),organisationId:org(),name:varchar('name',{length:160}).notNull(),
+ locationId:ref('location_id'),notes:text('notes'),
+ status:varchar('status',{length:20}).notNull().default('active'),
+ ...lifecycle(),
+},t=>[index('idx_depots_org').on(t.organisationId)]);
+
 // ---------------------------------------------------------------- core clients & sites (0006)
 // Client lives in the legacy `clients` table (db/schema.ts) with typed columns.
 // A site belongs to a client when known; opportunities, tenders and projects
@@ -129,6 +172,7 @@ export const clientSites=mysqlTable('client_sites',{
  postcode:varchar('postcode',{length:10}),
  siteContact:varchar('site_contact',{length:160}),
  accessNotes:text('access_notes'),
+ locationId:ref('location_id'),
  status:varchar('status',{length:20}).notNull().default('active'),
  ...lifecycle(),
 },t=>[index('idx_client_sites_org').on(t.organisationId),index('idx_client_sites_org_client').on(t.organisationId,t.clientId)]);
@@ -420,6 +464,8 @@ export const hseqIncidents=mysqlTable('hseq_incidents',{
  evidenceDocumentId:ref('evidence_document_id'),
  status:varchar('status',{length:20}).notNull().default('reported'),
  reportedBy:ref('reported_by'),
+ locationId:ref('location_id'),
+ locationDescription:varchar('location_description',{length:500}),
  ...lifecycle(),
 },t=>[index('idx_incidents_org_project').on(t.organisationId,t.projectId)]);
 

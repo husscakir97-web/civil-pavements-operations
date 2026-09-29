@@ -32,6 +32,7 @@ export const NAV:NavArea[]=[
   {key:'Plant & Equipment',modules:RESOURCE_MODULES,capability:'schedule.view'},
   {key:'Crews',modules:RESOURCE_MODULES,capability:'schedule.view'},
   {key:'Suppliers & Subcontractors',modules:RESOURCE_MODULES,capability:'schedule.view'},
+  {key:'Depots',modules:RESOURCE_MODULES,capability:'schedule.view'},
   {key:'Workshop',module:'workshop',capability:'workshop.view'},
  ]},
  {key:'Commercial',label:'Commercial',subs:[

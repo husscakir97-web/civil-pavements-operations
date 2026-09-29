@@ -251,6 +251,8 @@ export const jobs=mysqlTable('jobs',{
  practicalCompletionDate:varchar('practical_completion_date',{length:10}),
  finishDate:varchar('finish_date',{length:10}),
  siteAddress:text('site_address'),
+ // 0017: project-specific location override (otherwise the project uses its client site's location).
+ locationId:varchar('location_id',{length:191}),
  contractNumber:varchar('contract_number',{length:80}),
  contractType:varchar('contract_type',{length:80}),
  retentionPct:double('retention_pct'),
@@ -400,6 +402,8 @@ export const shifts=mysqlTable('shifts',{
  supervisorName:varchar('supervisor_name',{length:160}),
  supervisorUserId:varchar('supervisor_user_id',{length:191}),
  location:varchar('location',{length:255}),
+ // 0017: shift-specific work point (otherwise the project/site location applies).
+ locationId:varchar('location_id',{length:191}),
  instructions:text('instructions'),
  requiredCompetencies:text('required_competencies'),
  revision:int('revision').notNull().default(1),

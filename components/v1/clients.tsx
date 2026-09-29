@@ -11,6 +11,8 @@ import {ClientContacts,ClientPicker,refreshClients,type Client,type Contact,type
 import {useNav} from './nav';
 import {formatAbn} from '@/lib/platform/abn';
 import {CrmImporter,LegacyLinks} from './crm-import';
+import {AddressLocationPicker,LocationSummary,locationInputFrom} from './location';
+import type {LocationInput} from '@/lib/v1/location';
 
 type View='clients'|'contacts'|'sites';
 type Row<T>=T&{clientName:string};
@@ -175,21 +177,24 @@ function ContactEditor({client:c,onChanged}:{client:Client;onChanged:()=>void}){
 
 function SiteEditor({client:c,onChanged}:{client:Client;onChanged:()=>void}){
  const session=useSession(),editable=canEdit(session),addable=canCreate(session),{busy,error,run}=useAction();
- const [edit,setEdit]=useState<Site|null>(null),[add,setAdd]=useState({name:'',address:'',suburb:'',state:'',postcode:'',accessNotes:''});
+ const blank={name:'',accessNotes:'',location:null as LocationInput|null};
+ const [edit,setEdit]=useState<(Site&{draft:LocationInput|null;moved:boolean})|null>(null),[add,setAdd]=useState(blank);
  const post=(body:Record<string,unknown>,done:()=>void)=>void run(()=>api('/api/platform/clients',{method:'POST',body}),()=>{done();onChanged();});
+ const legacy=(s:Site)=>[s.address&&s.address!==s.name?s.address:null,s.suburb,s.state,s.postcode].filter(Boolean).join(', ')||null;
  return <div className="grid gap-4">
-  {c.sites.length?<ul className="divide-y rounded-lg border">{c.sites.map(s=><li key={s.id} className="flex flex-wrap items-center gap-2 p-3 text-sm"><MapPin aria-hidden className="size-4 text-slate-400"/><span className="min-w-0 flex-1"><span className="font-medium">{s.name}</span>{s.status&&s.status!=='active'&&<span className="ml-2"><Pill>Inactive</Pill></span>}<span className="block text-xs text-slate-500">{[s.address&&s.address!==s.name?s.address:null,s.suburb,s.state,s.postcode].filter(Boolean).join(', ')||'No address recorded'}</span></span>{editable&&<Btn variant="ghost" className="min-h-9 px-2 text-xs" onClick={()=>setEdit(s)}>Edit</Btn>}</li>)}</ul>:<EmptyState title="No sites recorded for this client."/>}
-  {edit&&<form className="grid gap-3 rounded-lg border bg-slate-50 p-3 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();post({action:'updateSite',id:edit.id,revision:edit.revision||1,site:{name:edit.name,address:edit.address||null,suburb:edit.suburb||null,state:edit.state||null,postcode:edit.postcode||null,accessNotes:edit.accessNotes||null}},()=>setEdit(null));}}>
-   {(['name','address','suburb','state','postcode','accessNotes'] as const).map(k=><Field key={k} label={{name:'Site name',address:'Address',suburb:'Suburb',state:'State',postcode:'Postcode',accessNotes:'Access notes'}[k]}><input className={field} value={String(edit[k]||'')} onChange={e=>setEdit({...edit,[k]:e.target.value})}/></Field>)}
-   <div className="flex flex-wrap gap-2 sm:col-span-2"><Btn type="submit" busy={busy}>Save site</Btn><Btn type="button" variant="secondary" busy={busy} onClick={()=>post({action:'updateSite',id:edit.id,revision:edit.revision||1,site:{status:edit.status==='inactive'?'active':'inactive'}},()=>setEdit(null))}>{edit.status==='inactive'?'Reactivate':'Mark inactive'}</Btn><Btn type="button" variant="ghost" onClick={()=>setEdit(null)}>Cancel</Btn></div>
+  {c.sites.length?<ul className="divide-y rounded-lg border">{c.sites.map(s=><li key={s.id} className="grid gap-2 p-3 text-sm"><div className="flex flex-wrap items-center gap-2"><MapPin aria-hidden className="size-4 text-slate-400"/><span className="min-w-0 flex-1 font-medium">{s.name}{s.status&&s.status!=='active'&&<span className="ml-2"><Pill>Inactive</Pill></span>}</span>{editable&&<Btn variant="ghost" className="min-h-9 px-2 text-xs" onClick={()=>setEdit({...s,draft:locationInputFrom(s.location),moved:false})}>Edit</Btn>}</div><LocationSummary location={s.location??null} legacyText={legacy(s)} compact/></li>)}</ul>:<EmptyState title="No sites recorded for this client."/>}
+  {edit&&<form className="grid gap-3 rounded-lg border bg-slate-50 p-3" onSubmit={e=>{e.preventDefault();post({action:'updateSite',id:edit.id,revision:edit.revision||1,site:{name:edit.name,accessNotes:edit.accessNotes||null,...(edit.moved?{location:edit.draft}:{})}},()=>setEdit(null));}}>
+   <Field label="Site name"><input className={field} value={edit.name} onChange={e=>setEdit({...edit,name:e.target.value})}/></Field>
+   <AddressLocationPicker label="Site address and exact location" value={edit.draft} legacyText={edit.location?null:legacy(edit)} onChange={l=>setEdit({...edit,draft:l,moved:true})}/>
+   <Field label="Access notes"><input className={field} value={edit.accessNotes||''} onChange={e=>setEdit({...edit,accessNotes:e.target.value})}/></Field>
+   <div className="flex flex-wrap gap-2"><Btn type="submit" busy={busy}>Save site</Btn><Btn type="button" variant="secondary" busy={busy} onClick={()=>post({action:'updateSite',id:edit.id,revision:edit.revision||1,site:{status:edit.status==='inactive'?'active':'inactive'}},()=>setEdit(null))}>{edit.status==='inactive'?'Reactivate':'Mark inactive'}</Btn><Btn type="button" variant="ghost" onClick={()=>setEdit(null)}>Cancel</Btn></div>
   </form>}
-  {addable&&!edit&&<form className="grid gap-3 rounded-lg border bg-slate-50 p-3 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();post({action:'createSite',site:{clientId:c.id,...Object.fromEntries(Object.entries(add).map(([k,x])=>[k,x||null]))}},()=>setAdd({name:'',address:'',suburb:'',state:'',postcode:'',accessNotes:''}));}}>
-   <p className="text-sm font-medium sm:col-span-2">Add a site</p>
+  {addable&&!edit&&<form className="grid gap-3 rounded-lg border bg-slate-50 p-3" onSubmit={e=>{e.preventDefault();post({action:'createSite',site:{clientId:c.id,name:add.name||null,accessNotes:add.accessNotes||null,location:add.location}},()=>setAdd(blank));}}>
+   <p className="text-sm font-medium">Add a site</p>
    <Field label="Site name"><input className={field} value={add.name} onChange={e=>setAdd({...add,name:e.target.value})}/></Field>
-   <Field label="Address"><input className={field} value={add.address} onChange={e=>setAdd({...add,address:e.target.value})}/></Field>
-   <Field label="Suburb"><input className={field} value={add.suburb} onChange={e=>setAdd({...add,suburb:e.target.value})}/></Field>
-   <Field label="State / postcode"><span className="flex gap-2"><input className={field} aria-label="State" value={add.state} onChange={e=>setAdd({...add,state:e.target.value})}/><input className={field} aria-label="Postcode" value={add.postcode} onChange={e=>setAdd({...add,postcode:e.target.value})}/></span></Field>
-   <div className="sm:col-span-2"><Btn type="submit" busy={busy} disabled={!add.name&&!add.address}><Plus aria-hidden className="size-4"/>Add site</Btn></div>
+   <AddressLocationPicker label="Site address and exact location" value={add.location} onChange={l=>setAdd({...add,location:l})}/>
+   <Field label="Access notes"><input className={field} value={add.accessNotes} onChange={e=>setAdd({...add,accessNotes:e.target.value})}/></Field>
+   <div><Btn type="submit" busy={busy} disabled={!add.name&&!add.location}><Plus aria-hidden className="size-4"/>Add site</Btn></div>
   </form>}
   <ErrorState error={error}/>
  </div>;

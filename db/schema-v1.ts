@@ -2,7 +2,7 @@
 // Rules: every table carries organisation_id with an index; mutable entities
 // carry revision/status/created_at/updated_at; approved revisions are append-only.
 // Money is DECIMAL(15,2). Timestamps are ISO-8601 strings (matching legacy tables).
-import {mysqlTable,varchar,longtext,text,int,double,decimal,bigint,index,uniqueIndex} from 'drizzle-orm/mysql-core';
+import {mysqlTable,varchar,char,longtext,text,int,double,decimal,bigint,index,uniqueIndex} from 'drizzle-orm/mysql-core';
 
 const id=()=>varchar('id',{length:191}).primaryKey();
 const org=()=>varchar('organisation_id',{length:191}).notNull();
@@ -819,8 +819,8 @@ export const notificationPreferences=mysqlTable('notification_preferences',{
  quietStart:varchar('quiet_start',{length:5}),quietEnd:varchar('quiet_end',{length:5}),timezone:varchar('timezone',{length:80}).notNull().default('Australia/Sydney'),updatedAt:stamp('updated_at').notNull(),
 },t=>[uniqueIndex('idx_notification_preferences_user').on(t.organisationId,t.userId)]);
 export const externalAccessTokens=mysqlTable('external_access_tokens',{
- id:id(),organisationId:org(),tokenHash:varchar('token_hash',{length:64}).notNull(),contextType:varchar('context_type',{length:40}).notNull(),contextId:ref('context_id').notNull(),projectId:ref('project_id'),
- recipientName:varchar('recipient_name',{length:180}),recipientEmail:varchar('recipient_email',{length:254}),recipientPhone:varchar('recipient_phone',{length:60}),scopes:varchar('scopes',{length:500}).notNull().default('view,acknowledge,respond'),
+ id:id(),organisationId:org(),tokenHash:char('token_hash',{length:64}).notNull(),contextType:varchar('context_type',{length:40}).notNull(),contextId:ref('context_id').notNull(),projectId:ref('project_id'),
+ recipientName:varchar('recipient_name',{length:180}),recipientEmail:varchar('recipient_email',{length:254}),recipientPhone:varchar('recipient_phone',{length:60}),scopes:varchar('scopes',{length:500}).notNull().default('view,acknowledge,respond,upload'),
  expiresAt:stamp('expires_at').notNull(),revokedAt:stamp('revoked_at'),lastAccessedAt:stamp('last_accessed_at'),createdBy:ref('created_by').notNull(),createdAt:stamp('created_at').notNull(),
 },t=>[uniqueIndex('idx_external_access_tokens_hash').on(t.tokenHash),index('idx_external_access_tokens_context').on(t.organisationId,t.contextType,t.contextId,t.expiresAt)]);
 export const externalResponses=mysqlTable('external_responses',{

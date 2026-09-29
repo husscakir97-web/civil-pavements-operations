@@ -198,6 +198,10 @@ async function externalToken(raw:string){
  if(!row||row.revoked_at||String(row.expires_at)<=new Date().toISOString())fail(404,'This job link is invalid or has expired.');
  const entitlements=await getEntitlements(String(row.organisation_id));
  if(!usable(entitlements,'operations'))fail(404,'This job link is invalid or has expired.');
+ const shift=await one<{metadata:string|Record<string,unknown>}>('SELECT metadata FROM shifts WHERE organisation_id=? AND id=?',[row.organisation_id,row.context_id]);
+ if(!shift)fail(404,'This job link is invalid or has expired.');
+ const metadata=typeof shift.metadata==='string'?JSON.parse(shift.metadata||'{}'):shift.metadata||{},currentProject=metadata.jobId?String(metadata.jobId):null;
+ if((row.project_id||null)!==currentProject)fail(404,'This job link is invalid or has expired.');
  await exec('UPDATE external_access_tokens SET last_accessed_at=? WHERE id=?',[nowIso(),row.id]);
  return row!;
 }

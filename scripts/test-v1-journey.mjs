@@ -577,6 +577,24 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  await expect('supervisor',[['GET','/api/field/today',200],['GET','/api/commercial/claims?projectId='+projectId,403],['GET','/api/dockets',403],['GET','/api/estimates',403]]);await noRates('supervisor');
  await expect('accounts',[['GET','/api/commercial/claims?projectId='+projectId,200],['GET','/api/dockets',200],['GET','/api/tenders/register',403],['POST','/api/operations/resources',403,{action:'savePlant',plant:{name:'x',status:'Available'}}],['GET','/api/estimates',403]]);
  await expect('read_only',[['GET','/api/projects',200],['GET','/api/registers/risks?parentId='+projectId,200],['POST','/api/registers/risks',403,{parentId:projectId,values:{title:'x'}}],['GET','/api/commercial/claims?projectId='+projectId,403],['POST','/api/field/today',403,{shiftId:shift.id,workDate:today}],['GET','/api/team',403]]);await noRates('read_only');
+ // Project Engineer / Site Engineer: delivery access without money, pricing, rates, approvals or administration (server-enforced).
+ const engineerDenied=[['GET','/api/commercial/claims?projectId='+projectId,403],['GET','/api/estimates',403],['GET','/api/estimates/rates',403],['GET','/api/tenders/register',403],['GET','/api/dockets',403],['GET','/api/team',403],['POST','/api/estimates/approval',403,{estimateId,action:'approve'}],['POST','/api/operations/resources',403,{action:'savePlant',plant:{name:'x',status:'Available'}}]];
+ await expect('project_engineer',[['GET','/api/projects',200],['GET','/api/registers/risks?parentId='+projectId,200],['GET','/api/operations/resources?kind=workers',200],['GET','/api/field/today',200],...engineerDenied]);await noRates('project_engineer');
+ await expect('site_engineer',[['GET','/api/projects',200],['GET','/api/field/today',200],['GET','/api/reports/v1',403],...engineerDenied]);await noRates('site_engineer');
+ const [orgJobs]=await db.execute('SELECT id FROM jobs WHERE organisation_id=?',[memberA.organisation_id]);const orgJobIds=new Set(orgJobs.map(j=>j.id));
+ for(const role of ['project_engineer','site_engineer','scheduler']){
+  await as(role);const home=await json(await call('/api/platform/home','GET',undefined,R.cookie),200);
+  const text=JSON.stringify(home);
+  assert(!/variation|claim|invoice|unclaimed|estimate-approval|tender/i.test([...home.myActions,...home.needsAttention].map(i=>i.key).join(' ')),role+' Home has no commercial or tender items');
+  assert(!/"(rate|hourlyRate|contractValue|currentContract|forecastMarginPct|unbilled)"/.test(text),role+' Home carries no money');
+  assert(Array.isArray(home.indicators)&&home.indicators.every(i=>typeof i.value==='string'&&i.area),role+' indicators are counts linked to an area');
+  assert((home.myProjects||[]).every(p=>orgJobIds.has(p.id)),role+' Home projects stay in the organisation');
+  for(const i of [...home.myActions,...home.needsAttention,...home.today])if(i.target?.type==='project')assert(orgJobIds.has(i.target.id),'Home links stay in the organisation');
+ }
+ await as('scheduler');const schedHome=await json(await call('/api/platform/home','GET',undefined,R.cookie),200);
+ const [[tomorrowShifts]]=await db.execute("SELECT COUNT(*) AS n FROM shifts WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.date'))=DATE_FORMAT(DATE_ADD(?,INTERVAL 1 DAY),'%Y-%m-%d') AND status NOT IN ('Cancelled','Archived','Draft')",[memberA.organisation_id,schedHome.date]);
+ const ind=schedHome.indicators.find(i=>i.key==='tomorrow-resourced');
+ if(Number(tomorrowShifts.n))assert.equal(ind?.value.split(' / ')[1],String(tomorrowShifts.n),'tomorrow indicator counts the real shifts');else assert.equal(ind,undefined,'no indicator without shifts');
  // Documents follow the record they belong to: tender pricing never reaches scheduling roles.
  await as('admin');
  const pricing=(await json(await upload(A.cookie,{contextType:'tender',contextId:tenderId,category:'Pricing',title:'Priced schedule'}),201)).document;
@@ -593,7 +611,7 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  assert.equal((await call('/api/documents','POST',supC,C.cookie)).status,404,'field cannot see or replace office documents');
  await json(await call('/api/team','PATCH',{userId:R.user.id,expected:{role:'estimator',active:true},next:{role:'accounts',active:true}},A.cookie),200,'admin assigns a V1 role');
  await json(await call('/api/team','PATCH',{userId:A.user.id,expected:{role:'admin',active:true},next:{role:'read_only',active:true}},A.cookie),409,'last admin protected');
- console.log('PASS R roles: office, estimator, scheduler, project manager, supervisor, accounts, read-only gates; money hidden from non-commercial roles; document supersede authorisation; role change + last-admin protection');
+ console.log('PASS R roles: office, estimator, scheduler, project manager, project engineer, site engineer, supervisor, accounts, read-only gates; role-aware Home without money or cross-tenant links; real shift indicator; money hidden from non-commercial roles; document supersede authorisation; role change + last-admin protection');
 
  // ---------------------------------------------------------------- Scenario H: ABN register, AI orchestration, billing
  step='H ABN';

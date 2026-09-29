@@ -13,6 +13,7 @@ const contextLabel=(d:Doc)=>d.contextName||CONTEXTS.find(x=>x[0]===d.contextType
 export function DocumentsWorkspace({initialQuery}:{initialQuery?:string}){
  const session=useSession(),{navigate}=useNav();
  const [typed,setTyped]=useState(initialQuery||''),[q,setQ]=useState(initialQuery||''),[context,setContext]=useState(''),[category,setCategory]=useState(''),[allVersions,setAllVersions]=useState(false),[showUpload,setShowUpload]=useState(false);
+ useEffect(()=>{setTyped(initialQuery||'');setQ(initialQuery||'');},[initialQuery]);
  useEffect(()=>{const t=setTimeout(()=>setQ(typed.trim()),250);return()=>clearTimeout(t);},[typed]);
  const params=new URLSearchParams();if(q)params.set('q',q);if(context)params.set('contextType',context);if(category)params.set('category',category);if(allVersions)params.set('all','1');params.set('limit','250');
  const docs=useApi<{documents:Doc[]}>(`/api/documents?${params.toString()}`);

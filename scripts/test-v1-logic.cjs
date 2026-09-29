@@ -429,6 +429,10 @@ console.log('PASS estimate paste: header skipped, $ and thousands parsed, catego
  const noNumber=L.mapAddressComponents([{long_name:'Dover Road',short_name:'Dover Rd',types:['route']},{long_name:'Rose Bay',short_name:'Rose Bay',types:['locality']}]);
  assert.equal(noNumber.addressLine1,'Dover Road','no street number is invented');
  assert.deepEqual(L.mapAddressComponents(null),L.EMPTY_PARTS);
+ assert.equal(L.placeResultKind(['street_address']),'ADDRESS','Place type describes the result, not rooftop coordinate accuracy');
+ assert.equal(L.placeResultKind(['intersection']),'INTERSECTION');
+ assert.equal(L.placeResultKind(['route']),'ROUTE');
+ assert.equal(L.placeResultKind(['establishment']),'PLACE');
  assert.equal(L.validPoint({lat:0,lng:0}),false);assert.equal(L.validPoint({lat:-91,lng:0}),false);assert.equal(L.validPoint({lat:-33.9,lng:150.8}),true);
  assert.equal(L.pinState({geocoded:null,pin:null}),'none');assert.equal(L.pinState({geocoded:{lat:-33,lng:150},pin:{lat:-33,lng:150}}),'address');
  assert.equal(L.pinState({geocoded:{lat:-33,lng:150},pin:{lat:-33.001,lng:150}}),'adjusted');assert.equal(L.pinState({geocoded:null,pin:{lat:-33,lng:150}}),'manual');

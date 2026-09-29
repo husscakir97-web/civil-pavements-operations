@@ -207,7 +207,7 @@ export async function externalJob(raw:string){
  const m=typeof shift.metadata==='string'?JSON.parse(shift.metadata||'{}'):shift.metadata||{},projectId=t.project_id||m.jobId||null;
  const job=projectId?await one('SELECT id,name,client_name,site_address,metadata,location_id FROM jobs WHERE organisation_id=? AND id=?',[t.organisation_id,projectId]):null;
  const jm=job?(typeof job.metadata==='string'?JSON.parse(job.metadata||'{}'):job.metadata||{}):{};
- let loc:any=null;
+ let loc:{formatted_address:string|null;pin_address:string|null;pin_lat:string|number|null;pin_lng:string|number|null}|null=null;
  const locId=shift.location_id||job?.location_id||null;
  if(locId)loc=await one('SELECT formatted_address,pin_address,pin_lat,pin_lng FROM locations WHERE organisation_id=? AND id=?',[t.organisation_id,locId]);
  const docs=projectId?await query(`SELECT id,title,file_name,category FROM documents WHERE organisation_id=? AND ${safeExternalDocumentsWhere()} ORDER BY created_at DESC LIMIT 50`,[t.organisation_id,projectId,shift.id]):[];

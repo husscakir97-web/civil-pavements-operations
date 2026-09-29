@@ -1,5 +1,5 @@
 import type {Assignment,DeliveryRecord} from '@/lib/planning';
-import type {Requirement} from '@/lib/v1/shift-requirements';
+import {coverage,type Requirement} from '@/lib/v1/shift-requirements';
 
 export type AvailabilityTone='ok'|'warn'|'block'|'unknown';
 export type ResourceAvailability={tone:AvailabilityTone;text:string};
@@ -44,7 +44,7 @@ export function rankResources(
  availability:Record<string,ResourceAvailability|undefined>,
 ){
  const assignedIds=new Set(assigned.map(a=>a.resourceId));
- const missing=requirements.filter(r=>r.category===category&&assigned.filter(a=>a.category===category&&(!r.role||lower(a.role)===lower(r.role))).length<r.quantity);
+ const missing=coverage(requirements,assigned).filter(r=>r.category===category&&r.missing>0);
  const score=(r:DeliveryRecord)=>{
   const role=lower(defaultAssignmentRole(r,category));
   const fit=missing.some(m=>!m.role||lower(m.role)===role)?0:1;

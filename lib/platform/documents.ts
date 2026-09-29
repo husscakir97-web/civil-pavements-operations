@@ -28,7 +28,7 @@ export const CONTEXT_CAPABILITY:Record<DocumentContext,Capability>={
 };
 export const documentContextsFor=(role:string)=>CONTEXTS.filter(c=>can(role,CONTEXT_CAPABILITY[c]));
 
-export function publicDocument(r:Row){return {id:r.id,title:r.title,fileName:r.file_name,contentType:r.content_type,sizeBytes:Number(r.size_bytes),category:r.category,version:Number(r.version),status:r.status,visibility:r.visibility,source:r.source,contextType:r.context_type,contextId:r.context_id,projectId:r.project_id,uploadedBy:r.uploaded_by,createdAt:r.created_at,url:`/api/documents?id=${encodeURIComponent(r.id)}`};}
+export function publicDocument(r:Row){return {id:r.id,title:r.title,fileName:r.file_name,contentType:r.content_type,sizeBytes:Number(r.size_bytes),category:r.category,version:Number(r.version),status:r.status,visibility:r.visibility,source:r.source,contextType:r.context_type,contextId:r.context_id,projectId:r.project_id,contextName:r.context_name??null,uploadedBy:r.uploaded_by,uploadedByName:r.uploaded_by_name??null,createdAt:r.created_at,url:`/api/documents?id=${encodeURIComponent(r.id)}`};}
 
 export async function storeDocument(file:File,meta:{contextType:DocumentContext;contextId?:string|null;projectId?:string|null;category?:string;title?:string;visibility?:'office'|'field';supersedesId?:string|null;source?:string}){
  const actor=actorContext.getStore()!;
@@ -62,20 +62,32 @@ export async function storeDocument(file:File,meta:{contextType:DocumentContext;
  });
 }
 
-export async function listDocuments(filter:{contextType?:string|null;contextId?:string|null;projectId?:string|null;includeSuperseded?:boolean}){
+export async function listDocuments(filter:{contextType?:string|null;contextId?:string|null;projectId?:string|null;includeSuperseded?:boolean;q?:string|null;category?:string|null;limit?:number}){
  const actor=actorContext.getStore()!;
- const where=['organisation_id=?'],values:unknown[]=[actor.organisationId];
- if(filter.contextType){where.push('context_type=?');values.push(filter.contextType);}
- if(filter.contextId){where.push('context_id=?');values.push(filter.contextId);}
- if(filter.projectId){where.push('project_id=?');values.push(filter.projectId);}
- if(!filter.includeSuperseded)where.push("status='current'");
- if(actor.role==='field')where.push("visibility='field'");
- else{const ctx=documentContextsFor(actor.role);if(!ctx.length)return [];where.push('context_type IN (?)');values.push(ctx);}
- // Project-scoped roles: documents of other projects are excluded; company documents (no project) stay.
- const scope=await projectFilter("COALESCE(project_id,CASE WHEN context_type='project' THEN context_id END)",values,{allowNull:true});if(scope)where.push(scope.replace(/^ AND /,''));
- return (await query(`SELECT * FROM documents WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT 500`,values)).map(publicDocument);
+ const where=['d.organisation_id=?'],values:unknown[]=[actor.organisationId];
+ if(filter.contextType){where.push('d.context_type=?');values.push(filter.contextType);}
+ if(filter.contextId){where.push('d.context_id=?');values.push(filter.contextId);}
+ if(filter.projectId){where.push('d.project_id=?');values.push(filter.projectId);}
+ if(filter.category){where.push('d.category=?');values.push(filter.category);}
+ if(!filter.includeSuperseded)where.push("d.status='current'");
+ const q=String(filter.q||'').trim().toLowerCase().slice(0,160);
+ if(q){for(const term of q.split(/\s+/).filter(Boolean).slice(0,6)){const like=`%${term.replace(/[\\%_]/g,m=>'\\'+m)}%`;where.push('(LOWER(d.title) LIKE ? OR LOWER(d.file_name) LIKE ? OR LOWER(d.category) LIKE ? OR LOWER(d.context_type) LIKE ?)');values.push(like,like,like,like);}}
+ if(actor.role==='field')where.push("d.visibility='field'");
+ else{const ctx=documentContextsFor(actor.role);if(!ctx.length)return [];where.push('d.context_type IN (?)');values.push(ctx);}
+ const scope=await projectFilter("COALESCE(d.project_id,CASE WHEN d.context_type='project' THEN d.context_id END)",values,{allowNull:true});if(scope)where.push(scope.replace(/^ AND /,''));
+ const limit=Math.min(Math.max(Number(filter.limit||200),1),500);
+ const rows=await query(`SELECT d.* FROM documents d WHERE ${where.join(' AND ')} ORDER BY d.created_at DESC LIMIT ${limit}`,values);
+ const projectIds=[...new Set(rows.map(r=>r.project_id||(r.context_type==='project'?r.context_id:null)).filter(Boolean))] as string[];
+ const tenderIds=[...new Set(rows.filter(r=>r.context_type==='tender').map(r=>r.context_id).filter(Boolean))] as string[];
+ const userIds=[...new Set(rows.map(r=>r.uploaded_by).filter(Boolean))] as string[];
+ const [projects,tenders,users]=await Promise.all([
+  projectIds.length?query<{id:string;name:string}>('SELECT id,name FROM jobs WHERE organisation_id=? AND id IN (?)',[actor.organisationId,projectIds]):[],
+  tenderIds.length?query<{id:string;title:string}>('SELECT id,title FROM tenders WHERE organisation_id=? AND id IN (?)',[actor.organisationId,tenderIds]):[],
+  userIds.length?query<{id:string;name:string|null;email:string}>('SELECT id,name,email FROM users WHERE organisation_id=? AND id IN (?)',[actor.organisationId,userIds]):[],
+ ]);
+ const projectName=new Map(projects.map(p=>[p.id,p.name])),tenderName=new Map(tenders.map(t=>[t.id,t.title])),userName=new Map(users.map(u=>[u.id,u.name||u.email]));
+ return rows.map(r=>publicDocument({...r,context_name:(r.project_id||r.context_type==='project')?projectName.get(r.project_id||r.context_id)||null:r.context_type==='tender'?tenderName.get(r.context_id)||null:null,uploaded_by_name:userName.get(r.uploaded_by)||null}));
 }
-
 export async function openDocument(id:string){
  const actor=actorContext.getStore()!;
  const row=await one('SELECT * FROM documents WHERE organisation_id=? AND id=?',[actor.organisationId,id]);

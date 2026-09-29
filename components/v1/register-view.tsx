@@ -68,7 +68,7 @@ function Input({f,value,onChange,disabled,people,relationOptions,documentContext
 
 /** `focus` shows the records that need action first (e.g. incomplete mandatory requirements), with "All" one tap away. */
 export type RegisterFocus={label:string;test:(r:Rec)=>boolean;empty?:string};
-export function RegisterView({register,parentId=null,all=false,title,description,createDefaults,rowActions,onChanged,filter,hideCreate,projectId,focus}:{register:RegisterKey;parentId?:string|null;all?:boolean;title?:string;description?:string;createDefaults?:Rec|Record<string,unknown>;rowActions?:(r:Rec,refresh:()=>void)=>ReactNode;onChanged?:()=>void;filter?:(r:Rec)=>boolean;hideCreate?:boolean;projectId?:string|null;focus?:RegisterFocus}){
+export function RegisterView({register,parentId=null,all=false,title,description,createDefaults,rowActions,onChanged,filter,hideCreate,projectId,focus,initialQuery}:{initialQuery?:string;register:RegisterKey;parentId?:string|null;all?:boolean;title?:string;description?:string;createDefaults?:Rec|Record<string,unknown>;rowActions?:(r:Rec,refresh:()=>void)=>ReactNode;onChanged?:()=>void;filter?:(r:Rec)=>boolean;hideCreate?:boolean;projectId?:string|null;focus?:RegisterFocus}){
  const def=REGISTERS[register] as RegisterDef;
  const session=useSession(),people=usePeople();
  const url=`/api/registers/${register}${parentId?`?parentId=${encodeURIComponent(parentId)}`:all?'?all=1':''}`;
@@ -81,8 +81,8 @@ export function RegisterView({register,parentId=null,all=false,title,description
  const focused=focus?scoped.filter(focus.test):[];
  const [view,setView]=useState<'focus'|'all'|null>(null);
  // Default to the attention list when something needs attention; the choice sticks once made.
- const showing=focus?(view??(focused.length?'focus':'all')):'all';
- const [query,setQuery]=useState('');
+ const showing=focus&&!initialQuery?(view??(focused.length?'focus':'all')):(view??'all');
+ const [query,setQuery]=useState(initialQuery||'');
  // Free-text search over what the user can see (title, category, content, owner, reference, status).
  const searchable=useMemo(()=>def.fields.filter(f=>['text','textarea','select','user','number'].includes(f.type)&&(!f.commercial||session.can('commercial.view'))),[def,session]);
  const searchText=(r:Rec)=>[...searchable.map(f=>f.type==='user'?people.find(p=>p.id===r[f.key])?.name:r[f.key] as string|number|null),r.reference as string|null,r.project_name as string|null,humanStatus(String(r[def.stateColumn||'status']??''))];

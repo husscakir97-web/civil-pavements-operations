@@ -18,15 +18,15 @@ const WORKER_STATUSES=['Active','Leave','Inactive'],PLANT_STATUSES=['Available',
 const expiryTone=(s:string)=>s==='expired'?'danger':s==='expiring'?'warning':s==='current'?'success':'neutral';
 const expiryLabel=(s:string,d:string|null)=>s==='expired'?`Expired ${dateText(d)}`:s==='expiring'?`Expires ${dateText(d)}`:s==='current'?`Valid to ${dateText(d)}`:'No expiry recorded';
 
-export function ResourcesArea({initial='workers',other}:{initial?:ResourceTab;other?:ReactNode}){
+export function ResourcesArea({initial='workers',other,initialQuery}:{initial?:ResourceTab;other?:ReactNode;initialQuery?:string}){
  const [tab,setTab]=useState<ResourceTab>(initial);
  const issues=useApi<{issues:Issue[]}>('/api/operations/resources?kind=issues');
  const open=issues.data?.issues.length||0;
  return <div className="mx-auto max-w-7xl p-4 sm:p-6">
   <PageHeader title="Resources" subtitle="Workers, competencies and plant used by the scheduler's conflict checks."/>
   <Tabs label="Resource registers" active={tab} onChange={setTab} tabs={[{key:'workers',label:'Workers'},{key:'plant',label:'Plant & equipment'},{key:'other',label:'Crews, suppliers & subcontractors',hidden:!other},{key:'issues',label:'Migration issues',badge:open?<Pill tone="warning">{open}</Pill>:undefined}]}/>
-  {tab==='workers'&&<Workers/>}
-  {tab==='plant'&&<PlantList/>}
+  {tab==='workers'&&<Workers initialQuery={initial==='workers'?initialQuery:undefined}/>}
+  {tab==='plant'&&<PlantList initialQuery={initial==='plant'?initialQuery:undefined}/>}
   {tab==='other'&&other}
   {tab==='issues'&&<Issues state={issues}/>}
  </div>;
@@ -71,9 +71,9 @@ function ResourceImporter({kind,onImported}:{kind:ImportKind;onImported:()=>void
  </>;
 }
 
-function Workers(){
+function Workers({initialQuery}:{initialQuery?:string}){
  const s=useSession(),{data,error,loading,refresh}=useApi<{workers:Worker[]}>('/api/operations/resources?kind=workers');
- const [editing,setEditing]=useState<Worker|'new'|null>(null),[filter,setFilter]=useState('');
+ const [editing,setEditing]=useState<Worker|'new'|null>(null),[filter,setFilter]=useState(initialQuery||'');
  const canEdit=s.can('resources.edit'),rates=s.can('commercial.view');
  if(loading&&!data)return <Loading/>;
  if(error&&!data)return <ErrorState error={error} onRetry={refresh}/>;
@@ -138,9 +138,9 @@ function CompetencyEditor({worker,canEdit,onChanged}:{worker:Worker;canEdit:bool
  </div>;
 }
 
-function PlantList(){
+function PlantList({initialQuery}:{initialQuery?:string}){
  const s=useSession(),{data,error,loading,refresh}=useApi<{plant:Plant[]}>('/api/operations/resources?kind=plant');
- const [editing,setEditing]=useState<Plant|'new'|null>(null),[filter,setFilter]=useState('');
+ const [editing,setEditing]=useState<Plant|'new'|null>(null),[filter,setFilter]=useState(initialQuery||'');
  const canEdit=s.can('resources.edit'),rates=s.can('commercial.view');
  if(loading&&!data)return <Loading/>;
  if(error&&!data)return <ErrorState error={error} onRetry={refresh}/>;

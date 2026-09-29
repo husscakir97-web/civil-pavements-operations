@@ -6,10 +6,10 @@ import {RegisterView} from './register-view';
 import {ClientContacts} from './lookup';
 import {Btn} from './kit';
 
-export function ClientsArea(){
+export function ClientsArea({initialQuery}:{initialQuery?:string}){
  const [open,setOpen]=useState<{id:string;name:string}|null>(null);
  return <>
-  <RegisterView register="clients" description="Create each client once. Opportunities, tenders and projects select them instead of retyping. Clients in use are marked inactive rather than deleted."
+  <RegisterView register="clients" initialQuery={initialQuery} description="Create each client once. Opportunities, tenders and projects select them instead of retyping. Clients in use are marked inactive rather than deleted."
    rowActions={r=><Btn variant="secondary" className="min-h-9 px-3 text-sm" onClick={()=>setOpen({id:r.id,name:String(r.name||'Client')})}>Contacts</Btn>}/>
   <Sheet open={Boolean(open)} onOpenChange={o=>{if(!o)setOpen(null);}}>
    <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-lg">

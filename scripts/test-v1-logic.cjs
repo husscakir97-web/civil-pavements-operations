@@ -137,7 +137,12 @@ assert.deepEqual(navDef.FIELD_SHELL_ROLES,['field','supervisor']);
  assert.deepEqual(sr.searchTarget(r('Docket',{projectId:'p1',area:'Operations/Dockets'}),'admin'),['Projects',undefined,'p1','delivery']);
  assert.deepEqual(sr.searchTarget(r('Docket',{area:'Operations/Dockets'}),'admin'),['Operations','Dockets'],'docket without a project opens the docket register');
  assert.deepEqual(sr.searchTarget(r('Shift',{projectId:'p1',area:'Operations/Schedule'}),'scheduler'),['Operations','Schedule','p1']);
- assert.deepEqual(sr.searchTarget(r('Shift',{projectId:'p1',area:'Operations/Schedule'}),'field'),['Operations','Schedule']);}
+ assert.deepEqual(sr.searchTarget(r('Shift',{projectId:'p1',area:'Operations/Schedule'}),'field'),['Operations','Schedule']);
+ assert.deepEqual(sr.searchTarget(r('Client',{name:'Abergeldie'}),'admin'),['Win Work','Clients','Abergeldie'],'client opens the Clients register filtered to it');
+ assert.deepEqual(sr.searchTarget(r('Plant',{name:'TMA truck'}),'scheduler'),['Resource Work','Resources','TMA truck','plant'],'plant opens the Plant tab filtered to it');
+ assert.deepEqual(sr.searchTarget(r('Worker',{name:'John Smith'}),'scheduler'),['Resource Work','Resources','John Smith','workers']);
+ assert.deepEqual(sr.searchTarget(r('Library item',{name:'Public Liability'}),'office'),['Prepare Work','Company Library','Public Liability']);
+ assert.deepEqual(sr.searchTarget(r('Opportunity',{name:'Marrickville'}),'estimator'),['Win Work','Opportunities','Marrickville']);}
 // Shift cards list the most urgent readiness warnings first; nothing is added or dropped.
 {const sw=load('lib/v1/shift-warnings.ts');
  const list=['Missing purchase order.','Missing TMP.','John Smith: competency expired 2026-01-01.','Casey: competency expiry not recorded.','Excavator 05: overlaps Depot yard.'];

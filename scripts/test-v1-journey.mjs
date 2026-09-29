@@ -435,6 +435,38 @@ try{
  for(const e of ['estimate.approved','tender.submitted','tender.awarded','entitlement.changed','organisation.onboarding.completed'])assert(orgAudit.events.some(x=>x.event_type===e),'audit missing '+e);
  console.log('PASS entitlements (read-only, disabled 404, nav flag, data retained), closeout gate, closed-project write refusal, reopen with reason, audit trail');
 
+ // Modular foundation: journal visibility and standalone Core summaries.
+ step='modular foundation';
+ const events=await json(await call('/api/platform/events','GET',undefined,A.cookie),200);
+ assert(events.events.some(e=>e.event_type==='project.awarded'&&e.entity_id===projectId));
+ assert(events.events.some(e=>e.event_type==='docket.approved'));
+ const foreignEvents=await json(await call('/api/platform/events?organisationId='+memberA.organisation_id,'GET',undefined,B.cookie),200);
+ assert(!foreignEvents.events.some(e=>events.events.some(a=>a.id===e.id)),'query tenant ID cannot change event ownership');
+ await json(await call('/api/platform/events?limit=0','GET',undefined,A.cookie),400);
+ await json(await call('/api/platform/events?type=unknown','GET',undefined,A.cookie),404);
+ const [[eventCount]]=await db.execute('SELECT COUNT(*) AS n FROM domain_events WHERE organisation_id=?',[memberA.organisation_id]);
+ const [[existingEvent]]=await db.execute('SELECT * FROM domain_events WHERE organisation_id=? LIMIT 1',[memberA.organisation_id]);
+ await db.execute('INSERT INTO domain_events (id,organisation_id,event_type,event_version,module,entity_type,entity_id,occurrence_id,actor_user_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id',[crypto.randomUUID(),existingEvent.organisation_id,existingEvent.event_type,1,existingEvent.module,existingEvent.entity_type,existingEvent.entity_id,existingEvent.occurrence_id,existingEvent.actor_user_id,existingEvent.created_at]);
+ const [[dedup]]=await db.execute('SELECT COUNT(*) AS n FROM domain_events WHERE organisation_id=?',[memberA.organisation_id]);assert.equal(dedup.n,eventCount.n,'same occurrence is idempotent');
+ await db.beginTransaction();
+ await db.execute('INSERT INTO domain_events SELECT ?,organisation_id,event_type,event_version,module,entity_type,entity_id,?,actor_user_id,created_at FROM domain_events WHERE id=?',[crypto.randomUUID(),crypto.randomUUID(),existingEvent.id]);
+ await db.rollback();
+ const [[rolledBack]]=await db.execute('SELECT COUNT(*) AS n FROM domain_events WHERE organisation_id=?',[memberA.organisation_id]);assert.equal(rolledBack.n,eventCount.n,'event rollback retains source atomicity');
+ const [savedEntitlements]=await db.execute('SELECT module,status FROM organisation_entitlements WHERE organisation_id=?',[memberA.organisation_id]);
+ for(const standalone of ['operations','ims']){
+  await db.execute("UPDATE organisation_entitlements SET status=CASE WHEN module IN ('core',?) THEN 'active' ELSE 'disabled' END WHERE organisation_id=?",[standalone,memberA.organisation_id]);
+  const overview=await json(await call('/api/platform/overview','GET',undefined,A.cookie),200,'standalone summary without Reports');
+  assert(overview[standalone==='ims'?'hseq':'operations']);
+  if(standalone==='operations'){const delivery=await json(await call('/api/delivery','GET',undefined,A.cookie),200);assert(!/"(rate|hourlyRate|approvedBudget|contractValue|materialCost)"/.test(JSON.stringify(delivery)),'Operations-only admin sees no commercial data');}
+  for(const key of ['pipeline','projects','commercial','learn','dockets'])assert.equal(overview[key],undefined);
+  await json(await call('/api/reports/v1','GET',undefined,A.cookie),404);
+  const hiddenEvents=await json(await call('/api/platform/events','GET',undefined,A.cookie),200);assert.equal(hiddenEvents.events.length,0);
+ }
+ for(const e of savedEntitlements)await db.execute('UPDATE organisation_entitlements SET status=? WHERE organisation_id=? AND module=?',[e.status,memberA.organisation_id,e.module]);
+ const restored=await json(await call('/api/platform/events','GET',undefined,A.cookie),200);assert.equal(restored.events.length,events.events.length,'reenabling modules restores historical journal visibility');
+ console.log('PASS modularity: Operations/IMS standalone summaries, Reports independence, event tenant isolation, pagination validation, idempotency, rollback and retained history');
+
+
  // ---------------------------------------------------------------- Scenario R: role matrix (one member, role changed between checks)
  step='R roles';
  const R=await signup('role-r');

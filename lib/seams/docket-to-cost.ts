@@ -5,7 +5,8 @@
 // Downstream off (projects not entitled): docket stays approved and exportable.
 import {database,type Statement} from '@/lib/platform/database';
 import {actorContext} from '@/lib/platform/context';
-import {seamEnabled} from '@/lib/platform/entitlements';
+import {requireSeam} from '@/lib/platform/entitlements';
+import {domainEventStatement} from '@/lib/platform/domain-events';
 import {safeJson} from '@/lib/estimates-db';
 
 export type Docket={id:string;docket_no:string;work_date:string;amount:number;quantity:number;quantity_unit:string;labour_hours:number;line_items:string;links:string;status:string;notes:string};
@@ -43,15 +44,16 @@ export async function docketCostStatements(docketId:string,nextStatus:string,nex
   const reversed=database.prepare("UPDATE cost_transactions SET status='reversed',updated_at=? WHERE organisation_id=? AND source_type='docket' AND source_id=? AND status<>'reversed'").bind(now,org,docketId);
   return {statements:[reversed],posted:0,message:null};
  }
+ const event=await domainEventStatement('docket.approved',docketId,crypto.randomUUID());
  const jobId=String(safeJson<Record<string,unknown>>(d.links,{}).jobId||'');
- if(!jobId)return {statements:[],posted:0,message:'Approved. This docket is not allocated to a project, so no cost was posted.'};
- if(!await seamEnabled(org,'dockets','projects'))return {statements:[],posted:0,message:'Approved. Projects is not enabled, so costs were not posted; the docket remains exportable.'};
+ if(!jobId)return {statements:[event],posted:0,message:'Approved. This docket is not allocated to a project, so no cost was posted.'};
+ if(!await requireSeam('docket.cost'))return {statements:[event],posted:0,message:'Approved. Projects is not enabled, so costs were not posted; the docket remains exportable.'};
  const job=await database.prepare('SELECT id,stage,status FROM jobs WHERE organisation_id=? AND id=?').bind(org,jobId).first<{id:string;stage:string|null;status:string}>();
- if(!job)return {statements:[],posted:0,message:'Approved. The allocated project no longer exists; no cost was posted.'};
+ if(!job)return {statements:[event],posted:0,message:'Approved. The allocated project no longer exists; no cost was posted.'};
  if(job.stage==='closed')throw Object.assign(new Error('This project is closed. Reopen it before approving dockets against it.'),{status:409});
  const codes=(await database.prepare("SELECT code,category FROM project_cost_codes WHERE organisation_id=? AND project_id=? AND status='active'").bind(org,jobId).all<{code:string;category:string}>()).results;
  const lines=docketCostLines(d);
- const statements:Statement[]=[
+ const statements:Statement[]=[event,
   // Lines that no longer exist after an edit are reversed rather than deleted.
   database.prepare("UPDATE cost_transactions SET status='reversed',updated_at=? WHERE organisation_id=? AND source_type='docket' AND source_id=?").bind(now,org,docketId),
   ...lines.map(l=>{const code=codes.find(c=>c.code===CODE[l.category])?.code??codes.find(c=>c.category===l.category)?.code??null;

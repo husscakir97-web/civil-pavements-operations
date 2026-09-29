@@ -76,11 +76,11 @@ export async function homeFeed(){
   const overdueInv=await count("SELECT COUNT(*) AS n FROM client_invoices WHERE organisation_id=? AND status IN ('issued','part_paid') AND due_date IS NOT NULL AND due_date<?",[org,today]);if(overdueInv)attention.push({key:'invoices-overdue',title:`${plural(overdueInv,'overdue invoice')}`,detail:'Past due date and unpaid',area:'Commercial',severity:'danger'});
  })());
  if(can(a.role,'project.view'))tasks.push((async()=>{const n=await count("SELECT COUNT(*) AS n FROM library_items WHERE organisation_id=? AND status='current' AND expiry_date IS NOT NULL AND expiry_date<=?",[org,month]);if(n)attention.push({key:'library-expiry',title:`${plural(n,'library item')} expired or expiring within 30 days`,detail:'Insurances, licences and certifications',area:'Admin/Company Library',severity:'warning'});})());
- if(on('operations')||on('field'))tasks.push((async()=>{
+ if(on('operations','schedule.view')||on('field','field.capture'))tasks.push((async()=>{
   const shifts=await query("SELECT s.id,s.name,s.status,JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.start')) AS start,JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.assignments')) AS assignments,JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.supervisorUserId')) AS supervisor,JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.jobId')) AS project_id,j.name AS job FROM shifts s LEFT JOIN jobs j ON j.id=JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.jobId')) AND j.organisation_id=s.organisation_id WHERE s.organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.date'))=? AND s.status NOT IN ('Cancelled','Archived','Draft') ORDER BY start LIMIT 50",[org,today]);
   for(const s of shifts){
    if(a.role==='field'&&s.supervisor!==a.userId&&!String(s.assignments||'').includes(a.userId))continue;
-   todayItems.push({key:`shift-${s.id}`,title:s.name,detail:[s.start,s.job,s.status].filter(Boolean).join(' · '),area:a.role==='field'?'Field':s.project_id?'Projects':'Operations/Schedule',target:a.role==='field'?{type:'shift',id:s.id}:s.project_id?{type:'project',id:String(s.project_id),tab:'delivery'}:undefined,severity:'info'});
+   todayItems.push({key:`shift-${s.id}`,title:s.name,detail:[s.start,s.job,s.status].filter(Boolean).join(' · '),area:a.role==='field'?'Field':s.project_id&&on('projects','project.view')?'Projects':'Operations/Schedule',target:a.role==='field'?{type:'shift',id:s.id}:s.project_id&&on('projects','project.view')?{type:'project',id:String(s.project_id),tab:'delivery'}:undefined,severity:'info'});
   }
  })());
  await Promise.all(tasks);

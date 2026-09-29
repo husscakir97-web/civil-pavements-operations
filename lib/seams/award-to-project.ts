@@ -7,7 +7,8 @@ import {database,type Statement} from '@/lib/platform/database';
 import {actorContext} from '@/lib/platform/context';
 import {can} from '@/lib/platform/permissions';
 import {HttpError} from '@/lib/platform/http';
-import {seamEnabled} from '@/lib/platform/entitlements';
+import {requireSeam} from '@/lib/platform/entitlements';
+import {domainEventStatement} from '@/lib/platform/domain-events';
 import {packStatements} from '@/lib/ims-pack';
 import {safeJson} from '@/lib/estimates-db';
 import {costBreakdown,type EstimateData,type EstimateTotals} from '@/lib/estimate-calculations';
@@ -60,7 +61,7 @@ export async function awardEstimate(estimateId:string,opts:{tenderId?:string|nul
   awardAudit('tender.awarded','tender',tender.id,`Tender awarded${projectId?' — project created':' — projects module not entitled, award recorded'}`,{estimateId,estimateRevisionId:revision.id,projectId},projectId),
  ]:[];
 
- if(!await seamEnabled(org,'projects')){
+ if(!await requireSeam('award.project')){
   const writes:Statement[]=[...tenderWrites(null),database.prepare("UPDATE estimates SET status='Awarded',updated_at=? WHERE organisation_id=? AND id=?").bind(t,org,estimateId)];
   if(!tender)writes.push(awardAudit('estimate.awarded','estimate',estimateId,'Estimate awarded — projects module not entitled',{estimateRevisionId:revision.id}));
   await database.batch(writes);
@@ -73,7 +74,9 @@ export async function awardEstimate(estimateId:string,opts:{tenderId?:string|nul
  const name=data.projectName||data.name||est.name;
  const legacyMeta={client:data.clientName,site:data.site,contractValue:Number(revision.sell_price),workType:data.workType,scope:data.specification,specification:data.specification,sourceEstimateId:estimateId,sourceOpportunityId:est.meta.sourceOpportunityId||tender?.opportunity_id||null,sourceRevisionId:revision.id,sourceTenderId:tender?.id??null,approvedBudget:totals,estimateSnapshot:data,awardedAt:t,status:'Awarded'};
  const clarList=clarifications.map(c=>({id:c.id,reference:c.reference,question:c.question,response:c.response,scopeImpact:c.scope_impact,priceImpact:Number(c.price_impact||0),status:c.status}));
+ const imsEnabled=await requireSeam('project.ims');
  const writes:Statement[]=[
+  await domainEventStatement('project.awarded',jobId,revision.id),
   database.prepare(`INSERT INTO jobs (id,organisation_id,name,status,metadata,created_at,project_number,client_name,stage,contract_value,original_budget,site_address,scope,assumptions,exclusions,source_tender_id,source_estimate_id,source_estimate_revision_id,revision,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
    .bind(jobId,org,name,'awarded',JSON.stringify(legacyMeta),t,projectNumber,data.clientName||null,'setup',Number(revision.sell_price),b.total,data.site||null,data.specification||null,revision.assumptions,revision.exclusions,tender?.id??null,estimateId,revision.id,1,t),
   database.prepare(`INSERT INTO project_baselines (id,organisation_id,project_id,revision,reason,source_type,tender_id,estimate_id,estimate_revision_id,contract_value,budget_labour,budget_plant,budget_material,budget_subcontract,budget_other,budget_indirect,budget_total,scope,assumptions,exclusions,clarifications,snapshot,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
@@ -81,7 +84,7 @@ export async function awardEstimate(estimateId:string,opts:{tenderId?:string|nul
   ...([['100','Labour','labour',b.labour],['200','Plant','plant',b.plant],['300','Materials','material',b.material],['400','Subcontract','subcontract',b.subcontract],['500','Other direct costs','other',b.other],['900','Indirects & contingency','other',b.indirect+b.contingency]] as const).map(([code,description,category,amount])=>
    database.prepare('INSERT INTO project_cost_codes (id,organisation_id,project_id,code,description,category,budget_amount,status,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),org,jobId,code,description,category,amount,'active',1,actor.userId,t,t)),
   ...DEFAULT_READINESS.map(([category,title])=>database.prepare("INSERT INTO project_checklist_items (id,organisation_id,project_id,phase,category,title,mandatory,status,source,revision,created_by,created_at,updated_at) VALUES (?,?,?,'readiness',?,?,1,'open','system',1,?,?,?) ON DUPLICATE KEY UPDATE id=id").bind(crypto.randomUUID(),org,jobId,category,title,actor.userId,t,t)),
-  ...packStatements(database,org,jobId,t),
+  ...(imsEnabled?packStatements(database,org,jobId,t):[]),
   database.prepare("UPDATE estimates SET status='Awarded',metadata=?,updated_at=? WHERE organisation_id=? AND id=?").bind(JSON.stringify({...est.meta,status:'Awarded',jobId,approvedRevisionId:revision.id,approvedBudget:totals,approvedSnapshot:data,awardedAt:t}),t,org,estimateId),
   database.prepare('INSERT INTO quote_revisions (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(),org,`${est.name} · Awarded rev ${revision.revision_number}`,'Awarded',JSON.stringify({estimateId,revisionNumber:Number(est.meta.revisionNumber||1),estimateRevisionId:revision.id,data,totals,reason:'Awarded — approved budget baseline',approvedBudget:totals,createdAt:t}),t),
   ...tenderWrites(jobId),
@@ -92,7 +95,7 @@ export async function awardEstimate(estimateId:string,opts:{tenderId?:string|nul
   const reqs=(await database.prepare("SELECT id,title,category,mandatory,status,source_document,source_page,linked_document_id FROM tender_requirements WHERE organisation_id=? AND opportunity_id=? AND status NOT IN ('suggested','rejected')").bind(org,tender.opportunity_id).all<Record<string,unknown>>()).results;
   const seen=new Set<string>();
   for(const r of reqs){
-   writes.push(database.prepare('INSERT INTO job_ims_items (id,organisation_id,job_id,title,document_type,mandatory,status,source_requirement_id,linked_document_id,metadata,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id').bind(crypto.randomUUID(),org,jobId,String(r.title).slice(0,180),'Tender requirement',Number(r.mandatory),'Missing',String(r.id),r.linked_document_id||null,JSON.stringify({sourceDocument:r.source_document,sourcePage:r.source_page}),t,t));
+   if(imsEnabled)writes.push(database.prepare('INSERT INTO job_ims_items (id,organisation_id,job_id,title,document_type,mandatory,status,source_requirement_id,linked_document_id,metadata,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id').bind(crypto.randomUUID(),org,jobId,String(r.title).slice(0,180),'Tender requirement',Number(r.mandatory),'Missing',String(r.id),r.linked_document_id||null,JSON.stringify({sourceDocument:r.source_document,sourcePage:r.source_page}),t,t));
    if(!CLIENT_REQUIREMENT_CATEGORIES.includes(String(r.category)))continue;
    const title=`Client requirement: ${String(r.title)}`.slice(0,250);if(seen.has(title))continue;seen.add(title);
    writes.push(database.prepare("INSERT INTO project_checklist_items (id,organisation_id,project_id,phase,category,title,mandatory,status,source,source_ref,revision,created_by,created_at,updated_at) VALUES (?,?,?,'readiness','client requirements',?,?,'open','tender_requirement',?,1,?,?,?) ON DUPLICATE KEY UPDATE id=id").bind(crypto.randomUUID(),org,jobId,title,Number(r.mandatory)?1:0,String(r.id),actor.userId,t,t));

@@ -34,9 +34,9 @@ async function attachLocations(db: Database, jobs: DeliveryRecord[], shifts: Del
   const ids=[...new Set([...jobs.map(j=>j.metadata.locationId),...shifts.map(x=>x.metadata.locationId),...sites.map(x=>x.location_id)].map(x=>String(x||'')).filter(Boolean))];
   const rows=ids.length?(await db.prepare(`SELECT * FROM locations WHERE organisation_id=? AND id IN (${ids.map(()=>'?').join(',')})`).bind(ORG(),...ids).all<Record<string,unknown>>()).results:[];
   const byId=new Map(rows.map(r=>[String(r.id),presentLocation(r)]));
-  const jobLoc=new Map<string,ReturnType<typeof presentLocation>|null>();
-  for(const j of jobs){const own=byId.get(String(j.metadata.locationId||''))??null,site=byId.get(String(siteLoc.get(String(j.metadata.siteId||''))||''))??null;const loc=own||site;jobLoc.set(j.id,loc);j.metadata.locationView=loc;j.metadata.locationSource=own?'project':site?'site':null;}
-  for(const x of shifts){const own=byId.get(String(x.metadata.locationId||''))??null;x.metadata.locationView=own||jobLoc.get(String(x.metadata.jobId||''))||null;x.metadata.locationSource=own?'shift':x.metadata.locationView?'project':null;}
+  const jobLoc=new Map<string,ReturnType<typeof presentLocation>|null>(),jobLocSource=new Map<string,'project'|'site'|null>();
+  for(const j of jobs){const own=byId.get(String(j.metadata.locationId||''))??null,site=byId.get(String(siteLoc.get(String(j.metadata.siteId||''))||''))??null;const loc=own||site,source=own?'project':site?'site':null;jobLoc.set(j.id,loc);jobLocSource.set(j.id,source);j.metadata.locationView=loc;j.metadata.locationSource=source;}
+  for(const x of shifts){const own=byId.get(String(x.metadata.locationId||''))??null,jobId=String(x.metadata.jobId||''),inherited=jobLoc.get(jobId)||null;x.metadata.locationView=own||inherited;x.metadata.locationSource=own?'shift':inherited?jobLocSource.get(jobId)||null:null;}
 }
 async function handleGET(request: Request) {
   try { const db=requireEstimateDb(); const actor=await requireActor(request, db, 'field-read'); if(actor.role==='field'){const [jobs,shifts]=await Promise.all([load(db,'jobs'),load(db,'shifts')]);return Response.json({jobs:jobs.map(r=>fieldDelivery(r,'jobs')),shifts:shifts.map(r=>fieldDelivery(r,'shifts')),workers:[],crews:[],plant:[],suppliers:[],subcontractors:[]},{headers:{'Cache-Control':'private, no-store'}});} const rows=await Promise.all(tables.map(t=>load(db,t)));

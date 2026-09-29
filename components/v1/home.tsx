@@ -3,12 +3,13 @@ import {useState} from 'react';
 import {ArrowRight,CalendarDays,CheckCheck,ClipboardList,Siren,BarChart3,Search as SearchIcon} from 'lucide-react';
 import {useApi,useSession,ErrorState,Loading,Btn,money,pct,StatusBadge} from './kit';
 import {useNav,areaTarget} from './nav';
-import type {HomeItem} from '@/lib/seams/home';
-import {enginesFor,engineLabelFor} from '@/lib/v1/workspaces';
+import type {HomeItem,HomeIndicator} from '@/lib/seams/home';
+import {quickActions} from '@/lib/v1/app-nav';
 
 // Home answers "what needs me?": my work first, then today, then exceptions, and only
 // then portfolio figures. Everything comes from the role-aware home feed.
-type Feed={date:string;myActions:HomeItem[];needsAttention:HomeItem[];today:HomeItem[]};
+type Feed={date:string;myActions:HomeItem[];needsAttention:HomeItem[];today:HomeItem[];indicators?:HomeIndicator[];myProjects?:{id:string;name:string;stage:string}[]};
+const tone={ok:'text-emerald-700',warning:'text-amber-700',danger:'text-red-700'};
 type PortfolioRow={id:string;name:string;projectNumber:string|null;stage:string;currentContract:number|null;forecastMarginPct:number|null;unbilled:number|null;retentionHeld:number};
 const sev={danger:'border-l-red-500',warning:'border-l-amber-500',info:'border-l-sky-500'};
 
@@ -34,14 +35,14 @@ function Portfolio(){
 
 export function HomeV1(){
  const {data,error,loading,refresh}=useApi<Feed>('/api/platform/home');
- const {brand,userName,can,module}=useSession();const {navigate}=useNav();
+ const {brand,userName,can,module,role}=useSession();const {navigate}=useNav();
  const hour=new Date().getHours();
- const engines=enginesFor({can,module});
+ const actions=quickActions(role,{can,module});
  const [query,setQuery]=useState('');
  return <div className="grid gap-5">
   <header className="flex flex-wrap items-end justify-between gap-3">
    <div><p className="text-sm text-slate-500">{new Intl.DateTimeFormat('en-AU',{timeZone:'Australia/Sydney',dateStyle:'full'}).format(new Date())} · {brand.companyName}</p><h1 className="mt-0.5 text-2xl font-semibold tracking-tight">Good {hour<12?'morning':hour<17?'afternoon':'evening'}{userName?`, ${userName.split(' ')[0]}`:''}</h1></div>
-   <div className="flex flex-wrap gap-2">{can('pipeline.edit')&&module('pipeline')&&<Btn variant="secondary" onClick={()=>navigate('Pipeline','Opportunities')}>Opportunities</Btn>}{can('pipeline.edit')&&module('pipeline')&&<Btn variant="secondary" onClick={()=>navigate('Pipeline','Tenders')}>Tenders</Btn>}{can('project.edit')&&module('projects')&&<Btn variant="secondary" onClick={()=>navigate('Projects')}>Projects</Btn>}{can('schedule.view')&&module('operations')&&<Btn variant="secondary" onClick={()=>navigate('Operations','Schedule')}><CalendarDays aria-hidden className="size-4"/>Today&apos;s schedule</Btn>}</div>
+   <div className="flex flex-wrap gap-2">{actions.map((q,i)=><Btn key={q.label} variant={i===0?'primary':'secondary'} onClick={()=>navigate(q.area,q.sub)}>{q.area==='Schedule'&&<CalendarDays aria-hidden className="size-4"/>}{q.label}</Btn>)}</div>
   </header>
   {/* One box finds clients, projects, plant (TMA001), people and documents without knowing where they live. */}
   <form role="search" onSubmit={e=>{e.preventDefault();const q=query.trim();if(q.length>=2)navigate('Search',undefined,q);}} className="relative">
@@ -51,6 +52,8 @@ export function HomeV1(){
   </form>
   <ErrorState error={error} onRetry={refresh}/>
   {loading&&!data?<Loading label="Loading your work…"/>:data&&<>
+   {data.indicators&&data.indicators.length>0&&<section aria-label="Operational indicators" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{data.indicators.map(x=><button key={x.key} onClick={()=>navigate(x.area)} className="surface p-4 text-left hover:bg-slate-50"><p className={`text-2xl font-semibold tabular-nums ${tone[x.severity]}`}>{x.value}</p><p className="mt-1 text-sm font-medium">{x.label}</p><p className="text-xs text-slate-500">{x.detail}</p></button>)}</section>}
+   {data.myProjects&&data.myProjects.length>0&&<nav aria-label="My projects" className="flex flex-wrap items-center gap-2"><span className="text-xs font-semibold uppercase tracking-wide text-slate-500">My projects</span>{data.myProjects.map(p=><button key={p.id} onClick={()=>navigate('Projects','Projects',p.id)} className="min-h-9 rounded-full border bg-white px-3 text-sm text-slate-700 hover:bg-slate-50">{p.name}</button>)}</nav>}
    <div className="grid items-start gap-5 lg:grid-cols-3">
     <div className="lg:col-span-2"><List title="My work" icon={<ClipboardList aria-hidden className="size-4 text-orange-600"/>} items={data.myActions} empty="Nothing is waiting on you right now."/></div>
     <List title="Today" icon={<CalendarDays aria-hidden className="size-4 text-sky-600"/>} items={data.today} empty="No work is scheduled for today."/>
@@ -58,7 +61,5 @@ export function HomeV1(){
    <List title="Needs attention" columns icon={<Siren aria-hidden className="size-4 text-red-600"/>} items={data.needsAttention} empty="No overdue or at-risk items across your workspaces."/>
    {can('commercial.view')&&module('commercial')&&<Portfolio/>}
   </>}
-  {/* Operating areas stay available for orientation, below the work that needs you. */}
-  {engines.length>0&&<nav aria-label="Go to area" className="flex flex-wrap gap-2 border-t pt-4"><span className="w-full text-xs font-semibold uppercase tracking-wide text-slate-500">Go to</span>{engines.map(e=><button key={e.key} onClick={()=>navigate(e.key,'Overview')} title={e.question} className="min-h-9 rounded-full border bg-white px-3 text-sm text-slate-700 hover:bg-slate-50">{engineLabelFor(e.key,{can,module})}</button>)}</nav>}
  </div>;
 }

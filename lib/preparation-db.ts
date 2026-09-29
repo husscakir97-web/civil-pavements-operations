@@ -9,7 +9,7 @@ export async function preparationActor(request:Request,db:Database,action='read'
  // Tender responses, plans and IMS documents: estimators/PMs/schedulers draft, admin/office/PMs approve.
  const editors=[...admins,'office','estimator','project_manager','scheduler'];
  const approvers=[...admins,'office','project_manager'];
- const readers=[...editors,'supervisor','read_only'];
+ const readers=[...editors,'project_engineer','site_engineer','supervisor','read_only'];
  if(action==='read'&&!readers.includes(actor.role)&&actor.role!=='field')fail('You are not authorised to view preparation documents.',403);
  if(action==='admin'&&!admins.includes(actor.role)||['approve','handover','accept','exception','submit'].includes(action)&&!approvers.includes(actor.role)||!['read','admin','approve','handover','accept','exception','submit'].includes(action)&&!editors.includes(actor.role))fail('You are not authorised for this preparation action.',403);
  return actor;

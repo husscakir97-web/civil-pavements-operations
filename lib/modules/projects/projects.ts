@@ -12,6 +12,7 @@ import {readinessPercent} from '@/lib/platform/finance';
 import {imsBlockers} from '@/lib/ims-readiness';
 import {safeJson} from '@/lib/estimates-db';
 import {resolveClientContext} from '@/lib/platform/clients';
+import {assertProjectAccess,projectFilter} from '@/lib/platform/project-access';
 
 const actor=()=>actorContext.getStore()!;
 export function legacyProjectStage(status:string){
@@ -27,6 +28,8 @@ export const stageOf=(p:Row)=>p.stage||legacyProjectStage(p.status);
 export async function loadProject(id:string,conn?:Conn,lock=false){
  const p=await one(`SELECT * FROM jobs WHERE organisation_id=? AND id=?${lock?' FOR UPDATE':''}`,[actor().organisationId,id],conn);
  if(!p)fail(404,'Project not found.');
+ // Every project read/write goes through here: project-scoped roles only reach their own projects.
+ await assertProjectAccess(id,conn);
  return p!;
 }
 /** Contract value and budget from the typed columns, falling back to legacy metadata for older jobs. */
@@ -101,7 +104,8 @@ export async function nextProjectAction(p:Row,r:{blockers:string[];percent:numbe
 }
 
 export async function listProjects(){
- const rows=await query("SELECT * FROM jobs WHERE organisation_id=? AND LOWER(status)<>'archived' ORDER BY (COALESCE(stage,'')='closed'),created_at DESC LIMIT 300",[actor().organisationId]);
+ const params:unknown[]=[actor().organisationId],scope=await projectFilter('id',params);
+ const rows=await query(`SELECT * FROM jobs WHERE organisation_id=? AND LOWER(status)<>'archived'${scope} ORDER BY (COALESCE(stage,'')='closed'),created_at DESC LIMIT 300`,params);
  return Promise.all(rows.map(async p=>{const r=await readiness(p.id);return presentProject(p,{readiness:r.percent,blockerCount:r.blockers.length,nextAction:await nextProjectAction(p,r)});}));
 }
 
@@ -138,7 +142,8 @@ export async function updateProject(id:string,revision:number,input:Row){
 
 /** Manual project (Projects-only or IMS-only customers, no tender/estimate). Baseline recorded separately. */
 export async function createProject(input:{name:string;clientName?:string|null;clientId?:string|null;siteId?:string|null;startDate?:string|null;siteAddress?:string|null}){
- const a=actor();if(!can(a.role,'project.edit'))fail(403,'You are not authorised to create projects.');
+ // Project-scoped roles work inside projects they are assigned to; creating new ones is organisation-level.
+ const a=actor();if(!can(a.role,'project.edit')||!can(a.role,'project.all.view'))fail(403,'You are not authorised to create projects.');
  if(!input.name?.trim())fail(400,'A project name is required.');
  const id=uuid();
  await tx(async conn=>{
@@ -203,5 +208,6 @@ export async function transitionProject(id:string,to:string,reason?:string){
 export async function assertProjectOpen(projectId:string,conn?:Conn){
  const p=await one('SELECT stage,status FROM jobs WHERE organisation_id=? AND id=?',[actor().organisationId,projectId],conn);
  if(!p)fail(404,'Project not found.');
+ await assertProjectAccess(projectId,conn);
  if(stageOf(p!)==='closed')fail(409,'This project is closed. Reopen it before adding operational records.');
 }

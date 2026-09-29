@@ -14,6 +14,7 @@ import {useNav} from './nav';
 import {allowedTransitions} from '@/lib/platform/workflow';
 import type {Forecast} from '@/lib/platform/finance';
 import {setupAreas,fixFor,categoryLabel,nextActionTarget,type SetupTarget} from '@/lib/v1/project-setup';
+import {PROJECT_ROLE_LABELS,type ProjectRole} from '@/lib/v1/project-roles';
 
 type Project={id:string;name:string;projectNumber:string|null;clientName:string|null;clientId?:string|null;siteId?:string|null;stage:string;stageLabel:string;projectManagerUserId:string|null;projectManagerName:string|null;startDate:string|null;practicalCompletionDate:string|null;finishDate:string|null;siteAddress:string|null;contractNumber:string|null;contractType:string|null;retentionPct:number|null;retentionEnabled?:boolean;retentionCapAmount?:number|null;paymentTermsDays:number|null;defectsMonths:number|null;scope:string|null;assumptions:string|null;exclusions:string|null;clientRequirements:string|null;mobilisationNotes:string|null;sourceTenderId:string|null;sourceEstimateId:string|null;sourceEstimateRevisionId:string|null;revision:number;contractValue?:number|null;originalBudget?:number|null;readiness:number|null;nextAction:string|null;blockerCount?:number};
 type ReadinessItem={id?:string;category:string;title:string;mandatory:boolean;ok:boolean;status:string;source:'checklist'|'derived';detail?:string|null};
@@ -35,7 +36,7 @@ function ProjectRegister({area}:{area:'Prepare Work'|'Deliver Work'}){
  const list=all.filter(p=>matches(p,show));
  const filters=([['active','All active'],['setup','Setup'],['ready','Ready'],['delivery','Delivery'],['closeout','Closeout'],['closed','Closed']] as const).map(([key,label])=>({key,label,count:all.filter(p=>matches(p,key)).length}));
  return <div className="grid gap-4">
-  <PageHeader title="Projects" subtitle="Every awarded or manually created project, with readiness and the next action." actions={can('project.edit')&&<Btn variant="secondary" onClick={()=>setCreating(true)}><Plus aria-hidden className="size-4"/>New project without tender</Btn>}/>
+  <PageHeader title="Projects" subtitle="Every awarded or manually created project, with readiness and the next action." actions={can('project.edit')&&can('project.all.view')&&<Btn variant="secondary" onClick={()=>setCreating(true)}><Plus aria-hidden className="size-4"/>New project without tender</Btn>}/>
   <ErrorState error={error} onRetry={refresh}/>
   {all.length>0&&<div role="group" aria-label="Project workflow stage" className="flex flex-wrap gap-2">{filters.map(x=><button key={x.key} aria-pressed={show===x.key} onClick={()=>setShow(x.key)} className={`min-h-9 rounded-full border px-3 text-sm ${show===x.key?'border-[#172633] bg-[#172633] text-white':'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{x.label} ({x.count})</button>)}</div>}
   {loading&&!data?<Loading/>:!all.length?<EmptyState title="No projects yet." detail="Projects are created automatically when a tender or estimate is awarded, preserving the approved baseline."/>:!list.length?<EmptyState title={`No projects are in ${filters.find(x=>x.key===show)?.label.toLowerCase()}.`}/>:
@@ -154,6 +155,7 @@ function Overview({d,onTab,goTarget}:{d:Detail;onTab:(k:TabKey)=>void;goTarget:(
   <Section title="Needs attention" description={items.length?`${items.length} item${items.length===1?'':'s'} for this project`:undefined}><AttentionList items={items} empty="Nothing needs attention on this project right now."/></Section>
   {knowledge&&<KnowledgeCheckPanel title="Civil knowledge checks" topics={['project','contract','construction','hseq','pavements','asphalt','concrete','earthworks','drainage','traffic','plant','workforce']} scope={{projectId:p.id}} context={{project:{id:p.id,name:p.name,stage:p.stage,clientName:p.clientName,contractType:p.contractType,siteAddress:p.siteAddress,startDate:p.startDate,finishDate:p.finishDate,scope:p.scope,assumptions:p.assumptions,exclusions:p.exclusions,clientRequirements:p.clientRequirements,mobilisationNotes:p.mobilisationNotes}}}/>} 
   <ClientContactCard clientId={d.project.clientId}/>
+  <ProjectTeam projectId={p.id}/>
   <div className="grid gap-4 lg:grid-cols-2">
    <Section title="Today and upcoming" actions={<Btn variant="ghost" onClick={()=>onTab('delivery')}>Delivery<ArrowRight aria-hidden className="size-4"/></Btn>}>{hub.loading&&!hub.data?<Loading/>:upcoming.length?<ul className="divide-y text-sm">{upcoming.map(s=><li key={s.id} className="flex flex-wrap items-center justify-between gap-2 py-2"><span><span className="font-medium">{s.metadata.date===today?'Today':dateText(s.metadata.date)}</span> · {s.name}<span className="block text-xs text-slate-500">{[s.metadata.start&&`${s.metadata.start}–${s.metadata.finish}`,s.metadata.supervisor].filter(Boolean).join(' · ')}</span></span><Pill>{s.status}</Pill></li>)}</ul>:<EmptyState title="No upcoming work is scheduled for this project." action={can('schedule.edit')?<Btn variant="secondary" onClick={()=>navigate('Operations','Schedule',p.id)}><CalendarDays aria-hidden className="size-4"/>Plan a shift</Btn>:undefined}/>}</Section>
    {money_&&f?<Section title="Financial snapshot" actions={<Btn variant="ghost" onClick={()=>onTab('commercial')}>Commercial<ArrowRight aria-hidden className="size-4"/></Btn>}><div className="grid grid-cols-2 gap-3"><Stat label="Current contract" value={money(f.currentContract)}/><Stat label="Forecast margin" value={pct(f.forecastMarginPct)} tone={f.forecastMarginPct==null?undefined:f.forecastMarginPct<0?'bad':f.forecastMarginPct<5?'warn':'good'} hint={`${money(f.forecastProfit)} profit`}/><Stat label="Actual cost" value={money(f.actual)} hint={`of ${money(f.currentBudget)} budget`}/><Stat label="Claimed" value={money(f.claimed)} hint={`${money(f.unbilled)} unbilled`}/></div></Section>
@@ -164,6 +166,32 @@ function Overview({d,onTab,goTarget}:{d:Detail;onTab:(k:TabKey)=>void;goTarget:(
    <Section title="Recent activity">{d.activity.length?<ul className="divide-y text-sm">{d.activity.slice(0,6).map(a=><li key={a.id} className="py-2"><p>{a.summary||a.event_type}</p><p className="text-xs text-slate-500">{a.actor_email||'System'} · {dateText(a.created_at)}</p></li>)}</ul>:<EmptyState title="No activity has been recorded for this project yet."/>}</Section>
   </div>
  </div>;
+}
+
+type TeamMember={id:string;userId:string;projectRole:ProjectRole;name:string;email:string;appRole:string};
+type Team={canManage:boolean;members:TeamMember[];people:Array<{id:string;name:string;email:string;appRole:string}>};
+const TEAM_ROLES:ProjectRole[]=['project_manager','project_engineer','site_engineer','supervisor','hseq','commercial','other'];
+/** Project team: who works on this project. Membership decides which projects Project/Site Engineers can open. */
+function ProjectTeam({projectId}:{projectId:string}){
+ const {data,error,refresh}=useApi<Team>(`/api/projects/team?projectId=${projectId}`);
+ const {busy,error:actionError,run}=useAction();
+ const [userId,setUserId]=useState<string|null>(null);const [role,setRole]=useState<ProjectRole>('project_engineer');
+ const assign=(uid:string,r:ProjectRole)=>run(()=>api('/api/projects/team',{method:'POST',body:{projectId,userId:uid,projectRole:r}}),()=>{setUserId(null);refresh();});
+ const remove=(m:TeamMember)=>{if(confirm(`Remove ${m.name} from this project team?`))void run(()=>api(`/api/projects/team?projectId=${encodeURIComponent(projectId)}&id=${encodeURIComponent(m.id)}`,{method:'DELETE'}),refresh);};
+ const members=data?.members||[];
+ return <Section title="Project team" description="Project Engineers and Site Engineers only see projects they are assigned to.">
+  <ErrorState error={error||actionError} onRetry={refresh}/>
+  {members.length?<ul className="divide-y text-sm">{members.map(m=><li key={m.id} className="flex flex-wrap items-center gap-2 py-2">
+   <span className="min-w-0 flex-1"><span className="block font-medium">{m.name}</span><span className="block text-xs text-slate-500">{m.appRole}</span></span>
+   {data?.canManage?<select aria-label={`Project role for ${m.name}`} className={`${field} w-auto min-h-9 py-1`} value={m.projectRole} disabled={busy} onChange={e=>void assign(m.userId,e.target.value as ProjectRole)}>{TEAM_ROLES.map(r=><option key={r} value={r}>{PROJECT_ROLE_LABELS[r]}</option>)}</select>:<Pill>{PROJECT_ROLE_LABELS[m.projectRole]||m.projectRole}</Pill>}
+   {data?.canManage&&<Btn variant="ghost" className="min-h-9 py-1" disabled={busy} onClick={()=>remove(m)}>Remove</Btn>}
+  </li>)}</ul>:data&&<EmptyState title="No one is assigned to this project yet."/>}
+  {data?.canManage&&<div className="mt-3 grid gap-2 border-t pt-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end">
+   <PersonPicker label="Add person" people={data.people.filter(p=>!members.some(m=>m.userId===p.id)).map(p=>({id:p.id,name:p.name,role:p.appRole}))} value={userId} onChange={setUserId}/>
+   <Field label="Project role"><select className={field} value={role} onChange={e=>setRole(e.target.value as ProjectRole)}>{TEAM_ROLES.map(r=><option key={r} value={r}>{PROJECT_ROLE_LABELS[r]}</option>)}</select></Field>
+   <Btn busy={busy} disabled={!userId} onClick={()=>userId&&void assign(userId,role)}><Plus aria-hidden className="size-4"/>Add</Btn>
+  </div>}
+ </Section>;
 }
 
 const SETUP_FIELDS:Array<[keyof Project,string,'text'|'date'|'number'|'textarea']>=[['name','Project name','text'],['clientName','Client','text'],['projectManagerName','Project manager','text'],['contractNumber','Contract number','text'],['contractType','Contract type','text'],['siteAddress','Project location / site','textarea'],['startDate','Start date','date'],['practicalCompletionDate','Practical completion date','date'],['finishDate','Finish date','date'],['retentionPct','Retention %','number'],['retentionCapAmount','Retention cap (AUD, optional)','number'],['paymentTermsDays','Payment terms (days)','number'],['defectsMonths','Defects period (months)','number'],['scope','Scope','textarea'],['assumptions','Assumptions','textarea'],['exclusions','Exclusions','textarea'],['clientRequirements','Client requirements','textarea'],['mobilisationNotes','Mobilisation requirements','textarea']];

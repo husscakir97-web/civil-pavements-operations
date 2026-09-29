@@ -30,8 +30,8 @@ for(const c of ['commercial.view','rates.edit','estimate.approve','tender.approv
 for(const c of ['rates.edit','team.admin','entitlements.manage','org.admin'])assert.equal(perm.can('office',c),false,'office must not have '+c);
 assert(perm.CAPABILITIES.every(c=>perm.can('admin',c)));
 assert.equal(perm.can('read_only','commercial.view'),false);assert.equal(perm.can(undefined,'project.view'),false);assert.equal(perm.can('hacker','project.view'),false);
-// Role model: nine assignable roles, route gate (roleAllows) and capability matrix per role.
-assert.deepEqual([...perm.ROLES].sort(),['accounts','admin','estimator','field','office','project_manager','read_only','scheduler','supervisor']);
+// Role model: eleven assignable roles (Project Engineer and Site Engineer added in the navigation tranche), route gate (roleAllows) and capability matrix per role.
+assert.deepEqual([...perm.ROLES].sort(),['accounts','admin','estimator','field','office','project_engineer','project_manager','read_only','scheduler','site_engineer','supervisor']);
 for(const r of perm.ROLES){assert(perm.ROLE_LABELS[r]&&perm.ROLE_DESCRIPTIONS[r],'label and description for '+r);assert(perm.roleAllows(r,'field-read'));}
 assert.equal(perm.roleAllows('hacker','field-read'),false);
 const gate=(r,p,m)=>perm.roleAllows(r,p,m);
@@ -44,6 +44,8 @@ const matrix={
  supervisor:{yes:[['field'],['read','projects'],['read','operations'],['write','ims']],no:[['read','commercial'],['read','dockets'],['write','operations'],['read','pipeline']]},
  field:{yes:[['field'],['field-read']],no:[['read','projects'],['read','commercial'],['write','ims']]},
  accounts:{yes:[['read','commercial'],['write','commercial'],['approve','commercial'],['read','dockets'],['read','projects']],no:[['write','projects'],['read','pipeline'],['write','operations'],['admin']]},
+ project_engineer:{yes:[['read','projects'],['write','projects'],['read','operations'],['write','ims'],['field']],no:[['read','commercial'],['write','commercial'],['approve','commercial'],['read','pipeline'],['write','operations'],['approve','estimating'],['admin']]},
+ site_engineer:{yes:[['read','projects'],['read','operations'],['write','ims'],['field']],no:[['read','commercial'],['read','pipeline'],['write','projects'],['write','operations'],['admin']]},
  read_only:{yes:[['read','projects'],['read','pipeline'],['read','operations'],['read','ims'],['read','reports']],no:[['read','commercial'],['read','dockets'],['write','projects'],['field'],['write','ims'],['admin']]},
 };
 for(const [r,{yes,no}] of Object.entries(matrix)){for(const [p,m] of yes)assert(gate(r,p,m),`${r} should pass ${p}/${m||'core'}`);for(const [p,m] of no)assert(!gate(r,p,m),`${r} must not pass ${p}/${m||'core'}`);}
@@ -51,15 +53,82 @@ for(const r of ['scheduler','supervisor','field','read_only'])assert.equal(perm.
 assert.equal(perm.can('estimator','estimate.approve'),false);assert.equal(perm.can('project_manager','claim.approve'),false);assert.equal(perm.can('accounts','claim.approve'),true);
 // Admin navigation is capability-driven: no role sees administration it cannot use.
 const navDef=load('lib/v1/navigation.ts');
-assert.deepEqual(navDef.adminSubsFor('admin'),['Company','People','Plant','Rates','Company Library','Civil Knowledge','Team & Permissions','Integrations','Settings']);
-assert.deepEqual(navDef.adminSubsFor('estimator'),['Rates','Company Library'],'estimator: rates (read) and library, no organisation/security/entitlements');
-assert.deepEqual(navDef.adminSubsFor('scheduler'),['People','Plant'],'operations: people and plant only');
-assert.deepEqual(navDef.adminSubsFor('project_manager'),['People','Plant']);
+// Intended change (navigation tranche): People/Plant moved to Resources, Company Library to Documents.
+assert.deepEqual(navDef.adminSubsFor('admin'),['Company','Rates','Civil Knowledge','Team & Permissions','Integrations','Settings']);
+assert.deepEqual(navDef.adminSubsFor('estimator'),['Rates'],'estimator: rates (read), no organisation/security/entitlements');
+assert.deepEqual(navDef.adminSubsFor('scheduler'),[],'operations: no admin area (people and plant live under Resources)');
+assert.deepEqual(navDef.adminSubsFor('project_manager'),[]);
+for(const r of ['project_engineer','site_engineer'])assert.deepEqual(navDef.adminSubsFor(r),[],r+': no admin area');
 assert.deepEqual(navDef.adminSubsFor('accounts'),[],'accounts: no admin area');
 assert.deepEqual(navDef.adminSubsFor('read_only'),[],'read-only: no admin area');
 assert.deepEqual(navDef.adminSubsFor('field'),[]);assert.deepEqual(navDef.adminSubsFor('supervisor'),[]);
 assert(!navDef.adminSubsFor('office').some(k=>['Team & Permissions','Integrations','Settings','Company'].includes(k)),'office has no organisation administration');
 assert.deepEqual(navDef.FIELD_SHELL_ROLES,['field','supervisor']);
+// Project/Site Engineer: delivery capabilities without money, rates, approvals, HR or administration.
+for(const r of ['project_engineer','site_engineer'])for(const c of ['commercial.view','commercial.edit','rates.edit','team.admin','entitlements.manage','org.admin','claim.approve','variation.approve','estimate.approve','tender.approve','swms.approve','pipeline.view','estimate.edit','docket.approve','schedule.edit','library.edit'])assert.equal(perm.can(r,c),false,r+' must not have '+c);
+for(const c of ['project.view','project.edit','schedule.view','hseq.edit','itp.complete','field.capture','document.upload'])assert(perm.can('project_engineer',c),'project_engineer needs '+c);
+for(const c of ['project.view','schedule.view','hseq.edit','itp.complete','field.capture','document.upload'])assert(perm.can('site_engineer',c),'site_engineer needs '+c);
+// Project scope: engineers are limited to their project memberships; organisation-wide roles keep project.all.view.
+for(const r of ['project_engineer','site_engineer'])assert.equal(perm.can(r,'project.all.view'),false,r+' is project-scoped');
+for(const r of ['admin','office','estimator','scheduler','project_manager','supervisor','accounts','read_only'])assert(perm.can(r,'project.all.view'),r+' keeps organisation-wide project access');
+assert.equal(perm.can('field','project.view'),false,'field users keep assigned-shift rules (no project access to scope)');
+const roles=load('lib/v1/project-roles.ts');assert.deepEqual([...roles.PROJECT_ROLES],['project_manager','project_engineer','site_engineer','supervisor','commercial','hseq','other']);
+for(const r of roles.PROJECT_ROLES)assert(roles.PROJECT_ROLE_LABELS[r]);
+assert.equal(perm.can('site_engineer','project.edit'),false);assert.equal(perm.can('site_engineer','reports.view'),false,'site engineer: no company reporting');
+assert(!navDef.FIELD_SHELL_ROLES.includes('site_engineer'),'site engineer uses the responsive office shell with Today');
+// Primary navigation: conventional areas, filtered by capability and entitlement; engines are not primary.
+const appNav=load('lib/v1/app-nav.ts'),{ENGINES}=load('lib/v1/engines.ts');
+const ALL=['pipeline','estimating','projects','ims','operations','field','dockets','commercial','reports','workshop','ai'];
+const access=(role,mods=ALL)=>({can:c=>perm.can(role,c),module:m=>mods.includes(m)});
+const areas=(role,mods)=>appNav.navFor(access(role,mods)).map(a=>a.key);
+const subs=(role,area,mods)=>(appNav.navFor(access(role,mods)).find(a=>a.key===area)?.subs||[]).map(s=>s.key);
+assert.deepEqual(areas('admin'),['Home','CRM','Pipeline','Projects','Schedule','Resources','Commercial','IMS & HSEQ','Documents','Reports','Admin']);
+assert(!areas('admin').some(k=>ENGINES.some(e=>e.key===k)),'no engine names in primary navigation');
+assert.deepEqual(subs('admin','Pipeline'),['Opportunities','Tenders','Estimates']);
+assert.deepEqual(subs('admin','Resources'),['People','Plant & Equipment','Crews','Suppliers & Subcontractors','Workshop']);
+assert.deepEqual(areas('project_engineer'),['Home','Today','CRM','Projects','Schedule','Resources','IMS & HSEQ','Documents','Reports']);
+assert.deepEqual(subs('project_engineer','Resources'),['People','Plant & Equipment','Crews','Suppliers & Subcontractors','Workshop']);
+assert.deepEqual(subs('project_engineer','Reports'),['Reports','Lifecycle']);
+assert.deepEqual(areas('site_engineer'),['Home','Today','CRM','Projects','Schedule','Resources','IMS & HSEQ','Documents']);
+for(const r of ['project_engineer','site_engineer'])for(const k of ['Commercial','Pipeline','Admin'])assert(!areas(r).includes(k),r+' must not see '+k);
+assert.deepEqual(areas('scheduler'),['Home','CRM','Projects','Schedule','Resources','IMS & HSEQ','Documents','Reports']);
+assert(!areas('accounts').includes('Schedule')&&areas('accounts').includes('Commercial'));
+assert(!areas('office').includes('Today')&&!areas('scheduler').includes('Today'),'Today only for field-capture roles without office planning');
+// Reduced-module organisations: coherent menus, no disabled items for unpurchased modules.
+assert.deepEqual(areas('admin',['ims']),['Home','IMS & HSEQ','Documents','Reports','Admin']);
+assert.deepEqual(subs('admin','Reports',['ims']),['Lifecycle']);
+assert.deepEqual(areas('admin',['operations']),['Home','CRM','Schedule','Resources','Documents','Reports','Admin']);
+assert.deepEqual(subs('admin','Resources',['operations']),['People','Plant & Equipment','Crews','Suppliers & Subcontractors']);
+assert.deepEqual(areas('admin',['pipeline','estimating']),['Home','CRM','Pipeline','Documents','Reports','Admin']);
+assert.deepEqual(subs('admin','Pipeline',['estimating']),['Estimates']);
+assert.deepEqual(subs('admin','Admin',['ims']),['Company','Civil Knowledge','Team & Permissions','Integrations','Settings'],'rates hidden without estimating');
+assert.equal(appNav.canOpen(access('site_engineer'),'Commercial'),false);assert.equal(appNav.canOpen(access('admin',['ims']),'Schedule'),false);
+// Legacy routes and bookmarks translate to the new areas, keeping record id and tab.
+const R=appNav.resolveRoute;
+assert.deepEqual(R({area:'Win Work',sub:'Tenders',id:'t1',tab:'estimate'}),{area:'Pipeline',sub:'Tenders',id:'t1',tab:'estimate'});
+assert.deepEqual(R({area:'Win Work',sub:'Clients',id:'Acme'}),{area:'CRM',sub:'Clients',id:'Acme',tab:undefined});
+assert.equal(R({area:'Win Work',sub:'Overview'}).area,'Pipeline');
+assert.deepEqual(R({area:'Prepare Work',sub:'Projects',id:'p1',tab:'quality'}),{area:'Projects',sub:'Projects',id:'p1',tab:'quality'});
+assert.deepEqual(R({area:'Deliver Work',sub:'Dockets'}),{area:'Commercial',sub:'Dockets',id:undefined,tab:undefined});
+assert.deepEqual(R({area:'Prepare Work',sub:'Company Library',id:'Insurance'}),{area:'Documents',sub:'Company Library',id:'Insurance',tab:undefined});
+assert.deepEqual(R({area:'Resource Work',sub:'Resources',id:'TMA001',tab:'plant'}),{area:'Resources',sub:'Plant & Equipment',id:'TMA001',tab:undefined});
+assert.deepEqual(R({area:'Resource Work',sub:'Resources',id:'Sam',tab:'workers'}),{area:'Resources',sub:'People',id:'Sam',tab:undefined});
+assert.deepEqual(R({area:'Operations',sub:'Schedule',id:'p1'}),{area:'Schedule',sub:'Schedule',id:'p1',tab:undefined});
+assert.equal(R({area:'Control Money'}).area,'Commercial');assert.deepEqual(R({area:'Learn'}),{area:'Reports',sub:'Lifecycle',id:undefined,tab:undefined});
+assert.deepEqual(R({area:'Admin',sub:'Plant'}),{area:'Resources',sub:'Plant & Equipment',id:undefined,tab:undefined});
+assert.deepEqual(R({area:'Admin',sub:'Settings'}),{area:'Admin',sub:'Settings'},'current admin pages unchanged');
+assert.deepEqual(R({area:'Field'}),{area:'Today'});assert.deepEqual(R({area:'Projects',id:'p1',tab:'setup'}),{area:'Projects',sub:'Projects',id:'p1',tab:'setup'});
+assert.deepEqual(R({area:'Home'}),{area:'Home'});assert.deepEqual(R({area:'Search',id:'abc'}),{area:'Search',id:'abc'});
+// Home quick actions: role priorities, never more than three, never a shortcut the user cannot open.
+const qa=(r,mods)=>appNav.quickActions(r,access(r,mods)).map(q=>q.label);
+assert.deepEqual(qa('scheduler'),['Schedule','People','Plant & equipment']);
+assert.deepEqual(qa('project_manager'),['My projects','Programme','Commercial']);
+assert.deepEqual(qa('project_engineer'),['Projects','Programme','IMS & HSEQ']);
+assert.deepEqual(qa('site_engineer'),['Today','Projects','IMS & HSEQ']);
+assert.deepEqual(qa('accounts'),['Commercial','Dockets','Reports']);
+assert.deepEqual(qa('admin',['ims']),['IMS & HSEQ','Documents']);
+for(const r of perm.ROLES)for(const q of appNav.quickActions(r,access(r)))assert(appNav.canOpen(access(r),q.area,q.sub),r+' quick action '+q.label+' must be openable');
+
 // Civil Knowledge Engine: deterministic rule evaluation, missing-context handling and source provenance.
 {const k=load('lib/platform/knowledge-rules.ts');
  const source={id:'s1',title:'Client pavement specification',authority:'Example client',referenceCode:'SPEC-01',revisionLabel:'R2',jurisdiction:'NSW',sourceClause:'4.2',sourcePage:'18',effectiveFrom:'2026-01-01',effectiveTo:null};
@@ -311,4 +380,4 @@ const {parsePastedItems}=load('lib/v1/estimate-paste.ts');
 const pasted=parsePastedItems('Description\tQty\tUnit\tRate\nProfile 50mm\t1,200\tm2\t$4.50\nAC14\t180\tt\t165\tmaterial\tWearing\nbad row\tx\tm\t1',  'General',i=>'i'+i);
 assert.equal(pasted.items.length,2);assert.equal(pasted.items[0].quantity,1200);assert.equal(pasted.items[0].rate,4.5);assert.equal(pasted.items[0].category,'other');assert.equal(pasted.items[1].category,'material');assert.equal(pasted.items[1].section,'Wearing');assert.deepEqual(pasted.skipped,[4]);
 console.log('PASS estimate paste: header skipped, $ and thousands parsed, category/section, bad rows reported');
-console.log('PASS V1 logic: lifecycle guards, capability matrix and nine-role route gate, ABN checksum, forecast/claim/GST/retention arithmetic, risk ratings, register identifiers, estimate items, docket cost lines, legacy stage mapping, scheduling conflict engine, legacy resource mapping');
+console.log('PASS V1 logic: lifecycle guards, capability matrix and eleven-role route gate, primary navigation, legacy route resolution, Home quick actions, ABN checksum, forecast/claim/GST/retention arithmetic, risk ratings, register identifiers, estimate items, docket cost lines, legacy stage mapping, scheduling conflict engine, legacy resource mapping');

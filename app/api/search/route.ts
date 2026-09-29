@@ -4,6 +4,7 @@ import {actorContext} from '@/lib/platform/context';
 import {can,type Capability} from '@/lib/platform/permissions';
 import {getEntitlements,usable} from '@/lib/platform/entitlements';
 import {documentContextsFor} from '@/lib/platform/documents';
+import {projectScope} from '@/lib/platform/project-access';
 import type {ModuleKey} from '@/lib/platform/modules';
 
 // Global search across authorised records. Every spec declares the module it
@@ -46,7 +47,10 @@ async function handleGET(request:Request){
    const r=await db.prepare(`SELECT id,${spec.name} AS name,${spec.status} AS status,${spec.detail} AS detail${spec.project?`,${spec.project} AS project_id`:''}${spec.tender?`,${spec.tender} AS tender_id`:''} FROM ${spec.table} WHERE organisation_id=? ${spec.filter||''}${fieldDocs}${fieldSwms} AND ${terms.map(()=>`(${spec.match.map(c=>`LOWER(${c}) LIKE ?`).join(' OR ')})`).join(' AND ')} LIMIT 10`).bind(actor.organisationId,...terms.flatMap(t=>spec.match.map(()=>t))).all<Record<string,unknown>>();
    return r.results.map(x=>({id:String(x.id),name:String(x.name??''),status:String(x.status??''),detail:String(x.detail??'').slice(0,200),type:spec.type,area:spec.area,projectId:x.project_id?String(x.project_id):null,tenderId:x.tender_id?String(x.tender_id):null}));
   }));
-  return Response.json({results:groups.flat().slice(0,80)},{headers:{'Cache-Control':'private, no-store'}});
+  // Project-scoped roles never find records belonging to projects they are not assigned to.
+  const scope=await projectScope(actor);
+  const visible=groups.flat().filter(r=>!scope||!r.projectId||scope.includes(r.projectId));
+  return Response.json({results:visible.slice(0,80)},{headers:{'Cache-Control':'private, no-store'}});
  }catch(e){console.error('search',e);return Response.json({error:'Search is unavailable. Please retry.'},{status:503});}
 }
 

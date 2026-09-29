@@ -7,6 +7,9 @@ import {audit} from './audit';
 import {fail} from './http';
 import {can,type Capability} from './permissions';
 import {query,one,exec,tx,nowIso,uuid,type Row} from './sql';
+import {canAccessProject,projectFilter} from './project-access';
+// The project a document belongs to: its project_id, or the project it is attached to directly.
+const documentProject=(r:Row)=>r.project_id||(r.context_type==='project'?r.context_id:null)||null;
 
 export const MAX_DOCUMENT_BYTES=40*1024*1024;
 const ALLOWED=/\.(pdf|png|jpe?g|gif|webp|heic|txt|csv|docx?|xlsx?|pptx?|zip|msg|eml|dwg|dxf)$/i;
@@ -32,6 +35,7 @@ export async function storeDocument(file:File,meta:{contextType:DocumentContext;
  if(!file.size)fail(400,'The file is empty.');
  if(file.size>MAX_DOCUMENT_BYTES)fail(413,'Files must be 40 MB or smaller.');
  if(actor.role!=='field'&&!can(actor.role,CONTEXT_CAPABILITY[meta.contextType]))fail(403,'You are not authorised to attach documents to this record.');
+ if(!await canAccessProject(documentProject({project_id:meta.projectId,context_type:meta.contextType,context_id:meta.contextId})))fail(404,'Project not found.');
  if(!ALLOWED.test(file.name))fail(415,'This file type is not accepted. Use PDF, image, Office, CSV, text or ZIP files.');
  const bytes=new Uint8Array(await file.arrayBuffer());
  const sha256=createHash('sha256').update(bytes).digest('hex');
@@ -67,6 +71,8 @@ export async function listDocuments(filter:{contextType?:string|null;contextId?:
  if(!filter.includeSuperseded)where.push("status='current'");
  if(actor.role==='field')where.push("visibility='field'");
  else{const ctx=documentContextsFor(actor.role);if(!ctx.length)return [];where.push('context_type IN (?)');values.push(ctx);}
+ // Project-scoped roles: documents of other projects are excluded; company documents (no project) stay.
+ const scope=await projectFilter("COALESCE(project_id,CASE WHEN context_type='project' THEN context_id END)",values,{allowNull:true});if(scope)where.push(scope.replace(/^ AND /,''));
  return (await query(`SELECT * FROM documents WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT 500`,values)).map(publicDocument);
 }
 
@@ -76,6 +82,7 @@ export async function openDocument(id:string){
  if(!row)fail(404,'Document not found.');
  if(actor.role==='field'&&row!.visibility!=='field')fail(403,'This file is available to office staff only.');
  if(actor.role!=='field'&&!can(actor.role,CONTEXT_CAPABILITY[row!.context_type as DocumentContext]??'org.admin'))fail(403,'You are not authorised to open this document.');
+ if(!await canAccessProject(documentProject(row!)))fail(404,'Document not found.');
  const object=await bucket.get(row!.storage_key);
  if(!object)fail(404,'The stored file is unavailable.');
  return new Response(object!.body,{headers:{'Content-Type':row!.content_type,'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(row!.file_name)}`,'X-Content-Type-Options':'nosniff','Cache-Control':'private, no-store'}});

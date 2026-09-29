@@ -9,11 +9,17 @@ import {easternDate} from '@/lib/reporting';
 import {projectFinancials,estimateVsActual} from './project-control';
 import {legacyOpportunityStage} from '@/lib/v1/register-server';
 import {stageOf} from '@/lib/modules/projects/projects';
+import {projectScope} from '@/lib/platform/project-access';
 
 export async function reportsV1(){
  const a=actorContext.getStore()!,org=a.organisationId,e=await getEntitlements(org),money=can(a.role,'commercial.view')&&usable(e,'commercial');
  const today=easternDate(new Date()),past30=new Date(Date.parse(today)-30*86400000).toISOString().slice(0,10),next14=new Date(Date.parse(today)+14*86400000).toISOString().slice(0,10);
  const out:Record<string,unknown>={generatedAt:new Date().toISOString(),commercialVisible:money};
+ // Project-scoped roles (Project/Site Engineer) get figures from their own projects only; null = organisation-wide.
+ const scope=await projectScope(a),ids=scope&&scope.length?scope:['-'];
+ const inScope=(col:string,allowNull=false)=>!scope?'':allowNull?` AND (${col} IS NULL OR ${col} IN (?))`:` AND ${col} IN (?)`;
+ const sp=()=>scope?[ids]:[];
+ const shiftJob="JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.jobId'))";
  if(usable(e,'pipeline')&&can(a.role,'pipeline.view')){
   const opps=await query("SELECT stage,status,estimated_value,probability,metadata FROM opportunities WHERE organisation_id=? AND LOWER(status)<>'archived'",[org]);
   const stages:Record<string,{count:number;value:number;weighted:number}>={};
@@ -24,7 +30,7 @@ export async function reportsV1(){
   out.pipeline={opportunities:Object.entries(stages).map(([stage,v])=>({stage,count:v.count,...(money?{value:round2(v.value),weighted:round2(v.weighted)}:{})})),tenders:Object.entries(byStage).map(([stage,v])=>({stage,count:v.count,...(money?{value:round2(v.value)}:{})})),conversionPct:won+lost?round2(won/(won+lost)*100):null,decided:won+lost};
  }
  if(usable(e,'projects')&&can(a.role,'project.view')){
-  const projects=await query("SELECT id,name,project_number,stage,status,contract_value FROM jobs WHERE organisation_id=? AND LOWER(status)<>'archived'",[org]);
+  const projects=await query(`SELECT id,name,project_number,stage,status,contract_value FROM jobs WHERE organisation_id=? AND LOWER(status)<>'archived'${inScope('id')}`,[org,...sp()]);
   const counts:Record<string,number>={};for(const p of projects){const s=stageOf(p);counts[s]=(counts[s]||0)+1;}
   const live=projects.filter(p=>!['closed'].includes(stageOf(p)));
   out.projects={byStage:counts,active:counts.active||0,total:projects.length};
@@ -41,11 +47,11 @@ export async function reportsV1(){
   }
  }
  if(usable(e,'operations')&&can(a.role,'schedule.view')){
-  const upcoming=await one<{n:number}>("SELECT COUNT(*) AS n FROM shifts WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.date')) BETWEEN ? AND ? AND status NOT IN ('Cancelled','Archived')",[org,today,next14]);
-  const completed=await one<{n:number}>("SELECT COUNT(*) AS n FROM shifts WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.date')) BETWEEN ? AND ? AND status='Completed'",[org,past30,today]);
-  const assignments=await query("SELECT metadata FROM shifts WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.date')) BETWEEN ? AND ? AND status NOT IN ('Cancelled','Archived')",[org,past30,next14]);
+  const upcoming=await one<{n:number}>(`SELECT COUNT(*) AS n FROM shifts WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.date')) BETWEEN ? AND ? AND status NOT IN ('Cancelled','Archived')${inScope(shiftJob)}`,[org,today,next14,...sp()]);
+  const completed=await one<{n:number}>(`SELECT COUNT(*) AS n FROM shifts WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.date')) BETWEEN ? AND ? AND status='Completed'${inScope(shiftJob)}`,[org,past30,today,...sp()]);
+  const assignments=await query(`SELECT metadata FROM shifts WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.date')) BETWEEN ? AND ? AND status NOT IN ('Cancelled','Archived')${inScope(shiftJob)}`,[org,past30,next14,...sp()]);
   const use:Record<string,number>={};for(const s of assignments){for(const x of (JSON.parse(s.metadata||'{}').assignments||[]) as Array<{category?:string;hours?:number}>){use[x.category||'other']=(use[x.category||'other']||0)+Number(x.hours||0);}}
-  const production=await one<{t:number;n:number}>("SELECT COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(data,'$.tonnes')) AS DECIMAL(15,3))),0) AS t,COUNT(*) AS n FROM field_records WHERE organisation_id=? AND status='Submitted' AND updated_at>=?",[org,past30]);
+  const production=await one<{t:number;n:number}>(`SELECT COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(data,'$.tonnes')) AS DECIMAL(15,3))),0) AS t,COUNT(*) AS n FROM field_records WHERE organisation_id=? AND status='Submitted' AND updated_at>=?${scope?` AND shift_id IN (SELECT id FROM shifts WHERE organisation_id=field_records.organisation_id${inScope(shiftJob)})`:''}`,[org,past30,...sp()]);
   out.operations={upcomingShifts14d:Number(upcoming?.n||0),completedShifts30d:Number(completed?.n||0),plannedHoursByCategory:Object.fromEntries(Object.entries(use).map(([k,v])=>[k,round2(v)])),fieldRecords30d:Number(production?.n||0),tonnesRecorded30d:round2(Number(production?.t||0))};
  }
  if(usable(e,'dockets')&&can(a.role,'docket.approve')){
@@ -56,11 +62,11 @@ export async function reportsV1(){
  }
  if(usable(e,'ims')&&can(a.role,'hseq.view')){
   const [actions,incidents,ncrs,swms,itp]=await Promise.all([
-   one<{open:number;overdue:number}>("SELECT SUM(status IN ('open','in_progress')) AS open,SUM(status IN ('open','in_progress') AND due_date<?) AS overdue FROM hseq_actions WHERE organisation_id=?",[today,org]),
-   query("SELECT incident_type,status,COUNT(*) AS n FROM hseq_incidents WHERE organisation_id=? GROUP BY incident_type,status",[org]),
-   query("SELECT status,COUNT(*) AS n FROM hseq_ncrs WHERE organisation_id=? GROUP BY status",[org]),
-   query("SELECT status,COUNT(*) AS n FROM swms WHERE organisation_id=? GROUP BY status",[org]),
-   query("SELECT status,COUNT(*) AS n FROM itp_items WHERE organisation_id=? GROUP BY status",[org]),
+   one<{open:number;overdue:number}>(`SELECT SUM(status IN ('open','in_progress')) AS open,SUM(status IN ('open','in_progress') AND due_date<?) AS overdue FROM hseq_actions WHERE organisation_id=?${inScope('project_id',true)}`,[today,org,...sp()]),
+   query(`SELECT incident_type,status,COUNT(*) AS n FROM hseq_incidents WHERE organisation_id=?${inScope('project_id',true)} GROUP BY incident_type,status`,[org,...sp()]),
+   query(`SELECT status,COUNT(*) AS n FROM hseq_ncrs WHERE organisation_id=?${inScope('project_id',true)} GROUP BY status`,[org,...sp()]),
+   query(`SELECT status,COUNT(*) AS n FROM swms WHERE organisation_id=?${inScope('project_id')} GROUP BY status`,[org,...sp()]),
+   query(`SELECT status,COUNT(*) AS n FROM itp_items WHERE organisation_id=?${inScope('project_id')} GROUP BY status`,[org,...sp()]),
   ]);
   const map=(rows:Array<Record<string,unknown>>)=>Object.fromEntries(rows.map(r=>[String(r.status),Number(r.n)]));
   out.hseq={openActions:Number(actions?.open||0),overdueActions:Number(actions?.overdue||0),incidents:incidents.map(i=>({type:i.incident_type,status:i.status,count:Number(i.n)})),ncrs:map(ncrs),swms:map(swms),itpItems:map(itp)};

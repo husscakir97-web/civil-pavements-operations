@@ -577,6 +577,24 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  await expect('supervisor',[['GET','/api/field/today',200],['GET','/api/commercial/claims?projectId='+projectId,403],['GET','/api/dockets',403],['GET','/api/estimates',403]]);await noRates('supervisor');
  await expect('accounts',[['GET','/api/commercial/claims?projectId='+projectId,200],['GET','/api/dockets',200],['GET','/api/tenders/register',403],['POST','/api/operations/resources',403,{action:'savePlant',plant:{name:'x',status:'Available'}}],['GET','/api/estimates',403]]);
  await expect('read_only',[['GET','/api/projects',200],['GET','/api/registers/risks?parentId='+projectId,200],['POST','/api/registers/risks',403,{parentId:projectId,values:{title:'x'}}],['GET','/api/commercial/claims?projectId='+projectId,403],['POST','/api/field/today',403,{shiftId:shift.id,workDate:today}],['GET','/api/team',403]]);await noRates('read_only');
+ // Project Engineer / Site Engineer: delivery access without money, pricing, rates, approvals or administration (server-enforced).
+ const engineerDenied=[['GET','/api/commercial/claims?projectId='+projectId,403],['GET','/api/estimates',403],['GET','/api/estimates/rates',403],['GET','/api/tenders/register',403],['GET','/api/dockets',403],['GET','/api/team',403],['POST','/api/estimates/approval',403,{estimateId,action:'approve'}],['POST','/api/operations/resources',403,{action:'savePlant',plant:{name:'x',status:'Available'}}]];
+ await expect('project_engineer',[['GET','/api/projects',200],['GET','/api/registers/risks?parentId='+projectId,404],['GET','/api/projects/workspace?id='+projectId,404],['GET','/api/operations/resources?kind=workers',200],['GET','/api/field/today',200],...engineerDenied]);await noRates('project_engineer');
+ await expect('site_engineer',[['GET','/api/projects',200],['GET','/api/field/today',200],['GET','/api/reports/v1',403],...engineerDenied]);await noRates('site_engineer');
+ const [orgJobs]=await db.execute('SELECT id FROM jobs WHERE organisation_id=?',[memberA.organisation_id]);const orgJobIds=new Set(orgJobs.map(j=>j.id));
+ for(const role of ['project_engineer','site_engineer','scheduler']){
+  await as(role);const home=await json(await call('/api/platform/home','GET',undefined,R.cookie),200);
+  const text=JSON.stringify(home);
+  assert(!/variation|claim|invoice|unclaimed|estimate-approval|tender/i.test([...home.myActions,...home.needsAttention].map(i=>i.key).join(' ')),role+' Home has no commercial or tender items');
+  assert(!/"(rate|hourlyRate|contractValue|currentContract|forecastMarginPct|unbilled)"/.test(text),role+' Home carries no money');
+  assert(Array.isArray(home.indicators)&&home.indicators.every(i=>typeof i.value==='string'&&i.area),role+' indicators are counts linked to an area');
+  assert((home.myProjects||[]).every(p=>orgJobIds.has(p.id)),role+' Home projects stay in the organisation');
+  for(const i of [...home.myActions,...home.needsAttention,...home.today])if(i.target?.type==='project')assert(orgJobIds.has(i.target.id),'Home links stay in the organisation');
+ }
+ await as('scheduler');const schedHome=await json(await call('/api/platform/home','GET',undefined,R.cookie),200);
+ const [[tomorrowShifts]]=await db.execute("SELECT COUNT(*) AS n FROM shifts WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.date'))=DATE_FORMAT(DATE_ADD(?,INTERVAL 1 DAY),'%Y-%m-%d') AND status NOT IN ('Cancelled','Archived','Draft')",[memberA.organisation_id,schedHome.date]);
+ const ind=schedHome.indicators.find(i=>i.key==='tomorrow-resourced');
+ if(Number(tomorrowShifts.n))assert.equal(ind?.value.split(' / ')[1],String(tomorrowShifts.n),'tomorrow indicator counts the real shifts');else assert.equal(ind,undefined,'no indicator without shifts');
  // Documents follow the record they belong to: tender pricing never reaches scheduling roles.
  await as('admin');
  const pricing=(await json(await upload(A.cookie,{contextType:'tender',contextId:tenderId,category:'Pricing',title:'Priced schedule'}),201)).document;
@@ -593,7 +611,92 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  assert.equal((await call('/api/documents','POST',supC,C.cookie)).status,404,'field cannot see or replace office documents');
  await json(await call('/api/team','PATCH',{userId:R.user.id,expected:{role:'estimator',active:true},next:{role:'accounts',active:true}},A.cookie),200,'admin assigns a V1 role');
  await json(await call('/api/team','PATCH',{userId:A.user.id,expected:{role:'admin',active:true},next:{role:'read_only',active:true}},A.cookie),409,'last admin protected');
- console.log('PASS R roles: office, estimator, scheduler, project manager, supervisor, accounts, read-only gates; money hidden from non-commercial roles; document supersede authorisation; role change + last-admin protection');
+ console.log('PASS R roles: office, estimator, scheduler, project manager, project engineer, site engineer, supervisor, accounts, read-only gates; role-aware Home without money or cross-tenant links; real shift indicator; money hidden from non-commercial roles; document supersede authorisation; role change + last-admin protection');
+
+ // ---------------------------------------------------------------- Scenario P: project membership scopes Project/Site Engineers
+ step='P project scope';
+ const pA=(await json(await call('/api/projects','POST',{name:'Scope Project Alpha'},A.cookie),201)).projectId;
+ const pB=(await json(await call('/api/projects','POST',{name:'Scope Project Bravo'},A.cookie),201)).projectId;
+ const S=await signup('site-s');
+ await db.execute('UPDATE users SET organisation_id=?,role=? WHERE id=?',[memberA.organisation_id,'site_engineer',S.user.id]);
+ await as('project_engineer');
+ const team=await json(await call('/api/projects/team','POST',{projectId:pA,userId:R.user.id,projectRole:'project_engineer'},A.cookie),200,'admin assigns PE');
+ assert(team.canManage&&team.members.some(m=>m.userId===R.user.id&&m.projectRole==='project_engineer'));
+ await json(await call('/api/projects/team','POST',{projectId:pA,userId:S.user.id,projectRole:'site_engineer'},A.cookie),200,'admin assigns SE');
+ await json(await call('/api/projects/team','POST',{projectId:pA,userId:S.user.id,projectRole:'site_engineer'},A.cookie),200,'re-assigning is idempotent');
+ const [[dupes]]=await db.execute('SELECT COUNT(*) AS n FROM project_members WHERE organisation_id=? AND project_id=? AND user_id=?',[memberA.organisation_id,pA,S.user.id]);assert.equal(Number(dupes.n),1,'no duplicate memberships');
+ await json(await call('/api/projects/team','POST',{projectId:pB,userId:R.user.id,projectRole:'project_engineer'},R.cookie),403,'engineers cannot change project teams');
+ const addShift=async(name,jobId,date)=>{const id=crypto.randomUUID();await db.execute('INSERT INTO shifts (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)',[id,memberA.organisation_id,name,'Planned',JSON.stringify({jobId,date,start:'06:00',finish:'14:00',assignments:[]}),new Date().toISOString()]);return id;};
+ const tomorrowDate=new Date(Date.parse(today)+86400000).toISOString().slice(0,10);
+ const shiftA=await addShift('Alpha kerb pour',pA,today),shiftB=await addShift('Bravo milling',pB,today),upA=await addShift('Alpha upcoming',pA,tomorrowDate),upB=await addShift('Bravo upcoming',pB,tomorrowDate);
+ const docA=(await json(await upload(A.cookie,{contextType:'project',contextId:pA,projectId:pA,title:'Alpha drawing'}),201)).document;
+ const docB=(await json(await upload(A.cookie,{contextType:'project',contextId:pB,projectId:pB,title:'Bravo drawing'}),201)).document;
+ for(const [label,cookie] of [['project_engineer',R.cookie],['site_engineer',S.cookie]]){
+  const who=`${label}: `;
+  const list=(await json(await call('/api/projects','GET',undefined,cookie),200)).projects.map(p=>p.id);
+  assert(list.includes(pA),who+'assigned project listed');assert(!list.includes(pB)&&!list.includes(projectId),who+'unassigned projects not listed');
+  await json(await call('/api/projects/workspace?id='+pA,'GET',undefined,cookie),200,who+'assigned project opens');
+  await json(await call('/api/projects/workspace?id='+pB,'GET',undefined,cookie),404,who+'direct access to another project is refused');
+  const prog=await json(await call('/api/projects/program?projectId='+pA,'GET',undefined,cookie),200,who+'programme opens');assert(!prog.projects.some(p=>p.id===pB),who+'programme project list is scoped');
+  await json(await call('/api/projects/program?projectId='+pB,'GET',undefined,cookie),404,who+'other programme refused');
+  await json(await call('/api/registers/risks?parentId='+pA,'GET',undefined,cookie),200,who+'own risk register');
+  await json(await call('/api/registers/risks?parentId='+pB,'GET',undefined,cookie),404,who+'other risk register refused');
+  await json(await call('/api/job-hub?jobId='+pB,'GET',undefined,cookie),404,who+'job hub scoped');
+  await json(await call('/api/team?','GET',undefined,cookie),403,who+'no tenant admin');
+  assert.equal((await json(await call('/api/hseq/swms?projectId='+pB,'GET',undefined,cookie),200)).swms.length,0,who+'no SWMS from other projects');
+  assert.equal((await call('/api/documents?id='+docA.id,'GET',undefined,cookie)).status,200,who+'own project document');
+  await json(await call('/api/documents?id='+docB.id,'GET',undefined,cookie),404,who+'guessed document of another project refused');
+  assert.equal((await json(await call('/api/documents?projectId='+pB,'GET',undefined,cookie),200)).documents.length,0,who+'other project documents not listed');
+  assert(!(await json(await call('/api/search?q=Bravo','GET',undefined,cookie),200)).results.some(r=>r.projectId===pB||r.id===pB),who+'search excludes other projects');
+  const day=await json(await call('/api/field/today','GET',undefined,cookie),200);
+  const ids=[...day.today,...day.upcoming].map(s=>s.id);
+  assert(ids.includes(shiftA)&&ids.includes(upA),who+'Today includes own project shifts');assert(!ids.includes(shiftB)&&!ids.includes(upB),who+'Today excludes other project shifts');
+  assert(!ids.includes(shift.id),who+'Today excludes unrelated organisation shifts');
+  const home=await json(await call('/api/platform/home','GET',undefined,cookie),200);
+  const mine=home.myProjects.map(p=>p.id);assert(mine.includes(pA)&&!mine.includes(pB),who+'My projects = memberships');
+  const homeShifts=home.today.map(i=>i.key);assert(homeShifts.includes('shift-'+shiftA)&&!homeShifts.includes('shift-'+shiftB),who+'Home Today uses the same scope');
+  const board=await json(await call('/api/delivery','GET',undefined,cookie),200);assert(!board.shifts.some(s=>s.id===shiftB)&&!board.jobs.some(j=>j.id===pB),who+'schedule board scoped');
+  await json(await call('/api/projects','POST',{name:'Engineer project'},cookie),403,who+'cannot create organisation projects');
+  // Summaries are derived from the engineer's projects only.
+  const ov=await json(await call('/api/platform/overview','GET',undefined,cookie),200,who+'overview');
+  assert.equal(ov.projects.total,1,who+'overview counts only assigned projects');
+  assert.equal(ov.operations.upcomingShifts14d,2,who+'overview shifts only from assigned projects');
+  assert(!ov.commercial&&!ov.pipeline,who+'no commercial or pipeline summaries');
+  if(label==='project_engineer'){const rep=await json(await call('/api/reports/v1','GET',undefined,cookie),200,who+'reports');assert.equal(rep.projects.total,1,who+'reports scoped');assert.equal(rep.operations.upcomingShifts14d,2);}
+  else await json(await call('/api/reports/v1','GET',undefined,cookie),403,who+'no company reporting');
+  // Legacy delivery attachments carry no project link: fail closed unless it is their own upload.
+  const f=new FormData();f.set('file',new File(['office only'],'legacy.txt',{type:'text/plain'}));
+  const legacy=await json(await call('/api/delivery/documents','POST',f,A.cookie),201,'admin stores a legacy attachment');
+  await json(await call('/api/delivery/documents?id='+legacy.id,'GET',undefined,cookie),404,who+'unlinked legacy attachment refused');
+  const own=new FormData();own.set('file',new File(['mine'],'mine.txt',{type:'text/plain'}));
+  const mineUp=await json(await call('/api/delivery/documents','POST',own,cookie),201,who+'uploads an attachment');
+  assert.equal((await call('/api/delivery/documents?id='+mineUp.id,'GET',undefined,cookie)).status,200,who+'opens own upload');
+  assert.equal((await call('/api/delivery/documents?id='+legacy.id,'GET',undefined,A.cookie)).status,200,'admin keeps access');
+ }
+ await json(await call('/api/projects/program','POST',{projectId:pB,name:'x',startDate:today,durationDays:1,predecessorId:null,responsible:'',workPackage:'',resourceRequirement:'',plannedQuantity:0,quantityUnit:'',productionPerDay:0,status:'planned'},R.cookie),404,'PE cannot edit another project programme');
+ await json(await call('/api/projects/program','POST',{projectId:pA,name:'Alpha setout',startDate:today,durationDays:2,predecessorId:null,responsible:'',workPackage:'',resourceRequirement:'',plannedQuantity:0,quantityUnit:'',productionPerDay:0,status:'planned'},R.cookie),200,'PE edits own project programme');
+ await json(await call('/api/registers/risks','POST',{parentId:pA,values:{title:'Alpha trench collapse'}},S.cookie),201,'SE raises a risk on their project');
+ await json(await call('/api/registers/risks','POST',{parentId:pB,values:{title:'x'}},S.cookie),404,'SE cannot raise risks on other projects');
+ // Existing project_manager_user_id keeps working (compatibility with pre-membership data).
+ await db.execute('UPDATE jobs SET project_manager_user_id=? WHERE organisation_id=? AND id=?',[S.user.id,memberA.organisation_id,pB]);
+ await json(await call('/api/projects/workspace?id='+pB,'GET',undefined,S.cookie),200,'recorded project manager keeps access');
+ await db.execute('UPDATE jobs SET project_manager_user_id=NULL WHERE organisation_id=? AND id=?',[memberA.organisation_id,pB]);
+ // Removal deactivates the membership and access ends.
+ const sMember=(await json(await call('/api/projects/team?projectId='+pA,'GET',undefined,A.cookie),200)).members.find(m=>m.userId===S.user.id);
+ await json(await call(`/api/projects/team?projectId=${pA}&id=${sMember.id}`,'DELETE',undefined,A.cookie),200);
+ await json(await call('/api/projects/workspace?id='+pA,'GET',undefined,S.cookie),404,'removed member loses access');
+ const [[keptMember]]=await db.execute('SELECT active FROM project_members WHERE organisation_id=? AND id=?',[memberA.organisation_id,sMember.id]);assert.equal(Number(keptMember.active),0,'membership history retained');
+ // Organisation-wide roles still see every project.
+ const adminList=(await json(await call('/api/projects','GET',undefined,A.cookie),200)).projects.map(p=>p.id);assert(adminList.includes(pA)&&adminList.includes(pB));
+ await as('office');const officeList=(await json(await call('/api/projects','GET',undefined,R.cookie),200)).projects.map(p=>p.id);assert(officeList.includes(pA)&&officeList.includes(pB),'office keeps organisation-wide access');
+ // Tenant isolation: a membership row can never reach another organisation's project.
+ const pOther=(await json(await call('/api/projects','POST',{name:'Other org project'},B.cookie),201)).projectId;
+ await as('project_engineer');
+ await db.execute('INSERT INTO project_members (id,organisation_id,project_id,user_id,project_role,active,revision,created_at,updated_at) VALUES (?,?,?,?,?,1,1,?,?)',[crypto.randomUUID(),memberA.organisation_id,pOther,R.user.id,'project_engineer',new Date().toISOString(),new Date().toISOString()]);
+ await json(await call('/api/projects/workspace?id='+pOther,'GET',undefined,R.cookie),404,'membership never crosses organisations');
+ await json(await call('/api/projects/team?projectId='+pA,'GET',undefined,B.cookie),404,'other organisation cannot read the team');
+ await as('accounts');
+ console.log('PASS P project scope: memberships (assign/idempotent/remove), PE/SE listing, detail, programme, registers, job hub, SWMS, documents, search, Today/upcoming, Home Today and My projects, schedule board, overview and reports scoped; legacy attachments fail closed; PM compatibility; office/admin organisation-wide; tenant isolation');
 
  // ---------------------------------------------------------------- Scenario H: ABN register, AI orchestration, billing
  step='H ABN';

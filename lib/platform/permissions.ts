@@ -1,16 +1,18 @@
 // Isomorphic capability matrix. The server is the authority (requireCapability);
 // clients use the same table only to hide actions the server would refuse.
 // Every role below can be assigned by an organisation admin.
-export const ROLES=['admin','office','estimator','scheduler','project_manager','supervisor','field','accounts','read_only'] as const;
+export const ROLES=['admin','office','estimator','scheduler','project_manager','project_engineer','site_engineer','supervisor','field','accounts','read_only'] as const;
 export type Role=typeof ROLES[number];
 export type AnyRole=Role;
-export const ROLE_LABELS:Record<Role,string>={admin:'Admin',office:'Office (all operations & commercial)',estimator:'Estimator / Commercial',scheduler:'Operations / Scheduler',project_manager:'Project Manager',supervisor:'Supervisor',field:'Field Worker',accounts:'Accounts',read_only:'Read only'};
+export const ROLE_LABELS:Record<Role,string>={admin:'Admin',office:'Office (all operations & commercial)',estimator:'Estimator / Commercial',scheduler:'Operations / Scheduler',project_manager:'Project Manager',project_engineer:'Project Engineer',site_engineer:'Site Engineer',supervisor:'Supervisor',field:'Field Worker',accounts:'Accounts',read_only:'Read only'};
 export const ROLE_DESCRIPTIONS:Record<Role,string>={
  admin:'Full access, team management, entitlements, settings and rate libraries.',
  office:'All operational and commercial records, pricing and approvals. No team or admin settings.',
  estimator:'Opportunities, tenders, estimates, Company Library and variations. Can submit tenders; cannot approve estimates.',
  scheduler:'Schedule, shifts and resources (workers, competencies, plant). No rates or commercial data.',
  project_manager:'Project setup, delivery, HSEQ, SWMS approval, docket approval, variations and claims. Cannot approve estimates or claims.',
+ project_engineer:'Project delivery: programme, setup, documents, risks, ITPs/QA, NCRs, HSEQ, schedule visibility and site records. No rates, commercial figures, approvals or administration.',
+ site_engineer:'Site delivery: today\'s work, programme, job documents, ITPs and hold points, incidents, NCRs, site records and progress. No pricing, commercial reporting or administration.',
  supervisor:'Field capture plus read access to projects, schedule and HSEQ; can raise HSEQ records. No rates or commercial data.',
  field:'Assigned shifts, SWMS acknowledgement, incidents, quantities and site evidence. No financial data.',
  accounts:'Claims, invoices, payments and docket approval, with commercial reporting.',
@@ -21,7 +23,7 @@ export const CAPABILITIES=[
  'commercial.view','pipeline.view','pipeline.edit','tender.approve','tender.submit','tender.award',
  'workshop.view','workshop.edit','workshop.verify',
  'estimate.edit','estimate.approve',
- 'project.view','project.edit','project.baseline','project.close',
+ 'project.view','project.all.view','project.edit','project.baseline','project.close',
  'document.upload','document.approve',
  'hseq.view','hseq.edit','hseq.report','swms.approve','swms.acknowledge','itp.complete',
  'schedule.view','schedule.edit','resources.edit',
@@ -34,17 +36,21 @@ export type Capability=typeof CAPABILITIES[number];
 const FIELD:Capability[]=['swms.acknowledge','itp.complete','hseq.report','field.capture','docket.submit','document.upload'];
 const ADMIN_ONLY:Capability[]=['org.admin','team.admin','entitlements.manage','rates.edit'];
 const OFFICE:Capability[]=CAPABILITIES.filter(c=>!ADMIN_ONLY.includes(c));
-const READ:Capability[]=['pipeline.view','project.view','hseq.view','schedule.view','reports.view','commercial.view','knowledge.view'];
+const READ:Capability[]=['pipeline.view','project.view','project.all.view','hseq.view','schedule.view','reports.view','commercial.view','knowledge.view'];
 
 export const ROLE_CAPABILITIES:Record<Role,readonly Capability[]>={
  admin:CAPABILITIES,
  office:OFFICE,
  estimator:[...READ,'pipeline.edit','estimate.edit','tender.submit','library.edit','document.upload','audit.view','variation.edit'],
- scheduler:['workshop.view','project.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','knowledge.view','document.upload'],
+ scheduler:['workshop.view','project.view','project.all.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','knowledge.view','document.upload'],
  project_manager:[...READ,'project.edit','project.baseline','project.close','schedule.edit','resources.edit','hseq.edit','hseq.report','swms.approve','document.approve','docket.approve','variation.edit','claim.edit','document.upload','itp.complete','audit.view'],
- supervisor:[...FIELD,'project.view','schedule.view','hseq.view','hseq.edit','knowledge.view'],
+ // No 'project.all.view': these roles work only in projects where they are an active project
+ // member (lib/platform/project-access.ts), and never see money or approvals.
+ project_engineer:[...FIELD,'project.view','project.edit','schedule.view','hseq.view','hseq.edit','reports.view','knowledge.view','workshop.view'],
+ site_engineer:[...FIELD,'project.view','schedule.view','hseq.view','hseq.edit','knowledge.view'],
+ supervisor:[...FIELD,'project.view','project.all.view','schedule.view','hseq.view','hseq.edit','knowledge.view'],
  field:[...FIELD,'knowledge.view'],
- accounts:['commercial.view','project.view','reports.view','knowledge.view','claim.edit','claim.approve','invoice.manage','docket.approve'],
+ accounts:['commercial.view','project.view','project.all.view','reports.view','knowledge.view','claim.edit','claim.approve','invoice.manage','docket.approve'],
  read_only:['workshop.view',...READ.filter(c=>c!=='commercial.view')],
 };
 

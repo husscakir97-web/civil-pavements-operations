@@ -11,6 +11,8 @@ async function objectExists(db,sql){
  if(match){const [rows]=await db.execute('SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND INDEX_NAME=?',[match[2],match[1]]);return rows.length>0;}
  match=sql.match(/^ALTER TABLE `([^`]+)` ADD CONSTRAINT `([^`]+)`/);
  if(match){const [rows]=await db.execute('SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME=? AND CONSTRAINT_NAME=?',[match[1],match[2]]);return rows.length>0;}
+ // Idempotent data backfills (INSERT IGNORE on a unique key) are always safe to re-run.
+ if(/^(?:--[^\n]*\n)*INSERT IGNORE INTO `/.test(sql))return false;
  if(sql==='ALTER TABLE `dockets` MODIFY COLUMN `organisation_id` varchar(191) NOT NULL;')return false;
  match=sql.match(/^ALTER TABLE `([^`]+)` ADD `([^`]+)` /);
  if(match){const [rows]=await db.execute('SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?',[match[1],match[2]]);return rows.length>0;}

@@ -18,10 +18,12 @@ const WORKER_STATUSES=['Active','Leave','Inactive'],PLANT_STATUSES=['Available',
 const expiryTone=(s:string)=>s==='expired'?'danger':s==='expiring'?'warning':s==='current'?'success':'neutral';
 const expiryLabel=(s:string,d:string|null)=>s==='expired'?`Expired ${dateText(d)}`:s==='expiring'?`Expires ${dateText(d)}`:s==='current'?`Valid to ${dateText(d)}`:'No expiry recorded';
 
-export function ResourcesArea({initial='workers',other,initialQuery}:{initial?:ResourceTab;other?:ReactNode;initialQuery?:string}){
+export function ResourcesArea({initial='workers',other,initialQuery,only}:{initial?:ResourceTab;other?:ReactNode;initialQuery?:string;only?:boolean}){
  const [tab,setTab]=useState<ResourceTab>(initial);
  const issues=useApi<{issues:Issue[]}>('/api/operations/resources?kind=issues');
  const open=issues.data?.issues.length||0;
+ // `only`: the primary navigation already chose the register, so skip the inner tabs.
+ if(only)return <div className="mx-auto max-w-7xl">{initial==='plant'?<PlantList initialQuery={initialQuery}/>:initial==='other'?other:<><Workers initialQuery={initialQuery}/>{open>0&&<Section title="Migration issues"><Issues state={issues}/></Section>}</>}</div>;
  return <div className="mx-auto max-w-7xl p-4 sm:p-6">
   <PageHeader title="Resources" subtitle="Workers, competencies and plant used by the scheduler's conflict checks."/>
   <Tabs label="Resource registers" active={tab} onChange={setTab} tabs={[{key:'workers',label:'Workers'},{key:'plant',label:'Plant & equipment'},{key:'other',label:'Crews, suppliers & subcontractors',hidden:!other},{key:'issues',label:'Migration issues',badge:open?<Pill tone="warning">{open}</Pill>:undefined}]}/>

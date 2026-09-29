@@ -29,6 +29,18 @@ export function validPoint(p:unknown):p is LatLng{
 export const samePoint=(a:LatLng|null|undefined,b:LatLng|null|undefined)=>Boolean(a&&b&&Math.abs(a.lat-b.lat)<1e-7&&Math.abs(a.lng-b.lng)<1e-7);
 export const roundPoint=(p:LatLng):LatLng=>({lat:Math.round(p.lat*1e7)/1e7,lng:Math.round(p.lng*1e7)/1e7});
 
+/**
+ * Classifies what kind of Place result Google returned. This is deliberately NOT a statement
+ * about coordinate accuracy: Places `types` are categories, while true geocoding precision
+ * (ROOFTOP / RANGE_INTERPOLATED / etc.) only comes from a Geocoding response.
+ */
+export function placeResultKind(types:string[]|null|undefined):'ADDRESS'|'INTERSECTION'|'ROUTE'|'PLACE'{
+ if(types?.some(t=>['street_address','premise','subpremise'].includes(t)))return 'ADDRESS';
+ if(types?.includes('intersection'))return 'INTERSECTION';
+ if(types?.includes('route'))return 'ROUTE';
+ return 'PLACE';
+}
+
 type Component={longText?:string;shortText?:string;long_name?:string;short_name?:string;types:string[]};
 /**
  * Maps provider address components (Places API (New) `longText/shortText` or Geocoding
@@ -62,5 +74,5 @@ export function directionsUrl(l:{pin?:LatLng|null;geocoded?:LatLng|null;formatte
 }
 
 /** Precision labels that mean the provider point is only approximate (not a street address). */
-export const APPROXIMATE=new Set(['APPROXIMATE','GEOMETRIC_CENTER','locality','region']);
-export const precisionLabel=(p:string|null|undefined)=>!p?null:p==='ROOFTOP'?'Street address':p==='RANGE_INTERPOLATED'?'Interpolated street address':APPROXIMATE.has(p)?'Approximate area':p==='manual'?'Entered by hand':p;
+export const APPROXIMATE=new Set(['APPROXIMATE','GEOMETRIC_CENTER','locality','region','ROUTE','INTERSECTION','PLACE']);
+export const precisionLabel=(p:string|null|undefined)=>!p?null:p==='ROOFTOP'?'Rooftop geocode':p==='RANGE_INTERPOLATED'?'Interpolated geocode':p==='ADDRESS'?'Address result':p==='INTERSECTION'?'Intersection result':p==='ROUTE'?'Road / route result':p==='PLACE'?'Place result':APPROXIMATE.has(p)?'Approximate area':p==='manual'?'Entered by hand':p;

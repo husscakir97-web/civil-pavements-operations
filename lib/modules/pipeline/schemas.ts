@@ -6,6 +6,7 @@ export const tenderInput=z.object({
  clientName:z.string().trim().max(255).nullable().optional(),
  clientId:nullableId,
  siteId:nullableId,
+ contactId:nullableId,
  reference:z.string().trim().max(80).nullable().optional(),
  dueDate:z.string().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/).nullable().optional().or(z.literal('').transform(()=>null)),
  estimatedValue:z.coerce.number().min(0).max(1e12).nullable().optional(),

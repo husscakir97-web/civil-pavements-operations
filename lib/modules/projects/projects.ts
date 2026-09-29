@@ -40,7 +40,7 @@ export function projectMoney(p:Row){
 
 export function presentProject(p:Row,extra:Row={}){
  const meta=safeJson<Row>(p.metadata,{}),money=can(actor().role,'commercial.view');
- const out:Row={id:p.id,name:p.name,projectNumber:p.project_number,clientName:p.client_name??meta.client??null,clientId:p.client_id??null,siteId:p.site_id??null,stage:stageOf(p),stageLabel:stateLabel('project',stageOf(p)),legacyStatus:p.status,projectManagerUserId:p.project_manager_user_id,projectManagerName:p.project_manager_name??meta.projectManager??null,startDate:p.start_date??meta.startDate??null,practicalCompletionDate:p.practical_completion_date,finishDate:p.finish_date,siteAddress:p.site_address??meta.site??null,contractNumber:p.contract_number,contractType:p.contract_type,retentionPct:p.retention_pct,retentionEnabled:Boolean(Number(p.retention_enabled)),retentionCapAmount:p.retention_cap_amount==null?null:Number(p.retention_cap_amount),paymentTermsDays:p.payment_terms_days,defectsMonths:p.defects_months,scope:p.scope??meta.scope??null,assumptions:p.assumptions,exclusions:p.exclusions,clientRequirements:p.client_requirements,mobilisationNotes:p.mobilisation_notes,sourceTenderId:p.source_tender_id,sourceEstimateId:p.source_estimate_id??meta.sourceEstimateId??null,sourceEstimateRevisionId:p.source_estimate_revision_id??meta.sourceRevisionId??null,closedAt:p.closed_at,revision:Number(p.revision||1),createdAt:p.created_at,updatedAt:p.updated_at,...extra};
+ const out:Row={id:p.id,name:p.name,projectNumber:p.project_number,clientName:p.client_name??meta.client??null,clientId:p.client_id??null,siteId:p.site_id??null,contactId:p.contact_id??null,stage:stageOf(p),stageLabel:stateLabel('project',stageOf(p)),legacyStatus:p.status,projectManagerUserId:p.project_manager_user_id,projectManagerName:p.project_manager_name??meta.projectManager??null,startDate:p.start_date??meta.startDate??null,practicalCompletionDate:p.practical_completion_date,finishDate:p.finish_date,siteAddress:p.site_address??meta.site??null,contractNumber:p.contract_number,contractType:p.contract_type,retentionPct:p.retention_pct,retentionEnabled:Boolean(Number(p.retention_enabled)),retentionCapAmount:p.retention_cap_amount==null?null:Number(p.retention_cap_amount),paymentTermsDays:p.payment_terms_days,defectsMonths:p.defects_months,scope:p.scope??meta.scope??null,assumptions:p.assumptions,exclusions:p.exclusions,clientRequirements:p.client_requirements,mobilisationNotes:p.mobilisation_notes,sourceTenderId:p.source_tender_id,sourceEstimateId:p.source_estimate_id??meta.sourceEstimateId??null,sourceEstimateRevisionId:p.source_estimate_revision_id??meta.sourceRevisionId??null,closedAt:p.closed_at,revision:Number(p.revision||1),createdAt:p.created_at,updatedAt:p.updated_at,...extra};
  if(money)Object.assign(out,projectMoney(p));
  return out;
 }
@@ -126,9 +126,11 @@ export async function updateProject(id:string,revision:number,input:Row){
   if(stageOf(p)==='closed')fail(409,'This project is closed. Reopen it before making changes.');
   if(input.projectManagerUserId&&!await one('SELECT id FROM users WHERE organisation_id=? AND id=?',[a.organisationId,input.projectManagerUserId],conn))fail(400,'Choose a project manager from your organisation.');
   const set:Row={};for(const [k,c] of Object.entries(SETUP_FIELDS))if(k in input)set[c]=input[k]===''?null:input[k];
-  if('clientId' in input||'siteId' in input){
-   const ctx=await resolveClientContext('clientId' in input?input.clientId||null:p.client_id,'siteId' in input?input.siteId||null:p.site_id,conn);
+  if('clientId' in input||'siteId' in input||'contactId' in input){
+   const clientChanged='clientId' in input&&(input.clientId||null)!==(p.client_id||null);
+   const ctx=await resolveClientContext('clientId' in input?input.clientId||null:p.client_id,'siteId' in input?input.siteId||null:p.site_id,conn,'contactId' in input?input.contactId||null:clientChanged?null:p.contact_id);
    if('clientId' in input){set.client_id=ctx.clientId;if(ctx.clientName)set.client_name=ctx.clientName;}
+   if('contactId' in input||clientChanged)set.contact_id=ctx.contactId;
    if('siteId' in input){set.site_id=ctx.siteId;if(ctx.siteLabel&&!('siteAddress' in input))set.site_address=ctx.siteLabel;}
   }
   if(set.name!==undefined&&!String(set.name||'').trim())fail(400,'A project name is required.');
@@ -141,18 +143,18 @@ export async function updateProject(id:string,revision:number,input:Row){
 }
 
 /** Manual project (Projects-only or IMS-only customers, no tender/estimate). Baseline recorded separately. */
-export async function createProject(input:{name:string;clientName?:string|null;clientId?:string|null;siteId?:string|null;startDate?:string|null;siteAddress?:string|null}){
+export async function createProject(input:{name:string;clientName?:string|null;clientId?:string|null;siteId?:string|null;contactId?:string|null;startDate?:string|null;siteAddress?:string|null}){
  // Project-scoped roles work inside projects they are assigned to; creating new ones is organisation-level.
  const a=actor();if(!can(a.role,'project.edit')||!can(a.role,'project.all.view'))fail(403,'You are not authorised to create projects.');
  if(!input.name?.trim())fail(400,'A project name is required.');
  const id=uuid();
  await tx(async conn=>{
   // A chosen client/site wins over typed text; the text is kept as the project's snapshot.
-  const ctx=await resolveClientContext(input.clientId,input.siteId,conn);
+  const ctx=await resolveClientContext(input.clientId,input.siteId,conn,input.contactId);
   input={...input,clientName:ctx.clientName??input.clientName??null,siteAddress:input.siteAddress||ctx.siteLabel||null};
   const now=nowIso(),n=await one<{n:number}>('SELECT COUNT(*) AS n FROM jobs WHERE organisation_id=? AND project_number IS NOT NULL',[a.organisationId],conn);
   const number=`PRJ-${String(Number(n?.n||0)+1).padStart(4,'0')}`;
-  await exec('INSERT INTO jobs (id,organisation_id,name,status,metadata,created_at,project_number,client_name,stage,start_date,site_address,client_id,site_id,revision,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,a.organisationId,input.name.trim(),'Planning',JSON.stringify({client:input.clientName||'',site:input.siteAddress||'',startDate:input.startDate||''}),now,number,input.clientName||null,'setup',input.startDate||null,input.siteAddress||null,ctx.clientId,ctx.siteId,1,now],conn);
+  await exec('INSERT INTO jobs (id,organisation_id,name,status,metadata,created_at,project_number,client_name,stage,start_date,site_address,client_id,site_id,contact_id,revision,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,a.organisationId,input.name.trim(),'Planning',JSON.stringify({client:input.clientName||'',site:input.siteAddress||'',startDate:input.startDate||''}),now,number,input.clientName||null,'setup',input.startDate||null,input.siteAddress||null,ctx.clientId,ctx.siteId,ctx.contactId,1,now],conn);
   await ensureDefaultChecklist(conn,id,'readiness');
   await audit({event:'project.created',entityType:'project',entityId:id,projectId:id,summary:`${number} ${input.name} created manually (no estimate baseline)`,after:input},conn);
  });

@@ -19,7 +19,9 @@ async function load(db: Database, table: string): Promise<DeliveryRecord[]> {
   const r = await db.prepare(`SELECT * FROM ${table} WHERE organisation_id = ? ORDER BY created_at DESC`).bind(ORG()).all<Record<string,unknown>>();
   // Typed identifiers (0004) fill gaps in legacy metadata so the planner can search by plant number, rego or employee number.
   const typed=(row:Record<string,unknown>)=>Object.fromEntries(Object.entries({plantNumber:row.plant_number,rego:row.registration,category:row.category,make:row.make,model:row.model,employeeNumber:row.employee_number,roleTitle:row.role_title}).filter(([,v])=>v!=null&&v!==''));
-  return r.results.map(r => ({id:String(r.id), name:String(r.name), status:String(r.status), metadata:{...typed(r),...safeJson<Meta>(r.metadata,{})}, createdAt:String(r.created_at)}));
+  // Core client/site/contact links on jobs are the typed columns: they win over any older metadata copy.
+  const links=(row:Record<string,unknown>)=>table==='jobs'?Object.fromEntries(Object.entries({clientId:row.client_id,siteId:row.site_id,contactId:row.contact_id}).filter(([,v])=>v!=null&&v!=='')):{};
+  return r.results.map(r => ({id:String(r.id), name:String(r.name), status:String(r.status), metadata:{...typed(r),...safeJson<Meta>(r.metadata,{}),...links(r)}, createdAt:String(r.created_at)}));
 }
 async function handleGET(request: Request) {
   try { const db=requireEstimateDb(); const actor=await requireActor(request, db, 'field-read'); if(actor.role==='field'){const [jobs,shifts]=await Promise.all([load(db,'jobs'),load(db,'shifts')]);return Response.json({jobs:jobs.map(r=>fieldDelivery(r,'jobs')),shifts:shifts.map(r=>fieldDelivery(r,'shifts')),workers:[],crews:[],plant:[],suppliers:[],subcontractors:[]},{headers:{'Cache-Control':'private, no-store'}});} const rows=await Promise.all(tables.map(t=>load(db,t)));
@@ -54,6 +56,19 @@ async function handlePOST(request:Request) {
     if(body.kind==='jobs' && existing){
       const current=await db.prepare('SELECT stage FROM jobs WHERE organisation_id=? AND id=?').bind(ORG(),id).first<{stage:string|null}>();
       if(current?.stage==='closed') return jsonError('This project is closed. Reopen it from the project workspace before changing it.',409);
+    }
+    if(body.kind==='jobs'){
+      // Client, site and contact are chosen from the Core client master; ids are checked against this organisation.
+      const clientId=String(metadata.clientId||'')||null,siteId=String(metadata.siteId||'')||null,contactId=String(metadata.contactId||'')||null;
+      const c=clientId?await db.prepare("SELECT id,name FROM clients WHERE organisation_id=? AND id=? AND status<>'merged'").bind(ORG(),clientId).first<{id:string;name:string}>():null;
+      if(clientId&&!c)return jsonError('Client not found. Choose a client from the list.');
+      const site=siteId?await db.prepare('SELECT id,client_id FROM client_sites WHERE organisation_id=? AND id=?').bind(ORG(),siteId).first<{id:string;client_id:string|null}>():null;
+      if(siteId&&(!site||(site.client_id&&site.client_id!==clientId)))return jsonError('Choose a site that belongs to the client.');
+      const contact=contactId?await db.prepare('SELECT id,client_id FROM client_contacts WHERE organisation_id=? AND id=?').bind(ORG(),contactId).first<{id:string;client_id:string}>():null;
+      if(contactId&&(!contact||contact.client_id!==clientId))return jsonError('Choose a contact that belongs to the client.');
+      if(c)metadata.client=c.name;
+      const touched=clientId||siteId||contactId||existing?.metadata.clientId||existing?.metadata.siteId||existing?.metadata.contactId;
+      if(touched)sync.push({sql:`UPDATE jobs SET client_id=?,site_id=?,contact_id=?${c?',client_name=?':''} WHERE organisation_id=? AND id=?`,params:[clientId,siteId,contactId,...(c?[c.name]:[]),ORG(),id]});
     }
     if(body.kind==='jobs' && record.status==='Ready to Commence'){
       const blockers=await imsBlockers(db,ORG(),id);

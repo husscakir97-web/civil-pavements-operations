@@ -35,6 +35,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
+import { ClientPicker, SitePicker, ContactPicker } from "@/components/v1/lookup";
 import {
   DEFAULT_RATE_LIBRARY,
   calculateEstimate,
@@ -165,7 +166,6 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
   const [fetchedWorkflow, setFetchedWorkflow] = useState<string | null>(null);
   const [rateLibraries, setRateLibraries] = useState<RateLibrary[]>([DEFAULT_RATE_LIBRARY]);
   const [activeLibrary, setActiveLibrary] = useState<RateLibrary>(DEFAULT_RATE_LIBRARY);
-  const [clients, setClients] = useState<Lookup[]>([]);
   const [opportunities, setOpportunities] = useState<Lookup[]>([]);
   const [jobs, setJobs] = useState<Lookup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -195,7 +195,6 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
     setRateLibraries(payload.rateLibraries ?? [DEFAULT_RATE_LIBRARY]);
     const library = payload.rateLibraries?.[0] ?? DEFAULT_RATE_LIBRARY;
     setActiveLibrary(library);
-    setClients(payload.clients ?? []);
     setOpportunities(payload.opportunities ?? []);
     setJobs(payload.jobs ?? []);
     const linkedId = opportunityId ? payload.estimates?.find(estimate => estimate.data.opportunityId === opportunityId)?.id : undefined;
@@ -461,10 +460,11 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
 
           <Section className={estimateStep==="Scope & Quantities"?"":"hidden"} icon={FileText} title="Client, project & scope" description="Link the estimate to the opportunity and describe the work being priced.">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Field label="Client" hint="Select a known client or enter a new name." className="lg:col-span-2"><NativeSelect disabled={readOnly} value={form.clientId || "__custom"} onChange={(event) => { const value = event.target.value; const client = clients.find((item) => item.id === value); setForm((previous) => ({ ...previous, clientId: value === "__custom" ? "" : value, clientName: client?.name ?? previous.clientName })); }}><NativeSelectOption value="__custom">Enter client name…</NativeSelectOption>{clients.map((client) => <NativeSelectOption key={client.id} value={client.id}>{client.name}{client.source === "docket" ? " · from dockets" : ""}</NativeSelectOption>)}</NativeSelect><Input disabled={readOnly} className="mt-2" value={form.clientName} onChange={(event) => setField("clientName", event.target.value)} placeholder="Client / principal contractor" /></Field>
+              <div className="lg:col-span-2"><ClientPicker disabled={readOnly} value={form.clientId||null} legacyName={form.clientId?null:form.clientName||null} onChange={(client) => setForm((previous) => ({ ...previous, clientId: client?.id ?? "", clientName: client?.name ?? previous.clientName, siteId: client && client.sites.some((x) => x.id === previous.siteId) ? previous.siteId : client?.sites.length === 1 ? client.sites[0].id : "", site: client?.sites.length === 1 && !previous.site ? client.sites[0].label : previous.site, contactId: client && (client.contacts || []).some((x) => x.id === previous.contactId) ? previous.contactId : (client?.contacts || []).find((x) => x.isPrimary)?.id ?? "" }))}/></div>
               <Field label="Opportunity" className="lg:col-span-2"><NativeSelect disabled={readOnly} value={form.opportunityId || "__custom"} onChange={(event) => { const value = event.target.value; const opportunity = opportunities.find((item) => item.id === value); setForm((previous) => ({ ...previous, opportunityId: value === "__custom" ? "" : value, opportunityName: opportunity?.name ?? previous.opportunityName })); }}><NativeSelectOption value="__custom">No linked opportunity / enter name…</NativeSelectOption>{opportunities.map((opportunity) => <NativeSelectOption key={opportunity.id} value={opportunity.id}>{opportunity.name}</NativeSelectOption>)}</NativeSelect><Input disabled={readOnly} className="mt-2" value={form.opportunityName} onChange={(event) => setField("opportunityName", event.target.value)} placeholder="Opportunity or tender reference" /></Field>
               <Field label="Project"><Input disabled={readOnly} value={form.projectName} onChange={(event) => setField("projectName", event.target.value)} placeholder="Project name" /></Field>
-              <Field label="Site"><Input disabled={readOnly} value={form.site} onChange={(event) => setField("site", event.target.value)} placeholder="Work location" /></Field>
+              {form.clientId ? <><SitePicker disabled={readOnly} clientId={form.clientId} value={form.siteId||null} onChange={(site) => setForm((previous) => ({ ...previous, siteId: site?.id ?? "", site: site ? site.label : previous.site }))}/><ContactPicker disabled={readOnly} clientId={form.clientId} value={form.contactId||null} onChange={(contact) => setForm((previous) => ({ ...previous, contactId: contact?.id ?? "" }))}/></> : null}
+              <Field label="Site / location"><Input disabled={readOnly} value={form.site} onChange={(event) => setField("site", event.target.value)} placeholder="Work location" /></Field>
               <Field label="Work type"><NativeSelect disabled={readOnly} value={form.workType} onChange={(event) => setField("workType", event.target.value)}><NativeSelectOption value="Asphalt resurfacing">Asphalt resurfacing</NativeSelectOption><NativeSelectOption value="Profiling / milling">Profiling / milling</NativeSelectOption><NativeSelectOption value="Pavement maintenance">Pavement maintenance</NativeSelectOption><NativeSelectOption value="Traffic management">Traffic management</NativeSelectOption><NativeSelectOption value="Spray seal">Spray seal</NativeSelectOption><NativeSelectOption value="Civil works">Civil works</NativeSelectOption></NativeSelect></Field>
               <Field label="Specification" className="sm:col-span-2 lg:col-span-4"><Textarea disabled={readOnly} value={form.specification} onChange={(event) => setField("specification", event.target.value)} rows={2} placeholder="Specification, mix, finish, testing and scope detail" /></Field>
             </div>

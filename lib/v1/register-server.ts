@@ -11,7 +11,7 @@ import {query,one,exec,tx,nowIso,uuid,round2,type Row,type Conn} from '@/lib/pla
 import {REGISTERS,registerDef,riskRating,DEFAULT_RISK_MATRIX,type RegisterDef,type FieldDef,type RiskMatrix} from './registers';
 import {requireModule} from '@/lib/platform/entitlements';
 import {getPool} from '@/lib/platform/database';
-import {resolveClientContext} from '@/lib/platform/clients';
+import {resolveClientContext,visibleClientIds} from '@/lib/platform/clients';
 import {canAccessProject,projectFilter} from '@/lib/platform/project-access';
 const getPoolConn=()=>getPool();
 
@@ -82,9 +82,12 @@ async function orgMatrix(conn:Conn):Promise<RiskMatrix>{
 
 async function derive(def:RegisterDef,values:Row,existing:Row|null,conn:Conn){
  // Client/site pickers store the id and a readable snapshot; a legacy text value is kept until a client is chosen.
- const client=def.fields.find(f=>f.type==='client'),site=def.fields.find(f=>f.type==='site');
- if((client&&client.key in values)||(site&&site.key in values)){
-  const ctx=await resolveClientContext(client?(client.key in values?values[client.key]:existing?.[client.key]):null,site?(site.key in values?values[site.key]:existing?.[site.key]):null,conn);
+ const client=def.fields.find(f=>f.type==='client'),site=def.fields.find(f=>f.type==='site'),contact=def.fields.find(f=>f.type==='contact');
+ const pick=(f:typeof client)=>f?(f.key in values?values[f.key]:existing?.[f.key]):null;
+ if((client&&client.key in values)||(site&&site.key in values)||(contact&&contact.key in values)){
+  // Changing the client clears a contact that belonged to the previous client.
+  if(client&&client.key in values&&contact&&!(contact.key in values)&&existing?.[contact.key]&&values[client.key]!==existing?.[client.key])values[contact.key]=null;
+  const ctx=await resolveClientContext(pick(client),pick(site),conn,pick(contact));
   if(client?.snapshot&&client.key in values&&ctx.clientName)values[client.snapshot]=ctx.clientName;
   if(site?.snapshot&&site.key in values&&ctx.siteLabel&&!values[site.snapshot])values[site.snapshot]=ctx.siteLabel;
  }
@@ -131,6 +134,8 @@ export async function listRegister(key:string,params:URLSearchParams){
  for(const [k,v] of Object.entries(def.fixed||{})){where.push(`t.${k}=?`);values.push(v);}
  const state=params.get('state');if(state){where.push(`t.${stateCol(def)}=?`);values.push(state);}
  if(def.key==='requirements')where.push("t.tender_id IS NOT NULL");
+ // The client master is narrowed to the clients of a project-scoped user's own projects; merged clients never list.
+ if(def.key==='clients'){where.push("t.status<>'merged'");const ids=await visibleClientIds();if(ids){where.push('t.id IN (?)');values.push(ids.length?ids:['-']);}}
  const joinProject=col==='project_id'||def.scope==='itp';
  // Cross-project listings (all=1, optional-project registers) are narrowed to the actor's projects; org-level rows stay.
  if(!parentId&&joinProject){const f=await projectFilter('t.project_id',values,{allowNull:def.scope==='optional-project'});if(f)where.push(f.replace(/^ AND /,''));}

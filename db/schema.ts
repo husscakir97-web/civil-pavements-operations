@@ -60,7 +60,15 @@ export const clients=mysqlTable('clients',{
  createdBy:varchar('created_by',{length:191}),
  createdAt:varchar('created_at',{length:40}),
  updatedAt:varchar('updated_at',{length:40}),
-},t=>[index('idx_clients_org').on(t.organisationId)]);
+ // CRM completion (0016): identity, contact and commercial fields plus merge lineage.
+ clientCode:varchar('client_code',{length:80}),
+ website:varchar('website',{length:255}),
+ billingEmail:varchar('billing_email',{length:254}),
+ creditStatus:varchar('credit_status',{length:30}),
+ tags:varchar('tags',{length:500}),
+ ownerUserId:varchar('owner_user_id',{length:191}),
+ mergedIntoId:varchar('merged_into_id',{length:191}),
+},t=>[index('idx_clients_org').on(t.organisationId),index('idx_clients_org_abn').on(t.organisationId,t.abn),index('idx_clients_org_code').on(t.organisationId,t.clientCode)]);
 
 export const commercialRecords=mysqlTable('commercial_records',{
  id:varchar('id',{length:191}).primaryKey(),
@@ -265,6 +273,7 @@ export const jobs=mysqlTable('jobs',{
  updatedAt:varchar('updated_at',{length:40}),
  clientId:varchar('client_id',{length:191}),
  siteId:varchar('site_id',{length:191}),
+ contactId:varchar('contact_id',{length:191}),
 },t=>[index('idx_jobs_org_client').on(t.organisationId,t.clientId),index('idx_jobs_org').on(t.organisationId),index('idx_jobs_org_stage').on(t.organisationId,t.stage),uniqueIndex('idx_jobs_source_tender').on(t.organisationId,t.sourceTenderId),uniqueIndex('idx_jobs_source_estimate').on(t.organisationId,t.sourceEstimateId)]);
 
 export const opportunities=mysqlTable('opportunities',{
@@ -291,6 +300,7 @@ export const opportunities=mysqlTable('opportunities',{
  updatedAt:varchar('updated_at',{length:40}),
  clientId:varchar('client_id',{length:191}),
  siteId:varchar('site_id',{length:191}),
+ contactId:varchar('contact_id',{length:191}),
 },t=>[index('idx_opportunities_org_client').on(t.organisationId,t.clientId),index('idx_opportunities_org').on(t.organisationId),index('idx_opportunities_org_stage').on(t.organisationId,t.stage)]);
 
 export const organisations=mysqlTable('organisations',{

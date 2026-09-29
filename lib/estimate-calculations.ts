@@ -91,6 +91,9 @@ export type EstimateData = {
   name: string;
   clientId: string;
   clientName: string;
+  /** Core client site and contact chosen for the estimate (optional; text snapshots stay in clientName/site). */
+  siteId?: string;
+  contactId?: string;
   opportunityId: string;
   opportunityName: string;
   projectName: string;
@@ -420,6 +423,8 @@ export function normaliseEstimateData(input: unknown, library: RateLibrary = DEF
     name: textValue(raw.name),
     clientId: textValue(raw.clientId),
     clientName: textValue(raw.clientName),
+    siteId: textValue(raw.siteId),
+    contactId: textValue(raw.contactId),
     opportunityId: textValue(raw.opportunityId),
     opportunityName: textValue(raw.opportunityName),
     projectName: textValue(raw.projectName),

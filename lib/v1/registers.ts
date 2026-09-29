@@ -5,7 +5,7 @@ import type {Capability} from '@/lib/platform/permissions';
 import type {MachineKey} from '@/lib/platform/workflow';
 import type {ModuleKey} from '@/lib/platform/modules';
 
-export type FieldType='text'|'textarea'|'number'|'money'|'date'|'datetime'|'select'|'boolean'|'user'|'rating'|'document'|'relation'|'client'|'site';
+export type FieldType='text'|'textarea'|'number'|'money'|'date'|'datetime'|'select'|'boolean'|'user'|'rating'|'document'|'relation'|'client'|'site'|'contact';
 export type FieldDef={
  key:string;label:string;type:FieldType;column?:string;
  options?:readonly string[];required?:boolean;max?:number;min?:number;help?:string;
@@ -57,7 +57,7 @@ export const RISK_CATEGORIES=['safety','environmental','quality','commercial','p
 export const REGISTERS={
  opportunities:{key:'opportunities',table:'opportunities',label:'Opportunities',singular:'Opportunity',module:'pipeline',scope:'org',titleField:'name',machine:'opportunity',stateColumn:'stage',view:'pipeline.view',edit:'pipeline.edit',
   empty:'No opportunities are in your pipeline yet. Record the work you are chasing so it can be qualified and tendered.',createLabel:'New opportunity',
-  fields:[text('name','Opportunity',{required:true,list:true}),{key:'client_id',label:'Client',type:'client',snapshot:'client_name'},{key:'client_name',label:'Client',type:'text',derived:true,list:true},user('owner_user_id','Owner',{list:true}),money('estimated_value','Estimated value',{list:true}),{key:'probability',label:'Probability %',type:'number',min:0,max:100,list:true},date('closing_date','Closing date',{list:true}),{key:'site_id',label:'Site',type:'site',snapshot:'location'},text('location','Location',{help:'Filled from the site when one is chosen.'}),area('notes','Notes'),area('lost_reason','Lost reason')]},
+  fields:[text('name','Opportunity',{required:true,list:true}),{key:'client_id',label:'Client',type:'client',snapshot:'client_name'},{key:'client_name',label:'Client',type:'text',derived:true,list:true},user('owner_user_id','Owner',{list:true}),money('estimated_value','Estimated value',{list:true}),{key:'probability',label:'Probability %',type:'number',min:0,max:100,list:true},date('closing_date','Closing date',{list:true}),{key:'site_id',label:'Site',type:'site',snapshot:'location'},{key:'contact_id',label:'Client contact',type:'contact'},text('location','Location',{help:'Filled from the site when one is chosen.'}),area('notes','Notes'),area('lost_reason','Lost reason')]},
  clients:{key:'clients',table:'clients',label:'Clients',singular:'Client',module:'core',scope:'org',titleField:'name',view:'project.view',edit:'pipeline.edit',
   empty:'No clients yet. Add your first client once, then reuse it across opportunities, projects and work.',createLabel:'Add client',
   fields:[text('name','Client',{required:true,list:true}),text('legal_name','Legal name'),text('abn','ABN',{max:20,list:true}),text('contact_name','Primary contact',{max:160,list:true}),text('email','Email',{max:254,list:true}),text('phone','Phone',{max:60}),select('status','Status',['active','inactive'],{list:true}),area('notes','Notes',{max:5000})]},

@@ -207,7 +207,10 @@ for(const r of perm.ROLES)for(const q of appNav.quickActions(r,access(r)))assert
  assert.deepEqual(sr.searchTarget(r('Docket',{area:'Operations/Dockets'}),'admin'),['Operations','Dockets'],'docket without a project opens the docket register');
  assert.deepEqual(sr.searchTarget(r('Shift',{projectId:'p1',area:'Operations/Schedule'}),'scheduler'),['Operations','Schedule','p1']);
  assert.deepEqual(sr.searchTarget(r('Shift',{projectId:'p1',area:'Operations/Schedule'}),'field'),['Operations','Schedule']);
- assert.deepEqual(sr.searchTarget(r('Client',{name:'Abergeldie'}),'admin'),['Win Work','Clients','Abergeldie'],'client opens the Clients register filtered to it');
+ // Intended change (CRM tranche): clients, contacts and sites open the client record in CRM by id.
+ assert.deepEqual(sr.searchTarget(r('Client',{id:'c1',name:'Abergeldie'}),'admin'),['CRM','Clients','c1'],'client opens its CRM record');
+ assert.deepEqual(sr.searchTarget(r('Contact',{id:'k1',clientId:'c1'}),'admin'),['CRM','Clients','c1'],'contact opens its client');
+ assert.deepEqual(sr.searchTarget(r('Site',{id:'s1',clientId:'c1'}),'admin'),['CRM','Clients','c1'],'site opens its client');
  assert.deepEqual(sr.searchTarget(r('Plant',{name:'TMA truck'}),'scheduler'),['Resource Work','Resources','TMA truck','plant'],'plant opens the Plant tab filtered to it');
  assert.deepEqual(sr.searchTarget(r('Worker',{name:'John Smith'}),'scheduler'),['Resource Work','Resources','John Smith','workers']);
  assert.deepEqual(sr.searchTarget(r('Library item',{name:'Public Liability'}),'office'),['Prepare Work','Company Library','Public Liability']);
@@ -376,6 +379,40 @@ assert.deepEqual(rm.mapWorker({id:'w',name:'Sam',status:'Active',metadata:{compe
  assert.equal(bill.billingConfigured({BILLING_PROVIDER:'x'}),false);assert.equal(bill.isPlatformOperator('Ops@Example.com',{PLATFORM_OPERATOR_EMAILS:'ops@example.com, x@y.z'}),true);assert.equal(bill.isPlatformOperator('a@b.c',{}),false);
  console.log('PASS adapters: ABR parse/adapter (not-configured/invalid/found/not-found/errors), AI gates (key alone never enables), provider call shape, billing signatures/tolerance/entitlement mapping');
 })().catch(e=>{console.error(e);process.exitCode=1;});
+// CRM matching: deterministic, normalised comparison; uncertain signals are only "possible".
+{const m=load('lib/v1/crm-match.ts');
+ assert.equal(m.abnDigits('51 824 753 556'),'51824753556');assert.equal(m.strongAbn('51 824 753 556'),'51824753556');assert.equal(m.strongAbn('51 824 753 557'),null,'an ABN with a bad checksum never matches');
+ assert.equal(m.nameKey('  ABC   Civil Pty. Ltd. '),'abc civil pty ltd');assert.equal(m.coreNameKey('ABC Civil Pty Ltd'),'abc civil');assert.equal(m.coreNameKey('The ABC Civil Group'),'abc civil');
+ assert.equal(m.phoneKey('+61 2 9000 0000'),'0290000000');assert.equal(m.phoneKey('12'),null);assert.equal(m.emailDomain('a@Example.com.au'),'example.com.au');assert.equal(m.emailDomain('a@gmail.com'),null,'free mail says nothing about the company');
+ const existing=[{id:'a',name:'Abergeldie',legalName:'Abergeldie Complex Infrastructure Pty Ltd',abn:'51824753556',clientCode:'ABG',email:'office@abergeldie.com.au',phone:'02 9000 0000',status:'active'},{id:'b',name:'Example Civil',legalName:null,abn:null,clientCode:null,status:'active'},{id:'c',name:'Example Civil',legalName:null,abn:null,clientCode:null,status:'active'},{id:'d',name:'Old Name',abn:'53004085616',status:'merged'}];
+ assert.equal(m.matchClient({name:'Anything',abn:'51 824 753 556'},existing).match.id,'a','valid ABN is a strong match');
+ assert.equal(m.matchClient({name:'x',clientCode:' abg '},existing).match.id,'a','client code is a strong match');
+ assert.equal(m.matchClient({name:'abergeldie  complex infrastructure pty ltd'},existing).match.id,'a','exact normalised legal name');
+ assert.equal(m.matchClient({name:'Abergeldie',abn:'53 004 085 616'},existing).kind,'possible','same name but a different ABN is never merged');
+ assert.equal(m.matchClient({name:'Example Civil'},existing).kind,'possible','two clients with one name are never guessed');
+ assert.equal(m.matchClient({name:'Abergeldie Group'},existing).kind,'possible','suffix-insensitive similarity is only a suggestion');
+ assert.equal(m.matchClient({name:'New Co',email:'jo@abergeldie.com.au'},existing).kind,'possible','shared business email domain is a suggestion');
+ assert.equal(m.matchClient({name:'Brand New Pty Ltd'},existing).kind,'none');
+ assert.equal(m.matchClient({name:'Old Name',abn:'53004085616'},existing).kind,'none','merged clients never match');
+ const contacts=[{id:'k1',clientId:'a',name:'Guy Beca',email:'guy@abergeldie.com.au',phone:'0400 000 001',status:'active'},{id:'k2',clientId:'b',name:'Guy Beca',status:'active'}];
+ assert.equal(m.matchContact('a',{name:'Someone',email:'GUY@abergeldie.com.au'},contacts).match.id,'k1','same email within the client');
+ assert.equal(m.matchContact('a',{name:'guy  beca'},contacts).match.id,'k1','same name within the client');
+ assert.equal(m.matchContact('a',{name:'Guy Beca',email:'other@abergeldie.com.au'},contacts).kind,'possible','same name, different email → a person decides');
+ assert.equal(m.matchContact('a',{name:'G B',mobile:'+61 400 000 001'},contacts).kind,'possible','same phone only → possible');
+ assert.equal(m.matchContact('c',{name:'Guy Beca'},contacts).kind,'none','contacts never match across clients');
+ const sites=[{id:'s1',clientId:'a',name:'Dover Road',address:'1 Dover Rd, Rose Bay',status:'active'}];
+ assert.equal(m.matchSite('a',{name:'dover road'},sites).match.id,'s1');assert.equal(m.matchSite('a',{name:'Depot',address:'1 Dover Rd,  Rose Bay'},sites).match.id,'s1','same exact address');assert.equal(m.matchSite('b',{name:'Dover Road'},sites).kind,'none');
+ assert.equal(m.legacyClientFor('Example Civil',existing).status,'ambiguous','two candidates → not linked');assert.equal(m.legacyClientFor(' abergeldie ',existing).client.id,'a');assert.equal(m.legacyClientFor('Aberg',existing).status,'none','partial names never link');
+ const imp=load('lib/platform/crm-import.ts')._test;
+ let errors=[],warnings=[];let v=imp.clientValues({legalName:'Legal Only Pty Ltd',abn:'51 824 753 556',email:'x@y.com',paymentTermsDays:'30',status:'Inactive'},false,errors,warnings);
+ assert.deepEqual(errors,[]);assert.equal(v.name,'Legal Only Pty Ltd','legal name stands in when there is no trading name');assert.equal(v.abn,'51824753556');assert.equal(v.status,'inactive');assert.equal(v.paymentTermsDays,undefined,'commercial columns ignored without commercial access');assert(warnings.length);
+ errors=[];v=imp.clientValues({name:'Bad',abn:'123',email:'nope',paymentTermsDays:'many'},true,errors,[]);assert.equal(errors.length,3,'invalid ABN, email and terms are row errors');
+ assert.equal(imp.guessKind('Contacts'),'contacts');assert.equal(imp.guessKind('Site list'),'sites');assert.equal(imp.guessKind('Customers'),'clients');
+ const ExcelJS=require('exceljs'),sp=load('lib/platform/spreadsheet.ts'),wb=new ExcelJS.Workbook(),ws=wb.addWorksheet('Customers');ws.addRow(['Company','ABN','Contact','Mystery column']);ws.addRow(['ABC Civil','51 824 753 556','Sam Lee','x']);ws.addRow([]);ws.addRow(['DEF Roads','','','']);
+ const parsed=sp.parseSheet(ws,imp.DEFS.clients);assert.deepEqual(parsed.heads.map(h=>h.key),['name','abn','contactName',null],'common headings map, unknown ones stay unmapped');assert.equal(parsed.rows.length,2,'blank rows skipped');
+ const manual=sp.parseSheet(ws,imp.DEFS.clients,{'Mystery column':'notes'});assert.equal(manual.heads[3].key,'notes','manual mapping applies');
+ assert.throws(()=>sp.parseSheet(ws,imp.DEFS.clients,{'Mystery column':'name'}),/More than one column/,'two columns cannot map to one field');}
+console.log('PASS CRM matching: ABN/phone/email normalisation, deterministic client/contact/site matching, possible duplicates, legacy linking, import value validation and heading mapping');
 const {parsePastedItems}=load('lib/v1/estimate-paste.ts');
 const pasted=parsePastedItems('Description\tQty\tUnit\tRate\nProfile 50mm\t1,200\tm2\t$4.50\nAC14\t180\tt\t165\tmaterial\tWearing\nbad row\tx\tm\t1',  'General',i=>'i'+i);
 assert.equal(pasted.items.length,2);assert.equal(pasted.items[0].quantity,1200);assert.equal(pasted.items[0].rate,4.5);assert.equal(pasted.items[0].category,'other');assert.equal(pasted.items[1].category,'material');assert.equal(pasted.items[1].section,'Wearing');assert.deepEqual(pasted.skipped,[4]);

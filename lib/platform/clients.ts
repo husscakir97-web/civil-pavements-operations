@@ -1,7 +1,9 @@
-// Core clients and sites: created once, selected everywhere (opportunities,
-// tenders, projects, shifts via their project). Every query is scoped to the
-// session organisation. Transactions keep a text snapshot (client_name,
-// location/site_address) next to client_id/site_id so history survives edits.
+// Core client master: clients, their contacts and reusable sites. Created once,
+// selected everywhere (opportunities, tenders, estimates, projects, jobs). This is
+// Core — every module that needs a client uses the same records. Every query is
+// scoped to the session organisation. Transactions keep a text snapshot
+// (client_name, location/site_address) next to client_id/site_id/contact_id so
+// history survives later edits and renames.
 import {z} from 'zod';
 import {actorContext} from './context';
 import {can} from './permissions';
@@ -9,161 +11,378 @@ import {audit} from './audit';
 import {fail} from './http';
 import {query,one,exec,tx,nowIso,uuid,type Conn,type Row} from './sql';
 import {getPool} from './database';
+import {orgWideProjects,memberProjectIds} from './project-access';
+import {matchClient,matchContact,matchSite,strongAbn,abnDigits,collapse,legacyClientFor} from '@/lib/v1/crm-match';
 
 const actor=()=>actorContext.getStore()!;
-export const canViewClients=(role:string)=>can(role,'pipeline.view')||can(role,'project.view');
-export const canEditClients=(role:string)=>can(role,'pipeline.edit')||can(role,'project.edit');
+/** Anyone who works with pipeline, projects or the schedule can see and pick clients. */
+export const canViewClients=(role:string)=>can(role,'pipeline.view')||can(role,'project.view')||can(role,'schedule.view');
+/**
+ * Creating and editing the master: sales/estimating, schedulers (operational quick create) and
+ * organisation-wide project roles. Project/Site Engineers are project-scoped and do not manage the master.
+ */
+export const canEditClients=(role:string)=>can(role,'pipeline.edit')||can(role,'schedule.edit')||(can(role,'project.edit')&&can(role,'project.all.view'));
+/** Merging and legacy linking change many records: organisation-level managers only. */
+export const canManageClients=(role:string)=>can(role,'pipeline.edit')&&can(role,'project.all.view')||can(role,'org.admin');
+const commercial=(role:string)=>can(role,'commercial.view');
 function needView(){if(!canViewClients(actor().role))fail(403,'You are not authorised to view clients.');}
 function needEdit(){if(!canEditClients(actor().role))fail(403,'You are not authorised to change clients.');}
+function needManage(){if(!canManageClients(actor().role))fail(403,'You are not authorised to merge or link clients.');}
 
-export type ClientSummary={id:string;name:string;legalName:string|null;abn:string|null;contactName:string;email:string;phone:string;status:string;revision:number;sites:SiteSummary[];contacts:ContactSummary[]};
-export type ContactSummary={id:string;clientId:string;name:string;role:string|null;email:string|null;phone:string|null;mobile:string|null;isPrimary:boolean;revision:number};
-export type SiteSummary={id:string;clientId:string|null;name:string;address:string|null;label:string};
+export type ContactSummary={id:string;clientId:string;name:string;firstName:string|null;lastName:string|null;role:string|null;department:string|null;email:string|null;phone:string|null;mobile:string|null;isPrimary:boolean;status:string;notes:string|null;revision:number};
+export type SiteSummary={id:string;clientId:string|null;name:string;address:string|null;suburb:string|null;state:string|null;postcode:string|null;siteContact:string|null;accessNotes:string|null;status:string;label:string;revision:number};
+export type ClientSummary={id:string;name:string;legalName:string|null;abn:string|null;clientCode:string|null;contactName:string;email:string;phone:string;website:string|null;tags:string[];ownerUserId:string|null;notes:string|null;status:string;mergedIntoId:string|null;revision:number;sites:SiteSummary[];contacts:ContactSummary[];
+ /** Commercial fields: present only for roles with commercial access. */
+ paymentTermsDays?:number|null;creditStatus?:string|null;billingEmail?:string|null;accountReference?:string|null};
 
 export const siteLabel=(s:{name:string;address?:string|null;suburb?:string|null})=>[s.name,s.address&&s.address!==s.name?s.address:null,s.suburb].filter(Boolean).join(', ');
-const site=(r:Row):SiteSummary=>({id:r.id,clientId:r.client_id??null,name:r.name,address:r.address??null,label:siteLabel(r as {name:string})});
-const contact=(r:Row):ContactSummary=>({id:r.id,clientId:r.client_id,name:r.name,role:r.role??null,email:r.email??null,phone:r.phone??null,mobile:r.mobile??null,isPrimary:Boolean(Number(r.is_primary)),revision:Number(r.revision||1)});
-const client=(r:Row,sites:SiteSummary[],contacts:ContactSummary[]=[]):ClientSummary=>({id:r.id,name:r.name,legalName:r.legal_name??null,abn:r.abn??null,contactName:r.contact_name||'',email:r.email||'',phone:r.phone||'',status:r.status||'active',revision:Number(r.revision||1),sites,contacts});
+const site=(r:Row):SiteSummary=>({id:r.id,clientId:r.client_id??null,name:r.name,address:r.address??null,suburb:r.suburb??null,state:r.state??null,postcode:r.postcode??null,siteContact:r.site_contact??null,accessNotes:r.access_notes??null,status:r.status||'active',label:siteLabel(r as {name:string}),revision:Number(r.revision||1)});
+const contact=(r:Row):ContactSummary=>({id:r.id,clientId:r.client_id,name:r.name,firstName:r.first_name??null,lastName:r.last_name??null,role:r.role??null,department:r.department??null,email:r.email??null,phone:r.phone??null,mobile:r.mobile??null,isPrimary:Boolean(Number(r.is_primary)),status:r.status||'active',notes:r.notes??null,revision:Number(r.revision||1)});
+function client(r:Row,sites:SiteSummary[],contacts:ContactSummary[]=[]):ClientSummary{
+ const out:ClientSummary={id:r.id,name:r.name,legalName:r.legal_name??null,abn:r.abn??null,clientCode:r.client_code??null,contactName:r.contact_name||'',email:r.email||'',phone:r.phone||'',website:r.website??null,tags:String(r.tags||'').split(',').map(t=>t.trim()).filter(Boolean),ownerUserId:r.owner_user_id??null,notes:r.notes??null,status:r.status||'active',mergedIntoId:r.merged_into_id??null,revision:Number(r.revision||1),sites,contacts};
+ if(commercial(actor().role))Object.assign(out,{paymentTermsDays:r.payment_terms_days??null,creditStatus:r.credit_status??null,billingEmail:r.billing_email??null,accountReference:r.account_reference??null});
+ return out;
+}
 const like=(q:string)=>`%${q.replace(/[\\%_]/g,m=>'\\'+m)}%`;
 
-/** Searchable client list with each client's sites. Small registers are returned whole for instant client-side filtering. */
-export async function listClients(q=''){
- needView();
- const org=actor().organisationId,term=q.trim().slice(0,120);
- // Legacy clients columns are utf8mb4_bin (case-sensitive), so compare lower-cased.
- const where=term?' AND (LOWER(name) LIKE ? OR LOWER(legal_name) LIKE ? OR LOWER(abn) LIKE ? OR LOWER(contact_name) LIKE ? OR LOWER(account_reference) LIKE ?)':'';
- const rows=await query(`SELECT * FROM clients WHERE organisation_id=?${where} ORDER BY status='active' DESC,name LIMIT 500`,[org,...(term?Array(5).fill(like(term.toLowerCase())):[])]);
- const ids=rows.map(r=>r.id);
- const sites=ids.length?await query("SELECT * FROM client_sites WHERE organisation_id=? AND client_id IN (?) AND status='active' ORDER BY name",[org,ids]):[];
- const contacts=ids.length?await query("SELECT * FROM client_contacts WHERE organisation_id=? AND client_id IN (?) AND status='active' ORDER BY is_primary DESC,name",[org,ids]):[];
- return {clients:rows.map(r=>client(r,sites.filter(s=>s.client_id===r.id).map(site),contacts.filter(c=>c.client_id===r.id).map(contact)))};
+/**
+ * Clients this user may see. Organisation-wide roles: every client (null). Project/Site
+ * Engineers: only clients of projects they are assigned to — never the whole master.
+ */
+export async function visibleClientIds(conn?:Conn):Promise<string[]|null>{
+ const a=actor();
+ if(orgWideProjects(a))return null;
+ const ids=await memberProjectIds(a,conn);
+ if(!ids.length)return [];
+ return (await query<{id:string}>('SELECT DISTINCT client_id AS id FROM jobs WHERE organisation_id=? AND id IN (?) AND client_id IS NOT NULL',[a.organisationId,ids],conn)).map(r=>r.id);
+}
+async function scopeSql(column:string,params:unknown[],conn?:Conn){const ids=await visibleClientIds(conn);if(!ids)return '';params.push(ids.length?ids:['-']);return ` AND ${column} IN (?)`;}
+async function assertVisible(id:string,conn?:Conn){const ids=await visibleClientIds(conn);if(ids&&!ids.includes(id))fail(404,'Client not found.');}
+
+async function attach(rows:Row[],conn:Conn=getPool(),includeInactive=false){
+ const org=actor().organisationId,ids=rows.map(r=>r.id);
+ const status=includeInactive?"status<>'archived'":"status='active'";
+ const sites=ids.length?await query(`SELECT * FROM client_sites WHERE organisation_id=? AND client_id IN (?) AND ${includeInactive?"status<>'merged'":"status='active'"} ORDER BY name`,[org,ids],conn):[];
+ const contacts=ids.length?await query(`SELECT * FROM client_contacts WHERE organisation_id=? AND client_id IN (?) AND ${status} ORDER BY is_primary DESC,name`,[org,ids],conn):[];
+ return rows.map(r=>client(r,sites.filter(s=>s.client_id===r.id).map(site),contacts.filter(c=>c.client_id===r.id).map(contact)));
 }
 
-export async function getClient(id:string,conn:Conn=getPool()){
+/**
+ * Server-side client search (name, legal name, ABN, code, contact names/emails, site names/addresses).
+ * Exact and prefix matches rank first, then active clients. Merged clients never appear.
+ */
+export async function listClients(q='',opts:{limit?:number;includeInactive?:boolean;ids?:string[]}={}){
+ needView();
+ const org=actor().organisationId,term=q.trim().slice(0,120).toLowerCase(),limit=Math.min(Math.max(opts.limit||500,1),500);
+ const params:unknown[]=[org];let where=" AND status<>'merged'";
+ if(term){
+  const digits=abnDigits(term),t=like(term);
+  where+=` AND (LOWER(name) LIKE ? OR LOWER(legal_name) LIKE ? OR LOWER(contact_name) LIKE ? OR LOWER(account_reference) LIKE ? OR LOWER(client_code) LIKE ? OR LOWER(email) LIKE ?${digits.length>=3?' OR REPLACE(abn,\' \',\'\') LIKE ?':''}
+   OR EXISTS (SELECT 1 FROM client_contacts k WHERE k.organisation_id=clients.organisation_id AND k.client_id=clients.id AND k.status='active' AND (LOWER(k.name) LIKE ? OR LOWER(k.email) LIKE ?))
+   OR EXISTS (SELECT 1 FROM client_sites s WHERE s.organisation_id=clients.organisation_id AND s.client_id=clients.id AND s.status='active' AND (LOWER(s.name) LIKE ? OR LOWER(s.address) LIKE ?)))`;
+  params.push(t,t,t,t,t,t,...(digits.length>=3?[like(digits)]:[]),t,t,t,t);
+ }
+ if(opts.ids?.length){where+=' AND id IN (?)';params.push(opts.ids);}
+ where+=await scopeSql('id',params);
+ const order=term?'(LOWER(name)=?) DESC,(LOWER(name) LIKE ?) DESC,':'';
+ const rows=await query(`SELECT * FROM clients WHERE organisation_id=?${where} ORDER BY ${order}status='active' DESC,name LIMIT ${limit}`,[...params,...(term?[term,like(term).slice(1)]:[])]);
+ return {clients:await attach(rows)};
+}
+
+export async function getClient(id:string,conn:Conn=getPool(),includeInactive=false){
  const org=actor().organisationId;
  const r=await one('SELECT * FROM clients WHERE organisation_id=? AND id=?',[org,id],conn);
  if(!r)return null;
- const sites=await query("SELECT * FROM client_sites WHERE organisation_id=? AND client_id=? AND status='active' ORDER BY name",[org,id],conn);
- const contacts=await query("SELECT * FROM client_contacts WHERE organisation_id=? AND client_id=? AND status='active' ORDER BY is_primary DESC,name",[org,id],conn);
- return client(r,sites.map(site),contacts.map(contact));
+ return (await attach([r],conn,includeInactive))[0];
+}
+/** One client for its detail page (inactive contacts and sites included); 404 outside scope. */
+export async function clientDetail(id:string){
+ needView();await assertVisible(id);
+ const c=await getClient(id,getPool(),true);if(!c)fail(404,'Client not found.');
+ return c!;
 }
 
+/** CRM workspace lists: contacts or sites across clients, searched and paged on the server. */
+export async function searchCrm(view:'contacts'|'sites',q='',page=1){
+ needView();
+ const org=actor().organisationId,term=q.trim().slice(0,120).toLowerCase(),size=50,offset=(Math.max(1,page)-1)*size,params:unknown[]=[org];
+ let where=" AND c.status<>'merged' AND x.status<>'merged'";
+ if(term){const t=like(term);where+=view==='contacts'?' AND (LOWER(x.name) LIKE ? OR LOWER(x.email) LIKE ? OR LOWER(x.role) LIKE ? OR x.phone LIKE ? OR x.mobile LIKE ? OR LOWER(c.name) LIKE ?)':' AND (LOWER(x.name) LIKE ? OR LOWER(x.address) LIKE ? OR LOWER(x.suburb) LIKE ? OR LOWER(c.name) LIKE ?)';params.push(...(view==='contacts'?[t,t,t,t,t,t]:[t,t,t,t]));}
+ where+=await scopeSql('c.id',params);
+ const table=view==='contacts'?'client_contacts':'client_sites';
+ const rows=await query(`SELECT x.*,c.name AS client_name FROM ${table} x JOIN clients c ON c.organisation_id=x.organisation_id AND c.id=x.client_id WHERE x.organisation_id=?${where} ORDER BY x.status='active' DESC,x.name LIMIT ${size+1} OFFSET ${offset}`,params);
+ const more=rows.length>size;
+ return {view,page,more,items:rows.slice(0,size).map(r=>({...(view==='contacts'?contact(r):site(r)),clientName:r.client_name}))};
+}
+
+const opt=(n:number)=>z.string().trim().max(n).nullish();
 export const clientInput=z.object({
  name:z.string().trim().min(1,'Client name is required.').max(255),
- legalName:z.string().trim().max(255).nullish(),
- abn:z.string().trim().max(20).nullish(),
- contactName:z.string().trim().max(160).nullish(),
- email:z.string().trim().max(254).nullish(),
- phone:z.string().trim().max(60).nullish(),
- notes:z.string().trim().max(5000).nullish(),
- site:z.object({name:z.string().trim().max(255).nullish(),address:z.string().trim().min(1).max(500)}).nullish(),
+ legalName:opt(255),abn:opt(20),clientCode:opt(80),contactName:opt(160),email:opt(254),phone:opt(60),website:opt(255),notes:z.string().trim().max(5000).nullish(),
+ tags:z.array(z.string().trim().max(40)).max(20).nullish(),ownerUserId:opt(191),
+ paymentTermsDays:z.number().int().min(0).max(365).nullish(),creditStatus:opt(30),billingEmail:opt(254),accountReference:opt(80),
+ site:z.object({name:opt(255),address:z.string().trim().min(1).max(500)}).nullish(),
+ contact:z.object({name:z.string().trim().min(1).max(160),email:opt(254),phone:opt(60),role:opt(120)}).nullish(),
 });
-export const siteInput=z.object({clientId:z.string().max(191).nullish(),name:z.string().trim().max(255).nullish(),address:z.string().trim().max(500).nullish(),suburb:z.string().trim().max(120).nullish(),state:z.string().trim().max(20).nullish(),postcode:z.string().trim().max(10).nullish(),accessNotes:z.string().trim().max(5000).nullish()}).refine(s=>Boolean(s.name||s.address),'Enter a site name or address.');
+export const siteInput=z.object({clientId:opt(191),name:opt(255),address:opt(500),suburb:opt(120),state:opt(20),postcode:opt(10),siteContact:opt(160),accessNotes:z.string().trim().max(5000).nullish()}).refine(s=>Boolean(s.name||s.address),'Enter a site name or address.');
+const COMMERCIAL_KEYS=['paymentTermsDays','creditStatus','billingEmail','accountReference'] as const;
+const CLIENT_COLUMNS:Record<string,string>={name:'name',legalName:'legal_name',abn:'abn',clientCode:'client_code',contactName:'contact_name',email:'email',phone:'phone',website:'website',notes:'notes',tags:'tags',ownerUserId:'owner_user_id',paymentTermsDays:'payment_terms_days',creditStatus:'credit_status',billingEmail:'billing_email',accountReference:'account_reference',status:'status'};
+const NOT_NULL_TEXT=['contact_name','email','phone'];
+/** ABN is stored as its digits when it is a valid ABN; anything else is kept as typed so nothing is lost. */
+const storeAbn=(v:string|null|undefined)=>v?(strongAbn(v)||collapse(v)):null;
+function clientColumns(v:Row,role:string){
+ const set:Row={};
+ for(const [k,col] of Object.entries(CLIENT_COLUMNS)){
+  if(!(k in v)||v[k]===undefined)continue;
+  if((COMMERCIAL_KEYS as readonly string[]).includes(k)&&!commercial(role))continue;
+  let val=v[k];
+  if(k==='abn')val=storeAbn(val as string|null);
+  if(k==='tags')val=Array.isArray(val)?val.filter(Boolean).join(', ')||null:null;
+  set[col]=NOT_NULL_TEXT.includes(col)?(val??''):(val===''?null:val??null);
+ }
+ return set;
+}
+async function checkOwner(ownerUserId:unknown,conn:Conn){if(ownerUserId&&!await one('SELECT id FROM users WHERE organisation_id=? AND id=?',[actor().organisationId,ownerUserId],conn))fail(400,'Choose an account owner from your organisation.');}
 
 /**
- * Quick create (only the name is required). An exact, case-insensitive name match
- * returns the existing client instead of creating a duplicate; near matches are
- * never merged automatically.
+ * Quick create (only the name is required). A deterministic match — same valid ABN, same
+ * client code or the same normalised name — returns the existing client instead of a
+ * duplicate. Weaker similarities are never merged automatically.
  */
 export async function createClient(input:z.infer<typeof clientInput>){
  needEdit();
  const a=actor(),v=clientInput.parse(input);
  return tx(async conn=>{
-  const existing=await one('SELECT id FROM clients WHERE organisation_id=? AND LOWER(TRIM(name))=LOWER(?) LIMIT 1 FOR UPDATE',[a.organisationId,v.name],conn);
-  let id=existing?.id as string|undefined;
+  const existing=await query("SELECT id,name,legal_name,abn,client_code,status FROM clients WHERE organisation_id=? AND status<>'merged' FOR UPDATE",[a.organisationId],conn);
+  const m=matchClient({name:v.name,legalName:v.legalName,abn:v.abn,clientCode:v.clientCode},existing.map(r=>({id:r.id,name:r.name,legalName:r.legal_name,abn:r.abn,clientCode:r.client_code,status:r.status})));
+  let id=m.kind==='exact'?m.match!.id:undefined;
   if(!id){
-   id=uuid();const now=nowIso();
-   await exec('INSERT INTO clients (id,organisation_id,name,contact_name,email,phone,legal_name,abn,notes,status,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,a.organisationId,v.name,v.contactName||'',v.email||'',v.phone||'',v.legalName||null,v.abn?.replace(/\s+/g,'')||null,v.notes||null,'active',1,a.userId,now,now],conn);
-   await audit({event:'client.created',entityType:'client',entityId:id,summary:`Client created: ${v.name}`,after:{...v,site:undefined}},conn);
+   await checkOwner(v.ownerUserId,conn);
+   id=uuid();const now=nowIso(),cols=clientColumns({...v,site:undefined,contact:undefined},a.role);
+   const row:Row={contact_name:'',email:'',phone:'',...cols,id,organisation_id:a.organisationId,status:'active',revision:1,created_by:a.userId,created_at:now,updated_at:now};
+   const keys=Object.keys(row);
+   await exec(`INSERT INTO clients (${keys.join(',')}) VALUES (${keys.map(()=>'?').join(',')})`,keys.map(k=>row[k]),conn);
+   await audit({event:'client.created',entityType:'client',entityId:id,summary:`Client created: ${v.name}`,after:{...cols}},conn);
   }
   if(v.site)await insertSite({clientId:id,name:v.site.name||null,address:v.site.address},conn);
-  return {client:(await getClient(id,conn))!,existing:Boolean(existing)};
+  if(v.contact)await insertContact(id,{name:v.contact.name,email:v.contact.email,phone:v.contact.phone,role:v.contact.role,isPrimary:true},conn);
+  return {client:(await getClient(id,conn))!,existing:m.kind==='exact',possibleDuplicates:m.kind==='possible'?m.candidates.map(c=>({id:c.id,name:c.name})):[]};
  });
 }
 
-export async function updateClient(id:string,revision:number,input:Partial<z.infer<typeof clientInput>>&{status?:'active'|'inactive'}){
+export const clientPatch=clientInput.omit({site:true,contact:true}).partial().extend({status:z.enum(['active','inactive']).optional()});
+export async function updateClient(id:string,revision:number,input:z.infer<typeof clientPatch>){
  needEdit();
- const a=actor(),v=clientInput.partial().extend({status:z.enum(['active','inactive']).optional()}).parse(input);
- const map:Record<string,string>={name:'name',legalName:'legal_name',abn:'abn',contactName:'contact_name',email:'email',phone:'phone',notes:'notes',status:'status'};
+ const a=actor(),v=clientPatch.parse(input);
  return tx(async conn=>{
   const row=await one('SELECT * FROM clients WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,id],conn);
-  if(!row)fail(404,'Client not found.');
+  if(!row||row.status==='merged')fail(404,'Client not found.');
   if(Number(row!.revision||1)!==Number(revision))fail(409,'This client was changed by someone else. Refresh to see the latest version.');
-  const set:Row={};
-  for(const [k,col] of Object.entries(map))if(k in v&&(v as Row)[k]!==undefined)set[col]=['contact_name','email','phone'].includes(col)?((v as Row)[k]??''):(v as Row)[k]??null;
+  if('ownerUserId' in v)await checkOwner(v.ownerUserId,conn);
+  const set=clientColumns(v as Row,a.role);
   if(set.name!==undefined&&!String(set.name).trim())fail(400,'Client name is required.');
-  const cols=Object.keys(set);
+  const cols=Object.keys(set).filter(c=>String(row![c]??'')!==String(set[c]??''));
   if(cols.length){
    await exec(`UPDATE clients SET ${cols.map(c=>`${c}=?`).join(',')},revision=COALESCE(revision,1)+1,updated_at=? WHERE organisation_id=? AND id=?`,[...cols.map(c=>set[c]),nowIso(),a.organisationId,id],conn);
-   await audit({event:'client.updated',entityType:'client',entityId:id,summary:`Client updated: ${String(set.name??row!.name).slice(0,120)}`,before:Object.fromEntries(cols.map(c=>[c,row![c]])),after:set},conn);
+   const event=cols.length===1&&cols[0]==='status'?(set.status==='inactive'?'client.inactivated':'client.reactivated'):'client.updated';
+   await audit({event,entityType:'client',entityId:id,summary:`Client ${event.split('.')[1]}: ${String(set.name??row!.name).slice(0,120)}`,before:Object.fromEntries(cols.map(c=>[c,row![c]])),after:Object.fromEntries(cols.map(c=>[c,set[c]]))},conn);
   }
-  return {client:(await getClient(id,conn))!};
+  return {client:(await getClient(id,conn,true))!};
+ });
+}
+/** Bulk activate/inactivate or assign an owner. Each client is updated and audited individually. */
+export async function bulkUpdateClients(ids:string[],change:{status?:'active'|'inactive';ownerUserId?:string|null}){
+ needEdit();
+ const a=actor();if(!ids.length)return {updated:0};
+ return tx(async conn=>{
+  if('ownerUserId' in change)await checkOwner(change.ownerUserId,conn);
+  const rows=await query("SELECT id,name,status,owner_user_id FROM clients WHERE organisation_id=? AND id IN (?) AND status<>'merged' FOR UPDATE",[a.organisationId,ids.slice(0,500)],conn);
+  const set:Row={};if(change.status)set.status=change.status;if('ownerUserId' in change)set.owner_user_id=change.ownerUserId||null;
+  const cols=Object.keys(set);if(!cols.length)return {updated:0};
+  for(const r of rows){
+   await exec(`UPDATE clients SET ${cols.map(c=>`${c}=?`).join(',')},revision=COALESCE(revision,1)+1,updated_at=? WHERE organisation_id=? AND id=?`,[...cols.map(c=>set[c]),nowIso(),a.organisationId,r.id],conn);
+   await audit({event:change.status?(change.status==='inactive'?'client.inactivated':'client.reactivated'):'client.updated',entityType:'client',entityId:r.id,summary:`Client bulk update: ${String(r.name).slice(0,120)}`,before:Object.fromEntries(cols.map(c=>[c,r[c]])),after:set},conn);
+  }
+  return {updated:rows.length};
  });
 }
 
 async function insertSite(v:z.infer<typeof siteInput>,conn:Conn){
  const a=actor(),org=a.organisationId;
- if(v.clientId&&!await one('SELECT id FROM clients WHERE organisation_id=? AND id=?',[org,v.clientId],conn))fail(400,'Client not found.');
+ if(v.clientId&&!await one("SELECT id FROM clients WHERE organisation_id=? AND id=? AND status<>'merged'",[org,v.clientId],conn))fail(400,'Client not found.');
  const name=(v.name||v.address||'').trim().slice(0,255);
- const dup=await one("SELECT * FROM client_sites WHERE organisation_id=? AND client_id<=>? AND LOWER(name)=LOWER(?) AND status='active' LIMIT 1",[org,v.clientId||null,name],conn);
- if(dup)return site(dup);
+ if(v.clientId){
+  const existing=await query("SELECT id,client_id,name,address,status FROM client_sites WHERE organisation_id=? AND client_id=?",[org,v.clientId],conn);
+  const m=matchSite(v.clientId,{name,address:v.address},existing.map(s=>({id:s.id,clientId:s.client_id,name:s.name,address:s.address,status:s.status})));
+  if(m.kind==='exact')return site((await one('SELECT * FROM client_sites WHERE organisation_id=? AND id=?',[org,m.match!.id],conn))!);
+ }else{
+  const dup=await one("SELECT * FROM client_sites WHERE organisation_id=? AND client_id IS NULL AND LOWER(name)=LOWER(?) AND status='active' LIMIT 1",[org,name],conn);
+  if(dup)return site(dup);
+ }
  const id=uuid(),now=nowIso();
- await exec('INSERT INTO client_sites (id,organisation_id,client_id,name,address,suburb,state,postcode,access_notes,status,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,org,v.clientId||null,name,v.address||null,v.suburb||null,v.state||null,v.postcode||null,v.accessNotes||null,'active',1,a.userId,now,now],conn);
+ await exec('INSERT INTO client_sites (id,organisation_id,client_id,name,address,suburb,state,postcode,site_contact,access_notes,status,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,org,v.clientId||null,name,v.address||null,v.suburb||null,v.state||null,v.postcode||null,v.siteContact||null,v.accessNotes||null,'active',1,a.userId,now,now],conn);
  await audit({event:'client_site.created',entityType:'client_site',entityId:id,summary:`Site added: ${name}`,after:v},conn);
  return site((await one('SELECT * FROM client_sites WHERE id=?',[id],conn))!);
 }
 export async function createSite(input:z.infer<typeof siteInput>){needEdit();const v=siteInput.parse(input);return tx(async conn=>({site:await insertSite(v,conn)}));}
+export const sitePatch=z.object({name:opt(255),address:opt(500),suburb:opt(120),state:opt(20),postcode:opt(10),siteContact:opt(160),accessNotes:z.string().trim().max(5000).nullish(),status:z.enum(['active','inactive']).optional()});
+export async function updateSite(id:string,revision:number,input:z.infer<typeof sitePatch>){
+ needEdit();
+ const a=actor(),v=sitePatch.parse(input);
+ return tx(async conn=>{
+  const row=await one('SELECT * FROM client_sites WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,id],conn);
+  if(!row)fail(404,'Site not found.');
+  if(Number(row!.revision)!==Number(revision))fail(409,'This site was changed by someone else. Refresh to see the latest version.');
+  const map:Record<string,string>={name:'name',address:'address',suburb:'suburb',state:'state',postcode:'postcode',siteContact:'site_contact',accessNotes:'access_notes',status:'status'};
+  const set:Row={};for(const [k,col] of Object.entries(map))if((v as Row)[k]!==undefined)set[col]=(v as Row)[k]||null;
+  if(set.name===null)fail(400,'A site name is required.');
+  const cols=Object.keys(set);
+  if(cols.length){
+   await exec(`UPDATE client_sites SET ${cols.map(c=>`${c}=?`).join(',')},revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?`,[...cols.map(c=>set[c]),nowIso(),a.organisationId,id],conn);
+   await audit({event:v.status==='inactive'?'client_site.inactivated':v.status==='active'&&row!.status!=='active'?'client_site.reactivated':'client_site.updated',entityType:'client_site',entityId:id,summary:`Site updated: ${row!.name}`,before:Object.fromEntries(cols.map(c=>[c,row![c]])),after:set},conn);
+  }
+  return {site:site((await one('SELECT * FROM client_sites WHERE id=?',[id],conn))!)};
+ });
+}
 
 /**
- * Validates client/site references for a write and returns the snapshot text to
- * store alongside them. A site must belong to the chosen client (or to no client).
+ * Validates client/site/contact references for a write and returns the snapshot text to
+ * store alongside them. A site and a contact must belong to the chosen client.
  */
-export async function resolveClientContext(clientId:string|null|undefined,siteId:string|null|undefined,conn:Conn=getPool()){
+export async function resolveClientContext(clientId:string|null|undefined,siteId:string|null|undefined,conn:Conn=getPool(),contactId?:string|null){
  const org=actor().organisationId;
- const c=clientId?await one('SELECT id,name FROM clients WHERE organisation_id=? AND id=?',[org,clientId],conn):null;
+ const c=clientId?await one("SELECT id,name FROM clients WHERE organisation_id=? AND id=? AND status<>'merged'",[org,clientId],conn):null;
  if(clientId&&!c)fail(400,'Client not found. Choose a client from the list.');
  const s=siteId?await one('SELECT * FROM client_sites WHERE organisation_id=? AND id=?',[org,siteId],conn):null;
  if(siteId&&!s)fail(400,'Site not found. Choose a site from the list.');
  if(s&&s.client_id&&clientId&&s.client_id!==clientId)fail(400,'That site belongs to a different client.');
- return {clientId:c?.id as string|null??null,clientName:c?.name as string|null??null,siteId:s?.id as string|null??null,siteLabel:s?siteLabel(s as {name:string}):null};
+ const k=contactId?await one('SELECT id,client_id,name FROM client_contacts WHERE organisation_id=? AND id=?',[org,contactId],conn):null;
+ if(contactId&&!k)fail(400,'Contact not found. Choose a contact from the list.');
+ if(k&&clientId&&k.client_id!==clientId)fail(400,'That contact belongs to a different client.');
+ return {clientId:c?.id as string|null??null,clientName:c?.name as string|null??null,siteId:s?.id as string|null??null,siteLabel:s?siteLabel(s as {name:string}):null,contactId:k?.id as string|null??null,contactName:k?.name as string|null??null};
 }
 
 // ---------------------------------------------------------------- contacts
-export const contactInput=z.object({name:z.string().trim().min(1,'Contact name is required.').max(160),role:z.string().trim().max(120).nullish(),email:z.string().trim().max(254).nullish(),phone:z.string().trim().max(60).nullish(),mobile:z.string().trim().max(60).nullish(),isPrimary:z.boolean().optional(),notes:z.string().trim().max(5000).nullish()});
+export const contactInput=z.object({name:z.string().trim().max(160).optional(),firstName:opt(80),lastName:opt(80),role:opt(120),department:opt(120),email:opt(254),phone:opt(60),mobile:opt(60),isPrimary:z.boolean().optional(),notes:z.string().trim().max(5000).nullish()})
+ .refine(c=>Boolean(c.name?.trim()||c.firstName?.trim()||c.lastName?.trim()),'Contact name is required.');
+const displayName=(v:{name?:string|null;firstName?:string|null;lastName?:string|null})=>collapse(v.name||[v.firstName,v.lastName].filter(Boolean).join(' ')).slice(0,160);
 
-/** Adds a contact to a client. Only one active contact is primary. */
+async function insertContact(clientId:string,v:z.infer<typeof contactInput>,conn:Conn){
+ const a=actor(),name=displayName(v);
+ const existing=await query("SELECT id,client_id,name,email,phone,mobile,status FROM client_contacts WHERE organisation_id=? AND client_id=?",[a.organisationId,clientId],conn);
+ const m=matchContact(clientId,{name,email:v.email,phone:v.phone,mobile:v.mobile},existing.map(r=>({id:r.id,clientId:r.client_id,name:r.name,email:r.email,phone:r.phone,mobile:r.mobile,status:r.status})));
+ if(m.kind==='exact')return {id:m.match!.id,existing:true};
+ if(v.isPrimary)await exec("UPDATE client_contacts SET is_primary=0 WHERE organisation_id=? AND client_id=?",[a.organisationId,clientId],conn);
+ const id=uuid(),now=nowIso();
+ await exec('INSERT INTO client_contacts (id,organisation_id,client_id,name,first_name,last_name,role,department,email,phone,mobile,is_primary,notes,status,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,a.organisationId,clientId,name,v.firstName||null,v.lastName||null,v.role||null,v.department||null,v.email||null,v.phone||null,v.mobile||null,v.isPrimary?1:0,v.notes||null,'active',1,a.userId,now,now],conn);
+ await audit({event:'client_contact.created',entityType:'client_contact',entityId:id,summary:`Contact added: ${name}`,after:{clientId,...v}},conn);
+ return {id,existing:false};
+}
+/** Adds a contact to a client (same email or same name within the client returns the existing contact). */
 export async function addContact(clientId:string,input:z.infer<typeof contactInput>){
  needEdit();
  const a=actor(),v=contactInput.parse(input);
  return tx(async conn=>{
-  if(!await one('SELECT id FROM clients WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,clientId],conn))fail(400,'Client not found.');
-  if(v.isPrimary)await exec("UPDATE client_contacts SET is_primary=0 WHERE organisation_id=? AND client_id=?",[a.organisationId,clientId],conn);
-  const id=uuid(),now=nowIso();
-  await exec('INSERT INTO client_contacts (id,organisation_id,client_id,name,role,email,phone,mobile,is_primary,notes,status,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,a.organisationId,clientId,v.name,v.role||null,v.email||null,v.phone||null,v.mobile||null,v.isPrimary?1:0,v.notes||null,'active',1,a.userId,now,now],conn);
-  await audit({event:'client_contact.created',entityType:'client_contact',entityId:id,summary:`Contact added: ${v.name}`,after:{clientId,...v}},conn);
-  return {client:(await getClient(clientId,conn))!};
+  if(!await one("SELECT id FROM clients WHERE organisation_id=? AND id=? AND status<>'merged' FOR UPDATE",[a.organisationId,clientId],conn))fail(400,'Client not found.');
+  const r=await insertContact(clientId,v,conn);
+  return {client:(await getClient(clientId,conn))!,contactId:r.id,existing:r.existing};
  });
 }
 
-/** Edits or removes (archives) a contact; history stays in the audit log. */
-export async function updateContact(id:string,revision:number,input:Partial<z.infer<typeof contactInput>>&{archived?:boolean}){
+/** Edits, inactivates (archives) or reactivates a contact; history stays in the audit log. */
+export async function updateContact(id:string,revision:number,input:Partial<z.input<typeof contactInput>>&{archived?:boolean}){
  needEdit();
- const a=actor(),v=contactInput.partial().extend({archived:z.boolean().optional()}).parse(input);
+ const a=actor(),v=z.object({name:opt(160),firstName:opt(80),lastName:opt(80),role:opt(120),department:opt(120),email:opt(254),phone:opt(60),mobile:opt(60),isPrimary:z.boolean().optional(),notes:z.string().trim().max(5000).nullish(),archived:z.boolean().optional()}).parse(input);
  return tx(async conn=>{
   const row=await one('SELECT * FROM client_contacts WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,id],conn);
   if(!row)fail(404,'Contact not found.');
   if(Number(row!.revision)!==Number(revision))fail(409,'This contact was changed by someone else. Refresh to see the latest version.');
-  const map:Record<string,string>={name:'name',role:'role',email:'email',phone:'phone',mobile:'mobile',notes:'notes'};
+  const map:Record<string,string>={name:'name',firstName:'first_name',lastName:'last_name',role:'role',department:'department',email:'email',phone:'phone',mobile:'mobile',notes:'notes'};
   const set:Row={};
   for(const [k,col] of Object.entries(map))if((v as Row)[k]!==undefined)set[col]=(v as Row)[k]||null;
+  if(('first_name' in set||'last_name' in set)&&!('name' in set))set.name=displayName({firstName:set.first_name??row!.first_name,lastName:set.last_name??row!.last_name})||row!.name;
   if(set.name===null)fail(400,'Contact name is required.');
   if(v.isPrimary!==undefined){set.is_primary=v.isPrimary?1:0;if(v.isPrimary)await exec('UPDATE client_contacts SET is_primary=0 WHERE organisation_id=? AND client_id=? AND id<>?',[a.organisationId,row!.client_id,id],conn);}
-  if(v.archived)set.status='archived';
+  if(v.archived!==undefined)set.status=v.archived?'archived':'active';
   const cols=Object.keys(set);
   if(cols.length){
    await exec(`UPDATE client_contacts SET ${cols.map(c=>`${c}=?`).join(',')},revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?`,[...cols.map(c=>set[c]),nowIso(),a.organisationId,id],conn);
-   await audit({event:v.archived?'client_contact.archived':'client_contact.updated',entityType:'client_contact',entityId:id,summary:`Contact ${v.archived?'removed':'updated'}: ${row!.name}`,before:Object.fromEntries(cols.map(c=>[c,row![c]])),after:set},conn);
+   await audit({event:v.archived?'client_contact.archived':v.archived===false?'client_contact.reactivated':'client_contact.updated',entityType:'client_contact',entityId:id,summary:`Contact ${v.archived?'removed':'updated'}: ${row!.name}`,before:Object.fromEntries(cols.map(c=>[c,row![c]])),after:set},conn);
   }
   return {client:(await getClient(row!.client_id,conn))!};
+ });
+}
+
+// ---------------------------------------------------------------- merge
+/** Records that point at a client. Estimates keep their client inside the revision snapshot and are not rewritten. */
+const CLIENT_REFS=[['opportunities','Opportunities'],['tenders','Tenders'],['jobs','Projects'],['client_contacts','Contacts'],['client_sites','Sites']] as const;
+/**
+ * Merge `mergeId` into `keepId`: every client reference moves to the kept client, the merged
+ * client becomes status "merged" with merged_into_id (never deleted), and the move is audited.
+ * Record snapshots (client_name) are left as they were for historical integrity.
+ */
+export async function mergeClients(keepId:string,mergeId:string,confirm=false){
+ needManage();
+ const a=actor(),org=a.organisationId;
+ if(keepId===mergeId)fail(400,'Choose two different clients.');
+ const work=async(conn:Conn)=>{
+  const [keep,drop]=await Promise.all([one("SELECT * FROM clients WHERE organisation_id=? AND id=? AND status<>'merged'"+(confirm?' FOR UPDATE':''),[org,keepId],conn),one("SELECT * FROM clients WHERE organisation_id=? AND id=? AND status<>'merged'"+(confirm?' FOR UPDATE':''),[org,mergeId],conn)]);
+  if(!keep||!drop)fail(404,'Client not found.');
+  const affected:Record<string,number>={};
+  for(const [table,label] of CLIENT_REFS)affected[label]=Number((await one<{n:number}>(`SELECT COUNT(*) AS n FROM ${table} WHERE organisation_id=? AND client_id=?`,[org,mergeId],conn))?.n||0);
+  const preview={keep:{id:keep!.id,name:keep!.name},merge:{id:drop!.id,name:drop!.name},affected};
+  if(!confirm)return {preview,merged:false};
+  const now=nowIso();
+  for(const [table] of CLIENT_REFS)await exec(`UPDATE ${table} SET client_id=?,updated_at=? WHERE organisation_id=? AND client_id=?`,[keepId,now,org,mergeId],conn);
+  // Fill gaps on the kept client from the merged one; never overwrite what the kept client already has.
+  const fill:Row={};for(const col of ['legal_name','abn','client_code','website','notes'])if(!keep![col]&&drop![col])fill[col]=drop![col];
+  for(const col of ['contact_name','email','phone'])if(!keep![col]&&drop![col])fill[col]=drop![col];
+  const cols=Object.keys(fill);
+  if(cols.length)await exec(`UPDATE clients SET ${cols.map(c=>`${c}=?`).join(',')},revision=COALESCE(revision,1)+1,updated_at=? WHERE organisation_id=? AND id=?`,[...cols.map(c=>fill[c]),now,org,keepId],conn);
+  await exec("UPDATE clients SET status='merged',merged_into_id=?,revision=COALESCE(revision,1)+1,updated_at=? WHERE organisation_id=? AND id=?",[keepId,now,org,mergeId],conn);
+  await audit({event:'client.merged',entityType:'client',entityId:keepId,summary:`Merged ${drop!.name} into ${keep!.name}`,before:{mergedClient:drop},after:{affected,filled:fill}},conn);
+  return {preview,merged:true};
+ };
+ return confirm?tx(work):work(getPool());
+}
+
+// ---------------------------------------------------------------- legacy links
+const LEGACY_TABLES=[['opportunities','name','Opportunity'],['tenders','title','Tender'],['jobs','name','Project']] as const;
+/**
+ * Records that carry a client name but no client_id. A record links only when exactly one
+ * client has that exact normalised name; ambiguous and unmatched records stay unlinked for a
+ * person to choose. The original client_name text is never changed.
+ */
+export async function legacyClientLinks(apply=false){
+ needManage();
+ const a=actor(),org=a.organisationId;
+ const clients=(await query("SELECT id,name,legal_name,abn,status FROM clients WHERE organisation_id=? AND status<>'merged'",[org])).map(r=>({id:r.id,name:r.name,legalName:r.legal_name,abn:r.abn,status:r.status}));
+ const rows:Array<{table:string;type:string;id:string;title:string;clientName:string;status:'linked'|'ambiguous'|'none';clientId:string|null;candidates:Array<{id:string;name:string}>}>=[];
+ for(const [table,title,type] of LEGACY_TABLES){
+  const recs=await query(`SELECT id,${title} AS title,client_name FROM ${table} WHERE organisation_id=? AND client_id IS NULL AND client_name IS NOT NULL AND TRIM(client_name)<>'' LIMIT 2000`,[org]);
+  for(const r of recs){const m=legacyClientFor(r.client_name,clients);rows.push({table,type,id:r.id,title:String(r.title||''),clientName:String(r.client_name),status:m.status,clientId:m.client?.id??null,candidates:m.candidates.map(c=>({id:c.id,name:String(c.name)}))});}
+ }
+ const summary={linkable:rows.filter(r=>r.status==='linked').length,ambiguous:rows.filter(r=>r.status==='ambiguous').length,unmatched:rows.filter(r=>r.status==='none').length};
+ if(!apply)return {summary,rows:rows.slice(0,500),applied:0};
+ let applied=0;
+ await tx(async conn=>{
+  for(const r of rows.filter(x=>x.status==='linked')){
+   const n=await exec(`UPDATE ${r.table} SET client_id=? WHERE organisation_id=? AND id=? AND client_id IS NULL`,[r.clientId,org,r.id],conn);
+   if(n){applied++;await audit({event:'client.legacy_linked',entityType:r.table,entityId:r.id,summary:`${r.type} linked to client (exact name “${r.clientName}”)`,after:{clientId:r.clientId,clientName:r.clientName,rule:'exact unique normalised name'}},conn);}
+  }
+ });
+ return {summary,rows:rows.slice(0,500),applied};
+}
+/** Manual link chosen by a person for an ambiguous or unmatched legacy record. */
+export async function linkLegacyRecord(type:'opportunities'|'tenders'|'jobs',id:string,clientId:string){
+ needManage();
+ const a=actor(),org=a.organisationId;
+ return tx(async conn=>{
+  const c=await one("SELECT id,name FROM clients WHERE organisation_id=? AND id=? AND status<>'merged'",[org,clientId],conn);if(!c)fail(400,'Client not found.');
+  const r=await one(`SELECT id,client_id,client_name FROM ${type} WHERE organisation_id=? AND id=? FOR UPDATE`,[org,id],conn);if(!r)fail(404,'Record not found.');
+  if(r!.client_id)fail(409,'This record is already linked to a client.');
+  await exec(`UPDATE ${type} SET client_id=? WHERE organisation_id=? AND id=?`,[clientId,org,id],conn);
+  await audit({event:'client.legacy_linked',entityType:type,entityId:id,summary:`Linked to ${c!.name} by a person (was “${r!.client_name||''}”)`,after:{clientId,clientName:r!.client_name,rule:'manual'}},conn);
+  return {linked:true};
  });
 }

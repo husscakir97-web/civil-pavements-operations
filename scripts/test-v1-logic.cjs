@@ -68,6 +68,12 @@ assert.deepEqual(navDef.FIELD_SHELL_ROLES,['field','supervisor']);
 for(const r of ['project_engineer','site_engineer'])for(const c of ['commercial.view','commercial.edit','rates.edit','team.admin','entitlements.manage','org.admin','claim.approve','variation.approve','estimate.approve','tender.approve','swms.approve','pipeline.view','estimate.edit','docket.approve','schedule.edit','library.edit'])assert.equal(perm.can(r,c),false,r+' must not have '+c);
 for(const c of ['project.view','project.edit','schedule.view','hseq.edit','itp.complete','field.capture','document.upload'])assert(perm.can('project_engineer',c),'project_engineer needs '+c);
 for(const c of ['project.view','schedule.view','hseq.edit','itp.complete','field.capture','document.upload'])assert(perm.can('site_engineer',c),'site_engineer needs '+c);
+// Project scope: engineers are limited to their project memberships; organisation-wide roles keep project.all.view.
+for(const r of ['project_engineer','site_engineer'])assert.equal(perm.can(r,'project.all.view'),false,r+' is project-scoped');
+for(const r of ['admin','office','estimator','scheduler','project_manager','supervisor','accounts','read_only'])assert(perm.can(r,'project.all.view'),r+' keeps organisation-wide project access');
+assert.equal(perm.can('field','project.view'),false,'field users keep assigned-shift rules (no project access to scope)');
+const roles=load('lib/v1/project-roles.ts');assert.deepEqual([...roles.PROJECT_ROLES],['project_manager','project_engineer','site_engineer','supervisor','commercial','hseq','other']);
+for(const r of roles.PROJECT_ROLES)assert(roles.PROJECT_ROLE_LABELS[r]);
 assert.equal(perm.can('site_engineer','project.edit'),false);assert.equal(perm.can('site_engineer','reports.view'),false,'site engineer: no company reporting');
 assert(!navDef.FIELD_SHELL_ROLES.includes('site_engineer'),'site engineer uses the responsive office shell with Today');
 // Primary navigation: conventional areas, filtered by capability and entitlement; engines are not primary.

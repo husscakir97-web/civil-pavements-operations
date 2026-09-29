@@ -10,13 +10,17 @@ import {idempotent} from '@/lib/platform/idempotency';
 import {fieldDelivery} from '@/lib/field-access';
 import {safeJson} from '@/lib/estimates-db';
 import {easternDate} from '@/lib/reporting';
+import {shiftAudience,shiftVisible,assignedToShift} from '@/lib/platform/shift-scope';
+import {assertProjectAccess} from '@/lib/platform/project-access';
 
 const actor=()=>actorContext.getStore()!;
 
 export async function today(days=7){
  const a=actor(),org=a.organisationId,start=easternDate(new Date()),end=new Date(Date.parse(start)+days*86400000).toISOString().slice(0,10);
- const shifts=await query("SELECT s.id,s.name,s.status,s.metadata,s.created_at,s.updated_at,j.id AS job_id,j.name AS job_name,j.project_number,j.stage AS job_stage,j.status AS job_status,j.metadata AS job_metadata,j.site_address FROM shifts s LEFT JOIN jobs j ON j.id=JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.jobId')) AND j.organisation_id=s.organisation_id WHERE s.organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.date'))>=? AND JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.date'))<=? AND s.status NOT IN ('Cancelled','Archived','Draft') ORDER BY JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.date')),JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.start'))",[org,start,end]);
- const workerLinks=(await query("SELECT id FROM workers WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.userId'))=?",[org,a.userId])).map(w=>w.id);
+ const all=await query("SELECT s.id,s.name,s.status,s.metadata,s.created_at,s.updated_at,j.id AS job_id,j.name AS job_name,j.project_number,j.stage AS job_stage,j.status AS job_status,j.metadata AS job_metadata,j.site_address FROM shifts s LEFT JOIN jobs j ON j.id=JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.jobId')) AND j.organisation_id=s.organisation_id WHERE s.organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.date'))>=? AND JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.date'))<=? AND s.status NOT IN ('Cancelled','Archived','Draft') ORDER BY JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.date')),JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.start'))",[org,start,end]);
+ const audience=await shiftAudience(a);
+ // Only shifts this person should see are enriched and returned (field: assigned; engineers: assigned or their projects).
+ const shifts=all.filter(s=>{const m=safeJson<Row>(s.metadata,{});return a.role==='field'||shiftVisible(audience,{supervisorUserId:m.supervisorUserId,assignments:m.assignments,jobId:s.job_id});});
  const jobIds=[...new Set(shifts.map(s=>s.job_id).filter(Boolean))];
  const [swms,records,dockets]=await Promise.all([
   jobIds.length?query("SELECT s.id,s.project_id,s.reference,s.title,s.activity,s.issued_revision_id,(SELECT COUNT(*) FROM swms_acknowledgements k WHERE k.organisation_id=s.organisation_id AND k.swms_revision_id=s.issued_revision_id AND k.user_id=?) AS mine FROM swms s WHERE s.organisation_id=? AND s.project_id IN (?) AND s.issued_revision_id IS NOT NULL",[a.userId,org,jobIds]):[],
@@ -26,7 +30,8 @@ export async function today(days=7){
  const out=shifts.map(s=>{
   const plan=fieldDelivery({id:s.id,name:s.name,status:s.status,metadata:safeJson<Row>(s.metadata,{})},'shifts');
   const m=plan.metadata as Row,assignments=(m.assignments||[]) as Row[];
-  const assigned=m.supervisorUserId===a.userId||assignments.some(x=>x.userId===a.userId||workerLinks.includes(String(x.resourceId)));
+  const raw=safeJson<Row>(s.metadata,{});
+  const assigned=assignedToShift(audience,{supervisorUserId:raw.supervisorUserId,assignments:raw.assignments});
   const projectSwms=swms.filter(w=>w.project_id===s.job_id).map(w=>({id:w.id,reference:w.reference,title:w.title,activity:w.activity,revisionId:w.issued_revision_id,acknowledged:Number(w.mine)>0}));
   const job=safeJson<Row>(s.job_metadata,{});
   return {id:s.id,name:s.name,status:s.status,version:s.updated_at||s.created_at,date:m.date,start:m.start,finish:m.finish,location:m.location||s.site_address||job.site||'',supervisor:m.supervisor||'',activity:m.scope||job.scope||'',instructions:m.instructions||'',preStart:m.preStart||'',siteContact:m.siteContact||'',crew:assignments.map(x=>({name:x.name,role:x.role,category:x.category})),
@@ -57,6 +62,8 @@ export async function submitFieldDocket(input:FieldDocketInput){
   const jobId=String(meta.jobId||'');
   const job=jobId?await one('SELECT id,name,stage,client_name,metadata FROM jobs WHERE organisation_id=? AND id=?',[a.organisationId,jobId],conn):null;
   if(!job)fail(422,'This shift is not linked to a project.');
+  // Engineers capture only against shifts they could see in Today (assigned, or on their projects).
+  if(!assignedToShift(await shiftAudience(a),meta))await assertProjectAccess(jobId,conn);
   if(job!.stage==='closed')fail(409,'This project is closed. Ask the office to reopen it.',{code:'PROJECT_CLOSED'});
   if(['Cancelled','Stand-down','Archived'].includes(shift!.status))fail(409,`This shift was ${shift!.status==='Stand-down'?'stood down':'cancelled'} by the office after your docket was captured. It has been kept on this device; check with your supervisor.`,{code:'SHIFT_CANCELLED'});
   if(meta.date&&meta.date!==input.workDate)fail(409,`This shift was moved to ${meta.date}. Your docket for ${input.workDate} has been kept on this device; check the date with your supervisor.`,{code:'SHIFT_RESCHEDULED'});

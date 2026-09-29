@@ -10,6 +10,7 @@ import {audit} from '@/lib/platform/audit';
 import {fail} from '@/lib/platform/http';
 import {query,one,exec,tx,nowIso,uuid,type Row} from '@/lib/platform/sql';
 import {safeJson} from '@/lib/estimates-db';
+import {canAccessProject,projectFilter} from '@/lib/platform/project-access';
 import {HIGH_RISK_WORK,type SwmsContent,type SwmsQuestionnaire} from '@/lib/v1/swms-content';
 
 const actor=()=>actorContext.getStore()!;
@@ -43,7 +44,7 @@ export function approvalGaps(c:SwmsContent){
 
 async function loadSwms(id:string,conn?:Parameters<typeof one>[2],lock=false){
  const s=await one(`SELECT s.*,j.stage AS project_stage,j.status AS project_status,j.name AS project_name FROM swms s JOIN jobs j ON j.id=s.project_id AND j.organisation_id=s.organisation_id WHERE s.organisation_id=? AND s.id=?${lock?' FOR UPDATE':''}`,[actor().organisationId,id],conn);
- if(!s)fail(404,'SWMS not found.');
+ if(!s||!await canAccessProject(s.project_id,undefined,conn))fail(404,'SWMS not found.');
  return s!;
 }
 const present=(s:Row)=>({id:s.id,projectId:s.project_id,projectName:s.project_name,reference:s.reference,title:s.title,activity:s.activity,status:s.status,statusLabel:stateLabel('swms',s.status),currentRevisionId:s.current_revision_id,currentRevisionNumber:Number(s.current_revision_number),issuedRevisionId:s.issued_revision_id,revision:Number(s.revision),updatedAt:s.updated_at});
@@ -52,6 +53,7 @@ export async function listSwms(projectId?:string|null){
  const a=actor(),where=['s.organisation_id=?'],values:unknown[]=[a.organisationId];
  if(projectId){where.push('s.project_id=?');values.push(projectId);}
  if(a.role==='field')where.push('s.issued_revision_id IS NOT NULL');
+ const scope=await projectFilter('s.project_id',values);if(scope)where.push(scope.replace(/^ AND /,''));
  const rows=await query(`SELECT s.*,j.name AS project_name,(SELECT COUNT(*) FROM swms_acknowledgements k WHERE k.organisation_id=s.organisation_id AND k.swms_revision_id=s.issued_revision_id) AS acknowledgements,(SELECT COUNT(*) FROM swms_acknowledgements k WHERE k.organisation_id=s.organisation_id AND k.swms_revision_id=s.issued_revision_id AND k.user_id=?) AS acknowledged_by_me FROM swms s JOIN jobs j ON j.id=s.project_id AND j.organisation_id=s.organisation_id WHERE ${where.join(' AND ')} ORDER BY s.updated_at DESC LIMIT 300`,[a.userId,...values]);
  return rows.map(r=>({...present(r),acknowledgements:Number(r.acknowledgements),acknowledgedByMe:Number(r.acknowledged_by_me)>0}));
 }
@@ -71,7 +73,7 @@ export async function createSwms(projectId:string,input:{title:string;questionna
  if(!input.title.trim()||!input.questionnaire.activity?.trim())fail(400,'A title and activity are required.');
  return tx(async conn=>{
   const p=await one('SELECT id,stage,status FROM jobs WHERE organisation_id=? AND id=?',[a.organisationId,projectId],conn);
-  if(!p)fail(404,'Project not found.');
+  if(!p||!await canAccessProject(projectId,undefined,conn))fail(404,'Project not found.');
   if(p!.stage==='closed')fail(409,'This project is closed.');
   const n=await one<{n:number}>('SELECT COUNT(*) AS n FROM swms WHERE organisation_id=? AND project_id=?',[a.organisationId,projectId],conn);
   const id=uuid(),revisionId=uuid(),now=nowIso(),reference=`SWMS-${String(Number(n?.n||0)+1).padStart(3,'0')}`;

@@ -301,6 +301,15 @@ export const projectContacts=mysqlTable('project_contacts',{
  ...lifecycle(),
 },t=>[index('idx_contacts_org_project').on(t.organisationId,t.projectId)]);
 
+// Project team: which users work on which project, and in what project role. The
+// application role (users.role) says what someone may do; membership says where.
+export const projectMembers=mysqlTable('project_members',{
+ id:id(),organisationId:org(),projectId:ref('project_id').notNull(),userId:ref('user_id').notNull(),
+ projectRole:varchar('project_role',{length:30}).notNull(),
+ active:int('active').notNull().default(1),
+ ...lifecycle(),
+},t=>[index('idx_project_members_org').on(t.organisationId),uniqueIndex('idx_project_members_unique').on(t.organisationId,t.projectId,t.userId),index('idx_project_members_org_user').on(t.organisationId,t.userId,t.active)]);
+
 export const projectChecklistItems=mysqlTable('project_checklist_items',{
  id:id(),organisationId:org(),projectId:ref('project_id').notNull(),
  phase:varchar('phase',{length:20}).notNull(),

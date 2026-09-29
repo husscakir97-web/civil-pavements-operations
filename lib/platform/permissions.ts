@@ -23,7 +23,7 @@ export const CAPABILITIES=[
  'commercial.view','pipeline.view','pipeline.edit','tender.approve','tender.submit','tender.award',
  'workshop.view','workshop.edit','workshop.verify',
  'estimate.edit','estimate.approve',
- 'project.view','project.edit','project.baseline','project.close',
+ 'project.view','project.all.view','project.edit','project.baseline','project.close',
  'document.upload','document.approve',
  'hseq.view','hseq.edit','hseq.report','swms.approve','swms.acknowledge','itp.complete',
  'schedule.view','schedule.edit','resources.edit',
@@ -36,21 +36,21 @@ export type Capability=typeof CAPABILITIES[number];
 const FIELD:Capability[]=['swms.acknowledge','itp.complete','hseq.report','field.capture','docket.submit','document.upload'];
 const ADMIN_ONLY:Capability[]=['org.admin','team.admin','entitlements.manage','rates.edit'];
 const OFFICE:Capability[]=CAPABILITIES.filter(c=>!ADMIN_ONLY.includes(c));
-const READ:Capability[]=['pipeline.view','project.view','hseq.view','schedule.view','reports.view','commercial.view','knowledge.view'];
+const READ:Capability[]=['pipeline.view','project.view','project.all.view','hseq.view','schedule.view','reports.view','commercial.view','knowledge.view'];
 
 export const ROLE_CAPABILITIES:Record<Role,readonly Capability[]>={
  admin:CAPABILITIES,
  office:OFFICE,
  estimator:[...READ,'pipeline.edit','estimate.edit','tender.submit','library.edit','document.upload','audit.view','variation.edit'],
- scheduler:['workshop.view','project.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','knowledge.view','document.upload'],
+ scheduler:['workshop.view','project.view','project.all.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','knowledge.view','document.upload'],
  project_manager:[...READ,'project.edit','project.baseline','project.close','schedule.edit','resources.edit','hseq.edit','hseq.report','swms.approve','document.approve','docket.approve','variation.edit','claim.edit','document.upload','itp.complete','audit.view'],
- // Project-level scope (assigned projects only) is not enforced yet; these roles see
- // all organisation projects, like project_manager, but without money or approvals.
+ // No 'project.all.view': these roles work only in projects where they are an active project
+ // member (lib/platform/project-access.ts), and never see money or approvals.
  project_engineer:[...FIELD,'project.view','project.edit','schedule.view','hseq.view','hseq.edit','reports.view','knowledge.view','workshop.view'],
  site_engineer:[...FIELD,'project.view','schedule.view','hseq.view','hseq.edit','knowledge.view'],
- supervisor:[...FIELD,'project.view','schedule.view','hseq.view','hseq.edit','knowledge.view'],
+ supervisor:[...FIELD,'project.view','project.all.view','schedule.view','hseq.view','hseq.edit','knowledge.view'],
  field:[...FIELD,'knowledge.view'],
- accounts:['commercial.view','project.view','reports.view','knowledge.view','claim.edit','claim.approve','invoice.manage','docket.approve'],
+ accounts:['commercial.view','project.view','project.all.view','reports.view','knowledge.view','claim.edit','claim.approve','invoice.manage','docket.approve'],
  read_only:['workshop.view',...READ.filter(c=>c!=='commercial.view')],
 };
 

@@ -2,10 +2,19 @@ import {fieldRecord,preserveFieldPricing} from '@/lib/field-access';
 import {withActor} from '@/lib/platform/route';
 import {requireActor} from '@/lib/authz';
 import {can} from '@/lib/platform/permissions';
+import {projectScope} from '@/lib/platform/project-access';
+import {shiftAudience,assignedToShift} from '@/lib/platform/shift-scope';
 import { currentOrganisationId as ORG, requireEstimateDb, jsonError } from '@/lib/estimates-db';
 import { initialField, incomplete, invalidField, type FieldData, type FieldRecord } from '@/lib/field';
 import type { DeliveryRecord } from '@/lib/planning';
 export const dynamic='force-dynamic';
+// Project-scoped roles (Project/Site Engineer) open field records only for shifts on their projects.
+async function inScope(request:Request,shiftId:string){
+ const a=await requireActor(request,requireEstimateDb(),'field-read'),scope=await projectScope(a);if(!scope)return true;
+ const s=await requireEstimateDb().prepare('SELECT metadata FROM shifts WHERE id=? AND organisation_id=?').bind(shiftId,ORG()).first<{metadata:string}>();
+ const meta=s?JSON.parse(s.metadata||'{}'):{};
+ return assignedToShift(await shiftAudience(a),meta)||scope.includes(String(meta.jobId||''));
+}
 async function actor(request:Request) { const a=await requireActor(request,requireEstimateDb(),'field-read'); return {id:a.userId,email:a.email,role:a.role,priced:can(a.role,'commercial.view'),canCapture:can(a.role,'field.capture'),canSubmit:['admin','office','field','supervisor'].includes(a.role),canAmend:['admin','office','project_manager'].includes(a.role)}; }
 async function record(shiftId:string):Promise<FieldRecord|null>{
  const r=await requireEstimateDb().prepare('SELECT * FROM field_records WHERE shift_id=? AND organisation_id=?').bind(shiftId,ORG()).first<Record<string,unknown>>();
@@ -15,6 +24,7 @@ async function handleGET(request:Request){try{
  const user=await actor(request);if(!user)return jsonError('Sign in to open field records.',401);
  const id=new URL(request.url).searchParams.get('shiftId');
  if(!id){const rows=await requireEstimateDb().prepare('SELECT shift_id,status,revision FROM field_records WHERE organisation_id=?').bind(ORG()).all();return Response.json({user,records:rows.results});}
+ if(!await inScope(request,id))return jsonError('Planned shift not found.',404);
  const r=await record(id);const history=await requireEstimateDb().prepare('SELECT revision,action,reason,actor,snapshot,created_at FROM field_history WHERE shift_id=? AND organisation_id=? ORDER BY revision DESC').bind(id,ORG()).all();
  return Response.json({user,record:r&&!user.priced?fieldRecord(r):r,history:!user.priced?history.results.map(h=>{const item=h as Record<string,unknown>;return {...item,snapshot:JSON.stringify(fieldRecord(JSON.parse(String(item.snapshot))))};}):history.results},{headers:{'Cache-Control':'private, no-store'}});
 }catch(e){console.error(e);return jsonError('Field records could not be loaded.',503);}}
@@ -23,6 +33,7 @@ async function handlePOST(request:Request){try{
  const body=await request.json() as {shiftId:string;revision:number;action:string;reason:string;data:FieldData};
  if(!['save','submit','amend'].includes(body.action))return jsonError('Invalid action.');
  if(!user.canCapture&&!user.canAmend)return jsonError('You are not authorised to change field records.',403);
+ if(!await inScope(request,String(body.shiftId||'')))return jsonError('Planned shift not found.',404);
  const db=requireEstimateDb();const previous=await record(body.shiftId);
  if((previous?.revision||0)!==body.revision)return jsonError('This record changed on another device. Your draft is retained; reload and reconcile before saving.',409);
  if(previous?.status==='Submitted'&&body.action!=='amend')return jsonError('Submitted record is locked. Use an authorised amendment.',409);

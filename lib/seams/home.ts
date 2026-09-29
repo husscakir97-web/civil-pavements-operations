@@ -8,6 +8,8 @@ import type {ModuleKey} from '@/lib/platform/modules';
 import {query,one} from '@/lib/platform/sql';
 import {easternDate} from '@/lib/reporting';
 import {coverage,type Requirement} from '@/lib/v1/shift-requirements';
+import {projectScope,memberProjectIds} from '@/lib/platform/project-access';
+import {shiftAudience,shiftVisible} from '@/lib/platform/shift-scope';
 
 export type HomeItem={key:string;title:string;detail:string;area:string;target?:{type:string;id:string;tab?:string};severity:'info'|'warning'|'danger'};
 /** A real count from workflow state, e.g. "17 / 18" tomorrow's shifts fully resourced. Never a score. */
@@ -21,6 +23,11 @@ export async function homeFeed(){
  const mine:HomeItem[]=[],attention:HomeItem[]=[],todayItems:HomeItem[]=[],indicators:HomeIndicator[]=[];
  const myProjects:{id:string;name:string;stage:string}[]=[];
  const count=async(sql:string,params:unknown[])=>Number((await one<{n:number}>(sql,params))?.n||0);
+ // Project scope (null = organisation-wide). Project/Site Engineers only see their projects' items;
+ // organisation-level records (no project) stay visible where their capability allows.
+ const scope=await projectScope(a),mineIds=await memberProjectIds(a);
+ const inScope=(col:string,allowNull=false)=>!scope?'':` AND ${allowNull?`(${col} IS NULL OR `:'('}${col} IN (${scope.length?scope.map(()=>'?').join(','):"'-'"}))`;
+ const sp=()=>scope||[];
  const tasks:Promise<void>[]=[];
 
  if(on('pipeline','pipeline.view'))tasks.push((async()=>{
@@ -46,12 +53,12 @@ export async function homeFeed(){
   for(const r of rows)mine.push({key:`estimate-approval-${r.id}`,title:`Review estimate: ${r.tender_title||r.name}`,detail:'Submitted for approval',area:r.tender_id?'Pipeline/Tenders':'Pipeline/Estimates',target:r.tender_id?{type:'tender',id:r.tender_id,tab:'estimate'}:undefined,severity:'warning'});
  })());
  if(on('projects','project.view'))tasks.push((async()=>{
-  const setup=await query<{id:string;name:string}>("SELECT id,name FROM jobs WHERE organisation_id=? AND stage='setup' ORDER BY COALESCE(updated_at,created_at) DESC LIMIT 5",[org]);
+  const setup=await query<{id:string;name:string}>(`SELECT id,name FROM jobs WHERE organisation_id=? AND stage='setup'${inScope('id')} ORDER BY COALESCE(updated_at,created_at) DESC LIMIT 5`,[org,...sp()]);
   for(const p of setup)attention.push({key:`project-setup-${p.id}`,title:`Project not ready: ${p.name}`,detail:'Complete readiness before mobilisation',area:'Projects',target:{type:'project',id:p.id,tab:'setup'},severity:'warning'});
-  const closeout=await query<{id:string;name:string}>("SELECT id,name FROM jobs WHERE organisation_id=? AND stage IN ('practical_completion','closeout') ORDER BY COALESCE(updated_at,created_at) DESC LIMIT 5",[org]);
-  const led=await query<{id:string;name:string;stage:string}>("SELECT id,name,stage FROM jobs WHERE organisation_id=? AND project_manager_user_id=? AND stage NOT IN ('closed','archived') ORDER BY name LIMIT 8",[org,a.userId]);
-  myProjects.push(...led);
-  const ready=await query<{id:string;title:string;project_id:string;due_date:string|null}>("SELECT id,title,project_id,due_date FROM project_checklist_items WHERE organisation_id=? AND owner_user_id=? AND status='open' ORDER BY due_date IS NULL,due_date LIMIT 5",[org,a.userId]);
+  const closeout=await query<{id:string;name:string}>(`SELECT id,name FROM jobs WHERE organisation_id=? AND stage IN ('practical_completion','closeout')${inScope('id')} ORDER BY COALESCE(updated_at,created_at) DESC LIMIT 5`,[org,...sp()]);
+  // My projects: the project team (by user id) plus projects this user manages. Never matched by name.
+  if(mineIds.length){const led=await query<{id:string;name:string;stage:string}>("SELECT id,name,COALESCE(stage,'setup') AS stage FROM jobs WHERE organisation_id=? AND id IN (?) AND COALESCE(stage,'') NOT IN ('closed') AND LOWER(status)<>'archived' ORDER BY name LIMIT 8",[org,mineIds]);myProjects.push(...led);}
+  const ready=await query<{id:string;title:string;project_id:string;due_date:string|null}>(`SELECT id,title,project_id,due_date FROM project_checklist_items WHERE organisation_id=? AND owner_user_id=? AND status='open'${inScope('project_id')} ORDER BY due_date IS NULL,due_date LIMIT 5`,[org,a.userId,...sp()]);
   for(const r of ready)mine.push({key:`readiness-${r.id}`,title:`Readiness: ${r.title}`,detail:r.due_date?`Due ${r.due_date}`:'Assigned to you',area:'Projects',target:{type:'project',id:r.project_id,tab:'setup'},severity:r.due_date&&r.due_date<today?'danger':'info'});
   for(const p of closeout)attention.push({key:`project-closeout-${p.id}`,title:`Close out project: ${p.name}`,detail:'Finish the closeout checklist',area:'Projects',target:{type:'project',id:p.id,tab:'closeout'},severity:'info'});
  })());
@@ -61,18 +68,18 @@ export async function homeFeed(){
    for(const s of rows)mine.push({key:`swms-approval-${s.id}`,title:`Approve ${s.reference||'SWMS'}: ${s.title}`,detail:'Submitted for review',area:s.project_id?'Projects':'IMS & HSEQ',target:s.project_id?{type:'project',id:s.project_id,tab:'quality'}:undefined,severity:'warning'});
   }
   if(can(a.role,'hseq.view')){
-   const ncr=await count("SELECT COUNT(*) AS n FROM hseq_ncrs WHERE organisation_id=? AND status<>'closed'",[org]);if(ncr)attention.push({key:'ncrs',title:`${plural(ncr,'open NCR')}`,detail:'Non-conformances awaiting action or verification',area:'IMS & HSEQ',severity:'warning'});
-   const inc=await count("SELECT COUNT(*) AS n FROM hseq_incidents WHERE organisation_id=? AND status<>'closed'",[org]);if(inc)attention.push({key:'incidents',title:`${plural(inc,'open incident')}`,detail:'Reported or under investigation',area:'IMS & HSEQ',severity:'danger'});
-   const overdue=await count("SELECT COUNT(*) AS n FROM hseq_actions WHERE organisation_id=? AND status IN ('open','in_progress') AND due_date IS NOT NULL AND due_date<?",[org,today]);if(overdue)attention.push({key:'actions-overdue',title:`${plural(overdue,'overdue corrective action')}`,detail:'Past their due date',area:'IMS & HSEQ',severity:'danger'});
+   const ncr=await count(`SELECT COUNT(*) AS n FROM hseq_ncrs WHERE organisation_id=? AND status<>'closed'${inScope('project_id',true)}`,[org,...sp()]);if(ncr)attention.push({key:'ncrs',title:`${plural(ncr,'open NCR')}`,detail:'Non-conformances awaiting action or verification',area:'IMS & HSEQ',severity:'warning'});
+   const inc=await count(`SELECT COUNT(*) AS n FROM hseq_incidents WHERE organisation_id=? AND status<>'closed'${inScope('project_id',true)}`,[org,...sp()]);if(inc)attention.push({key:'incidents',title:`${plural(inc,'open incident')}`,detail:'Reported or under investigation',area:'IMS & HSEQ',severity:'danger'});
+   const overdue=await count(`SELECT COUNT(*) AS n FROM hseq_actions WHERE organisation_id=? AND status IN ('open','in_progress') AND due_date IS NOT NULL AND due_date<?${inScope('project_id',true)}`,[org,today,...sp()]);if(overdue)attention.push({key:'actions-overdue',title:`${plural(overdue,'overdue corrective action')}`,detail:'Past their due date',area:'IMS & HSEQ',severity:'danger'});
   }
   // My Work reads existing assignments (ITP points, corrective actions); no task copies are created.
   if(can(a.role,'itp.complete')){
-   const itp=await count("SELECT COUNT(*) AS n FROM itp_items WHERE organisation_id=? AND assigned_user_id=? AND status='open'",[org,a.userId]);if(itp)mine.push({key:'itp',title:`Complete ${plural(itp,'inspection point')}`,detail:'Quality records assigned to you',area:can(a.role,'schedule.edit')||can(a.role,'pipeline.view')?'Projects':'Field',severity:'info'});
+   const itp=await count(`SELECT COUNT(*) AS n FROM itp_items WHERE organisation_id=? AND assigned_user_id=? AND status='open'${inScope('project_id')}`,[org,a.userId,...sp()]);if(itp)mine.push({key:'itp',title:`Complete ${plural(itp,'inspection point')}`,detail:'Quality records assigned to you',area:can(a.role,'schedule.edit')||can(a.role,'pipeline.view')?'Projects':'Field',severity:'info'});
   }
-  const acts=await query<{id:string;action:string;due_date:string|null;project_id:string|null}>("SELECT id,action,due_date,project_id FROM hseq_actions WHERE organisation_id=? AND owner_user_id=? AND status IN ('open','in_progress') ORDER BY due_date IS NULL,due_date LIMIT 5",[org,a.userId]);
+  const acts=await query<{id:string;action:string;due_date:string|null;project_id:string|null}>(`SELECT id,action,due_date,project_id FROM hseq_actions WHERE organisation_id=? AND owner_user_id=? AND status IN ('open','in_progress')${inScope('project_id',true)} ORDER BY due_date IS NULL,due_date LIMIT 5`,[org,a.userId,...sp()]);
   for(const x of acts)mine.push({key:`action-${x.id}`,title:`Action: ${String(x.action).slice(0,90)}`,detail:x.due_date?`Due ${x.due_date}`:'No due date',area:'IMS & HSEQ',severity:x.due_date&&x.due_date<today?'danger':'info'});
   if(can(a.role,'hseq.view')||can(a.role,'itp.complete')){
-   const holds=await count("SELECT COUNT(*) AS n FROM itp_items WHERE organisation_id=? AND point_type='hold' AND status='open'",[org]);
+   const holds=await count(`SELECT COUNT(*) AS n FROM itp_items WHERE organisation_id=? AND point_type='hold' AND status='open'${inScope('project_id')}`,[org,...sp()]);
    indicators.push({key:'hold-points',label:'Open hold points',value:String(holds),detail:'Work cannot proceed past these until released',area:'IMS & HSEQ',severity:holds?'warning':'ok'});
   }
  })());
@@ -91,7 +98,8 @@ export async function homeFeed(){
   const overdueInv=await count("SELECT COUNT(*) AS n FROM client_invoices WHERE organisation_id=? AND status IN ('issued','part_paid') AND due_date IS NOT NULL AND due_date<?",[org,today]);if(overdueInv)attention.push({key:'invoices-overdue',title:`${plural(overdueInv,'overdue invoice')}`,detail:'Past due date and unpaid',area:'Commercial',severity:'danger'});
  })());
  if(can(a.role,'project.view'))tasks.push((async()=>{const n=await count("SELECT COUNT(*) AS n FROM library_items WHERE organisation_id=? AND status='current' AND expiry_date IS NOT NULL AND expiry_date<=?",[org,month]);if(n)attention.push({key:'library-expiry',title:`${plural(n,'library item')} expired or expiring within 30 days`,detail:'Insurances, licences and certifications',area:'Documents',severity:'warning'});})());
- if(on('operations','schedule.view'))tasks.push((async()=>{
+ // Organisation dispatch indicators belong to the people who plan the schedule.
+ if(on('operations','schedule.edit'))tasks.push((async()=>{
   const tomorrow=new Date(Date.parse(today)+86400000).toISOString().slice(0,10);
   const rows=await query<{date:string;status:string;requirements:string|null;assignments:string|null}>("SELECT JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.date')) AS date,status,JSON_EXTRACT(metadata,'$.requirements') AS requirements,JSON_EXTRACT(metadata,'$.assignments') AS assignments FROM shifts WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.date')) BETWEEN ? AND ? AND status NOT IN ('Cancelled','Archived')",[org,tomorrow,soon]);
   const parse=(v:string|null)=>{try{const x=typeof v==='string'?JSON.parse(v):v;return Array.isArray(x)?x:[];}catch{return [];}};
@@ -109,8 +117,11 @@ export async function homeFeed(){
  })());
  if(on('operations','schedule.view')||on('field','field.capture'))tasks.push((async()=>{
   const shifts=await query("SELECT s.id,s.name,s.status,JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.start')) AS start,JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.assignments')) AS assignments,JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.supervisorUserId')) AS supervisor,JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.jobId')) AS project_id,j.name AS job FROM shifts s LEFT JOIN jobs j ON j.id=JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.jobId')) AND j.organisation_id=s.organisation_id WHERE s.organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.date'))=? AND s.status NOT IN ('Cancelled','Archived','Draft') ORDER BY start LIMIT 50",[org,today]);
+  // Same rules as /api/field/today (lib/platform/shift-scope.ts).
+  const audience=await shiftAudience(a);
+  const parse=(v:unknown)=>{try{return typeof v==='string'?JSON.parse(v):v;}catch{return [];}};
   for(const s of shifts){
-   if(a.role==='field'&&s.supervisor!==a.userId&&!String(s.assignments||'').includes(a.userId))continue;
+   if(!shiftVisible(audience,{supervisorUserId:s.supervisor,assignments:parse(s.assignments),jobId:s.project_id}))continue;
    todayItems.push({key:`shift-${s.id}`,title:s.name,detail:[s.start,s.job,s.status].filter(Boolean).join(' · '),area:a.role==='field'?'Field':s.project_id&&on('projects','project.view')?'Projects':'Schedule',target:a.role==='field'?{type:'shift',id:s.id}:s.project_id&&on('projects','project.view')?{type:'project',id:String(s.project_id),tab:'delivery'}:undefined,severity:'info'});
   }
  })());

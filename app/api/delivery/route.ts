@@ -12,6 +12,7 @@ import { CHECKS, SHIFT_STATUSES, mergeJob, shiftWarnings, type DeliveryRecord, t
 import { evaluateShift, availability, blocking, loadResources, loadNearbyShifts, shiftInput, type Conflict } from '@/lib/modules/operations/conflicts';
 import { RESOURCE_CATEGORIES } from '@/lib/v1/resource-mapping';
 import { shiftStatements } from '@/lib/v1/resource-sync';
+import { projectScope } from '@/lib/platform/project-access';
 export const dynamic = 'force-dynamic';
 const tables = ['jobs','shifts','workers','crews','plant','suppliers','subcontractors'] as const;
 async function load(db: Database, table: string): Promise<DeliveryRecord[]> {
@@ -21,7 +22,10 @@ async function load(db: Database, table: string): Promise<DeliveryRecord[]> {
   return r.results.map(r => ({id:String(r.id), name:String(r.name), status:String(r.status), metadata:{...typed(r),...safeJson<Meta>(r.metadata,{})}, createdAt:String(r.created_at)}));
 }
 async function handleGET(request: Request) {
-  try { const db=requireEstimateDb(); const actor=await requireActor(request, db, 'field-read'); if(actor.role==='field'){const [jobs,shifts]=await Promise.all([load(db,'jobs'),load(db,'shifts')]);return Response.json({jobs:jobs.map(r=>fieldDelivery(r,'jobs')),shifts:shifts.map(r=>fieldDelivery(r,'shifts')),workers:[],crews:[],plant:[],suppliers:[],subcontractors:[]},{headers:{'Cache-Control':'private, no-store'}});} const rows=await Promise.all(tables.map(t=>load(db,t))); const money=can(actor.role,'commercial.view')&&usable(await getEntitlements(actor.organisationId),'commercial'); return Response.json(Object.fromEntries(tables.map((t,i)=>[t,money?rows[i]:rows[i].map(withoutMoney)])),{headers:{'Cache-Control':'private, no-store'}}); }
+  try { const db=requireEstimateDb(); const actor=await requireActor(request, db, 'field-read'); if(actor.role==='field'){const [jobs,shifts]=await Promise.all([load(db,'jobs'),load(db,'shifts')]);return Response.json({jobs:jobs.map(r=>fieldDelivery(r,'jobs')),shifts:shifts.map(r=>fieldDelivery(r,'shifts')),workers:[],crews:[],plant:[],suppliers:[],subcontractors:[]},{headers:{'Cache-Control':'private, no-store'}});} const rows=await Promise.all(tables.map(t=>load(db,t)));
+    // Project-scoped roles see the schedule of their own projects only (jobs and shifts); resource registers are unchanged.
+    const scope=await projectScope(actor); if(scope){rows[0]=rows[0].filter(j=>scope.includes(j.id));rows[1]=rows[1].filter(s=>scope.includes(String(s.metadata.jobId||'')));}
+    const money=can(actor.role,'commercial.view')&&usable(await getEntitlements(actor.organisationId),'commercial'); return Response.json(Object.fromEntries(tables.map((t,i)=>[t,money?rows[i]:rows[i].map(withoutMoney)])),{headers:{'Cache-Control':'private, no-store'}}); }
   catch(e) { console.error(e); return jsonError('Unable to load dispatch records. Please retry.',503); }
 }
 async function handlePOST(request:Request) {

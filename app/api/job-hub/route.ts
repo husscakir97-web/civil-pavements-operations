@@ -2,10 +2,14 @@ import {withActor} from '@/lib/platform/route';
 import {requireActor,authError} from '@/lib/authz';
 import {requireEstimateDb,safeJson,jsonError} from '@/lib/estimates-db';
 import {imsBlockers} from '@/lib/ims-readiness';
+import {projectScope} from '@/lib/platform/project-access';
 async function handleGET(request:Request){try{
  const db=requireEstimateDb(),actor=await requireActor(request,db,'read'),jobId=new URL(request.url).searchParams.get('jobId');
- const jobs=await db.prepare("SELECT id,name,status FROM jobs WHERE organisation_id=? AND lower(status)!='archived' ORDER BY name").bind(actor.organisationId).all();
+ const all=await db.prepare("SELECT id,name,status FROM jobs WHERE organisation_id=? AND lower(status)!='archived' ORDER BY name").bind(actor.organisationId).all<{id:string}>();
+ // Project-scoped roles (Project/Site Engineer) see only their projects; others are unchanged.
+ const scope=await projectScope(actor),jobs={results:scope?all.results.filter(j=>scope.includes(j.id)):all.results};
  if(!jobId)return Response.json({jobs:jobs.results});
+ if(scope&&!scope.includes(jobId))return jsonError('Job not found.',404);
  const job=await db.prepare('SELECT * FROM jobs WHERE organisation_id=? AND id=?').bind(actor.organisationId,jobId).first<Record<string,unknown>>();if(!job)return jsonError('Job not found.',404);
  const meta=safeJson<Record<string,unknown>>(job.metadata,{});
  const [shifts,dockets,variations,claims,docs,activity,blockers]=await Promise.all([

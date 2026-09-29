@@ -2,12 +2,14 @@ import {z} from 'zod';
 import {api,body,fail} from '@/lib/platform/http';
 import {query,one,exec,tx,uuid,nowIso} from '@/lib/platform/sql';
 import {audit} from '@/lib/platform/audit';
+import {assertProjectAccess,projectFilter} from '@/lib/platform/project-access';
 import {projectProgram,orderActivities,type Activity} from '@/lib/v1/program';
 export const dynamic='force-dynamic';
 const date=z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(s=>Number.isFinite(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s,'Enter a valid date.');
 const input=z.object({id:z.string().max(191).optional(),revision:z.number().int().positive().optional(),projectId:z.string().min(1).max(191),name:z.string().trim().min(1).max(180),startDate:date,durationDays:z.number().int().min(1).max(3650),predecessorId:z.string().max(191).nullable(),responsible:z.string().max(180),workPackage:z.string().max(180),resourceRequirement:z.string().max(2000),plannedQuantity:z.number().min(0).max(1e12),quantityUnit:z.string().max(40),productionPerDay:z.number().min(0).max(1e12),status:z.enum(['planned','in_progress','complete','on_hold'])});
 export const GET=api({permission:'read',module:'projects',capability:'project.view'},async({actor,params})=>{
- const projects=await query("SELECT id,name FROM jobs WHERE organisation_id=? AND LOWER(status)<>'archived' ORDER BY name",[actor.organisationId]);
+ const scoped:unknown[]=[actor.organisationId],scope=await projectFilter('id',scoped);
+ const projects=await query(`SELECT id,name FROM jobs WHERE organisation_id=? AND LOWER(status)<>'archived'${scope} ORDER BY name`,scoped);
  const projectId=params.get('projectId');
  if(!projectId)return {projects,activities:[]};
  if(!projects.some(p=>p.id===projectId))fail(404,'Project not found.');
@@ -16,6 +18,7 @@ export const GET=api({permission:'read',module:'projects',capability:'project.vi
 });
 export const POST=api({permission:'write',module:'projects',capability:'project.edit'},async({actor,request})=>{
  const b=await body(request,input),org=actor.organisationId,id=b.id||uuid(),now=nowIso();
+ await assertProjectAccess(b.projectId);
  return tx(async conn=>{
   // Project lock serialises graph edits, including two concurrent dependency changes.
   const project=await one('SELECT id,stage FROM jobs WHERE organisation_id=? AND id=? FOR UPDATE',[org,b.projectId],conn);
@@ -42,6 +45,7 @@ const quick=z.discriminatedUnion('action',[
 const COLUMNS={name:'name',startDate:'start_date',durationDays:'duration_days',status:'status',responsible:'responsible'} as const;
 export const PATCH=api({permission:'write',module:'projects',capability:'project.edit'},async({actor,request})=>{
  const b=await body(request,quick),org=actor.organisationId,now=nowIso();
+ await assertProjectAccess(b.projectId);
  return tx(async conn=>{
   const project=await one('SELECT id,stage FROM jobs WHERE organisation_id=? AND id=? FOR UPDATE',[org,b.projectId],conn);
   if(!project)fail(404,'Project not found.');if(project.stage==='closed')fail(409,'Reopen the project before editing its programme.');

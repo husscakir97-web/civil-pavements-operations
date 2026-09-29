@@ -12,6 +12,7 @@ import {REGISTERS,registerDef,riskRating,DEFAULT_RISK_MATRIX,type RegisterDef,ty
 import {requireModule} from '@/lib/platform/entitlements';
 import {getPool} from '@/lib/platform/database';
 import {resolveClientContext} from '@/lib/platform/clients';
+import {canAccessProject,projectFilter} from '@/lib/platform/project-access';
 const getPoolConn=()=>getPool();
 
 const actor=()=>actorContext.getStore()!;
@@ -63,11 +64,12 @@ export async function resolveParent(def:RegisterDef,parentId:string|null,conn:Co
   return {tender_id:t!.id,opportunityId:t!.opportunity_id};
  }
  if(def.scope==='itp'){
-  const i=await one('SELECT i.id,i.project_id,j.stage FROM itps i JOIN jobs j ON j.id=i.project_id AND j.organisation_id=i.organisation_id WHERE i.organisation_id=? AND i.id=?',[org,parentId],conn);if(!i)fail(404,'ITP not found.');
+  const i=await one('SELECT i.id,i.project_id,j.stage FROM itps i JOIN jobs j ON j.id=i.project_id AND j.organisation_id=i.organisation_id WHERE i.organisation_id=? AND i.id=?',[org,parentId],conn);if(!i||!await canAccessProject(i.project_id,undefined,conn))fail(404,'ITP not found.');
   if(forWrite&&i!.stage==='closed')fail(409,'This project is closed. Reopen it before adding records.');
   return {itp_id:i!.id,project_id:i!.project_id};
  }
- const p=await one('SELECT id,stage FROM jobs WHERE organisation_id=? AND id=?',[org,parentId],conn);if(!p)fail(404,'Project not found.');
+ // Project-scoped roles (Project/Site Engineer) reach only their own projects' records.
+ const p=await one('SELECT id,stage FROM jobs WHERE organisation_id=? AND id=?',[org,parentId],conn);if(!p||!await canAccessProject(p.id,undefined,conn))fail(404,'Project not found.');
  if(forWrite&&p!.stage==='closed')fail(409,'This project is closed. Reopen it before adding or changing records.');
  return {project_id:p!.id};
 }
@@ -130,6 +132,8 @@ export async function listRegister(key:string,params:URLSearchParams){
  const state=params.get('state');if(state){where.push(`t.${stateCol(def)}=?`);values.push(state);}
  if(def.key==='requirements')where.push("t.tender_id IS NOT NULL");
  const joinProject=col==='project_id'||def.scope==='itp';
+ // Cross-project listings (all=1, optional-project registers) are narrowed to the actor's projects; org-level rows stay.
+ if(!parentId&&joinProject){const f=await projectFilter('t.project_id',values,{allowNull:def.scope==='optional-project'});if(f)where.push(f.replace(/^ AND /,''));}
  const rows=await query(`SELECT t.*${joinProject?',j.name AS project_name':''} FROM ${def.table} t ${joinProject?'LEFT JOIN jobs j ON j.id=t.project_id AND j.organisation_id=t.organisation_id':''} WHERE ${where.join(' AND ')} ORDER BY ${def.key==='itp_items'?'t.sequence,t.created_at':'t.created_at DESC'} LIMIT 500`,values);
  return {register:def.key,records:rows.map(r=>project(def,r,actor().role))};
 }

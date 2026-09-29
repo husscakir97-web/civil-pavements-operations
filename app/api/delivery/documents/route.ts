@@ -2,6 +2,7 @@ import {withActor} from '@/lib/platform/route';
 import { env } from '@/lib/platform/runtime';
 import { requireEstimateDb, jsonError } from '@/lib/estimates-db';
 import { requireActor, authError } from '@/lib/authz';
+import { projectScope } from '@/lib/platform/project-access';
 export const dynamic='force-dynamic';
 async function handlePOST(request:Request) {
   try { const db = requireEstimateDb(); const actor = await requireActor(request, db, 'field');
@@ -21,6 +22,10 @@ async function handleGET(request:Request) {
     const row=await db.prepare('SELECT name,metadata FROM attachments WHERE id=? AND organisation_id=?').bind(id,actor.organisationId).first<{name:string;metadata:string}>();
     if(!row)return jsonError('Document not found.',404);
     const access=JSON.parse(row.metadata);if(actor.role==='field'&&access.audience!=='field')return jsonError('This file is available to office staff only.',403);
+    // Legacy attachments have no reliable project link. Project-scoped roles (Project/Site Engineer) get
+    // only their own uploads or an attachment explicitly linked to one of their projects — never by guessing.
+    const scope=await projectScope(actor);
+    if(scope&&access.uploadedBy!==actor.userId&&!(access.projectId&&scope.includes(String(access.projectId))))return jsonError('Document not found.',404);
     const object=await env.BUCKET?.get(access.key);if(!object)return jsonError('Document not found.',404);
     const meta = JSON.parse(row.metadata) as {contentType?:string};
     return new Response(object.body,{headers:{'Content-Type':meta.contentType||'application/octet-stream','Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(row.name)}`,'X-Content-Type-Options':'nosniff','Cache-Control':'private, no-store'}});

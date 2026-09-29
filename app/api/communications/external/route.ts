@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {api,body} from '@/lib/platform/http';
+import {api} from '@/lib/platform/http';
 import {createExternalShiftLink,listExternalShiftLinks,revokeExternalLink} from '@/lib/platform/communications';
 export const dynamic='force-dynamic';
 export const GET=api({permission:'read',module:'core',capability:'external.share'},async({params})=>({links:await listExternalShiftLinks(String(params.get('shiftId')||''))}));

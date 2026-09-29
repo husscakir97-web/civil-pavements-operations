@@ -207,7 +207,7 @@ async function externalToken(raw:string){
  await exec('UPDATE external_access_tokens SET last_accessed_at=? WHERE id=?',[nowIso(),row.id]);
  return row!;
 }
-function safeExternalDocumentsWhere(){return "(visibility='field' AND status='current' AND ((project_id=? AND context_type IN ('project','swms','itp','field')) OR (context_type='field' AND context_id=?)))";}
+function safeExternalDocumentsWhere(){return "(visibility='field' AND status='current' AND ((project_id=? AND context_type IN ('project','swms','itp')) OR (context_type='field' AND context_id=?)))";}
 export async function externalJob(raw:string){
  const t=await externalToken(raw),shift=await one('SELECT id,name,status,metadata,location_id FROM shifts WHERE organisation_id=? AND id=?',[t.organisation_id,t.context_id]);if(!shift)fail(404,'This job is no longer available.');
  const m=typeof shift.metadata==='string'?JSON.parse(shift.metadata||'{}'):shift.metadata||{},projectId=t.project_id||m.jobId||null;

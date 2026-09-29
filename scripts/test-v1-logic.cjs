@@ -421,6 +421,23 @@ const {parsePastedItems}=load('lib/v1/estimate-paste.ts');
 const pasted=parsePastedItems('Description\tQty\tUnit\tRate\nProfile 50mm\t1,200\tm2\t$4.50\nAC14\t180\tt\t165\tmaterial\tWearing\nbad row\tx\tm\t1',  'General',i=>'i'+i);
 assert.equal(pasted.items.length,2);assert.equal(pasted.items[0].quantity,1200);assert.equal(pasted.items[0].rate,4.5);assert.equal(pasted.items[0].category,'other');assert.equal(pasted.items[1].category,'material');assert.equal(pasted.items[1].section,'Wearing');assert.deepEqual(pasted.skipped,[4]);
 console.log('PASS estimate paste: header skipped, $ and thousands parsed, category/section, bad rows reported');
+{
+ const B=load('lib/v1/schedule-board.ts');
+ const worker={id:'w1',name:'Taylor',status:'Available',metadata:{roleTitle:'Traffic Controller',employeeNumber:'E1'}};
+ const plant={id:'p1',name:'TMA001',status:'Available',metadata:{type:'TMA',plantNumber:'TMA001'}};
+ assert.equal(B.defaultAssignmentRole(worker,'workers'),'Traffic Controller');
+ assert.equal(B.defaultAssignmentRole(plant,'plant'),'TMA');
+ assert.deepEqual(B.quickAssignment(plant,'plant'),{resourceId:'p1',category:'plant',name:'TMA001',role:'TMA',hours:8,rate:0,payload:0,trips:0});
+ const req=[{category:'plant',role:'TMA',quantity:1}],assigned=[];
+ const ranked=B.rankResources([
+  plant,
+  {id:'p2',name:'Roller 1',status:'Available',metadata:{type:'Roller'}},
+ ],'plant',req,assigned,{p1:{tone:'ok',text:'Available'},p2:{tone:'ok',text:'Available'}});
+ assert.equal(ranked[0].id,'p1','resource that fills the missing requirement is suggested first');
+ const blocked=B.rankResources([plant,{id:'p3',name:'TMA002',status:'Available',metadata:{type:'TMA'}}],'plant',req,assigned,{p1:{tone:'block',text:'Booked'},p3:{tone:'ok',text:'Available'}});
+ assert.equal(blocked[0].id,'p3','available matching resource ranks before a blocked matching resource');
+ console.log('PASS schedule board helpers: default roles, quick assignment, requirement fit and availability ranking');
+}
 (async()=>{
  const L=load('lib/v1/location.ts'),P=load('lib/platform/location-provider.ts'),S=load('lib/platform/locations.ts');
  // Address components map from both Places (New) and Geocoding shapes; free text is never parsed into parts.

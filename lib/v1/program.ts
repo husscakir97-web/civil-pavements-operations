@@ -15,3 +15,14 @@ export function projectProgram<T extends Activity>(activities:T[]){
  }
  return activities.map(a=>({...a,...visit(a.id)}));
 }
+
+/** Moves one activity up (-1) or down (+1) in the user's order. Returns the full new id order. */
+export function moveActivity(ids:readonly string[],id:string,delta:number){
+ const from=ids.indexOf(id);if(from<0)return [...ids];
+ const to=Math.max(0,Math.min(ids.length-1,from+delta)),out=[...ids];
+ out.splice(to,0,...out.splice(from,1));return out;
+}
+/** Display order: explicit sequence first, then planned start, then name. */
+export function orderActivities<T extends {sequence?:number|null;start_date:string;name:string}>(rows:T[]){
+ return [...rows].sort((a,b)=>(a.sequence??Number.MAX_SAFE_INTEGER)-(b.sequence??Number.MAX_SAFE_INTEGER)||a.start_date.localeCompare(b.start_date)||a.name.localeCompare(b.name));
+}

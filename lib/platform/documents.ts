@@ -48,6 +48,8 @@ export async function storeDocument(file:File,meta:{contextType:DocumentContext;
  if(!writable(entitlements,module))fail(403,'This module is read-only or disabled. Existing documents remain available where permitted.');
  if(!file.size)fail(400,'The file is empty.');
  if(file.size>MAX_DOCUMENT_BYTES)fail(413,'Files must be 40 MB or smaller.');
+ if((meta.contextType==='organisation'||meta.contextType==='library')&&!can(actor.role,'library.edit'))fail(403,'You are not authorised to manage company documents.');
+ if(actor.role==='field'&&meta.contextType!=='field')fail(403,'Field uploads must stay attached to field records.');
  if(actor.role!=='field'&&!can(actor.role,CONTEXT_CAPABILITY[meta.contextType]))fail(403,'You are not authorised to attach documents to this record.');
  if(!await canAccessProject(documentProject({project_id:meta.projectId,context_type:meta.contextType,context_id:meta.contextId})))fail(404,'Project not found.');
  if(!ALLOWED.test(file.name))fail(415,'This file type is not accepted. Use PDF, image, Office, CSV, text or ZIP files.');

@@ -3,7 +3,7 @@ import {requireEstimateDb} from '@/lib/estimates-db';
 import {actorContext} from '@/lib/platform/context';
 import {can,type Capability} from '@/lib/platform/permissions';
 import {getEntitlements,usable} from '@/lib/platform/entitlements';
-import {documentContextsFor} from '@/lib/platform/documents';
+import {documentContextsForAccess} from '@/lib/platform/documents';
 import {projectScope} from '@/lib/platform/project-access';
 import {canViewClients,visibleClientIds} from '@/lib/platform/clients';
 import type {ModuleKey} from '@/lib/platform/modules';
@@ -46,7 +46,7 @@ async function handleGET(request:Request){
   // "public liability" finds "Public & Products Liability Insurance".
   const terms=q.toLowerCase().split(/\s+/).filter(Boolean).slice(0,6).map(t=>`%${t.replace(/[\\%_]/g,m=>'\\'+m)}%`);
   const groups=await Promise.all(allowed.map(async spec=>{
-   const docContexts=documentContextsFor(actor.role).map(c=>`'${c}'`).join(',')||"''";
+   const docContexts=documentContextsForAccess(actor.role,entitlements).map(c=>`'${c}'`).join(',')||"''";
    const fieldDocs=spec.table==='documents'?(actor.role==='field'?" AND visibility='field'":` AND context_type IN (${docContexts})`):'';
    const fieldSwms=spec.table==='swms'&&actor.role==='field'?' AND issued_revision_id IS NOT NULL':'';
    const r=await db.prepare(`SELECT id,${spec.name} AS name,${spec.status} AS status,${spec.detail} AS detail${spec.project?`,${spec.project} AS project_id`:''}${spec.tender?`,${spec.tender} AS tender_id`:''}${spec.client?`,${spec.client} AS client_id`:''} FROM ${spec.table} WHERE organisation_id=? ${spec.filter||''}${fieldDocs}${fieldSwms} AND ${terms.map(()=>`(${spec.match.map(c=>`LOWER(${c}) LIKE ?`).join(' OR ')})`).join(' AND ')} LIMIT 10`).bind(actor.organisationId,...terms.flatMap(t=>spec.match.map(()=>t))).all<Record<string,unknown>>();

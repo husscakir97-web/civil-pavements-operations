@@ -31,6 +31,8 @@ export const DOCUMENT_CONTEXT_MODULE:Record<DocumentContext,ModuleKey>={
  field:'field',
 };
 export const documentContextsForAccess=(role:string,e:Partial<Entitlements>)=>CONTEXTS.filter(c=>can(role,CONTEXT_CAPABILITY[c])&&usable(e,DOCUMENT_CONTEXT_MODULE[c]));
+const FIELD_VISIBLE_CONTEXTS:DocumentContext[]=['organisation','library','project','checklist','swms','itp','incident','ncr','action','field'];
+export const fieldDocumentContextsForAccess=(e:Partial<Entitlements>)=>FIELD_VISIBLE_CONTEXTS.filter(c=>usable(e,DOCUMENT_CONTEXT_MODULE[c]));
 
 export const CONTEXT_CAPABILITY:Record<DocumentContext,Capability>={
  organisation:'project.view',library:'project.view',project:'project.view',checklist:'project.view',field:'project.view',
@@ -88,7 +90,7 @@ export async function listDocuments(filter:{contextType?:string|null;contextId?:
  if(!filter.includeSuperseded)where.push("d.status='current'");
  const q=String(filter.q||'').trim().toLowerCase().slice(0,160);
  if(q){for(const term of q.split(/\s+/).filter(Boolean).slice(0,6)){const like=`%${term.replace(/[\\%_]/g,m=>'\\'+m)}%`;where.push('(LOWER(d.title) LIKE ? OR LOWER(d.file_name) LIKE ? OR LOWER(d.category) LIKE ? OR LOWER(d.context_type) LIKE ?)');values.push(like,like,like,like);}}
- if(actor.role==='field')where.push("d.visibility='field'");
+ if(actor.role==='field'){const ctx=fieldDocumentContextsForAccess(entitlements);if(!ctx.length)return [];where.push("d.visibility='field'");where.push('d.context_type IN (?)');values.push(ctx);}
  else{const ctx=documentContextsForAccess(actor.role,entitlements);if(!ctx.length)return [];where.push('d.context_type IN (?)');values.push(ctx);}
  const scope=await projectFilter("COALESCE(d.project_id,CASE WHEN d.context_type='project' THEN d.context_id END)",values,{allowNull:true});if(scope)where.push(scope.replace(/^ AND /,''));
  const limit=Math.min(Math.max(Number(filter.limit||200),1),500);
@@ -110,6 +112,7 @@ export async function openDocument(id:string){
  if(!row)fail(404,'Document not found.');
  if(actor.role==='field'&&row!.visibility!=='field')fail(403,'This file is available to office staff only.');
  const context=row!.context_type as DocumentContext,module=DOCUMENT_CONTEXT_MODULE[context];
+ if(actor.role==='field'&&!fieldDocumentContextsForAccess(entitlements).includes(context))fail(404,'Document not found.');
  if(!module||!usable(entitlements,module))fail(404,'Document not found.');
  if(actor.role!=='field'&&!can(actor.role,CONTEXT_CAPABILITY[context]??'org.admin'))fail(403,'You are not authorised to open this document.');
  if(!await canAccessProject(documentProject(row!)))fail(404,'Document not found.');

@@ -34,6 +34,7 @@ const loaders = {
   field: () => import("@/components/v1/field"),
   fieldRecords: () => import("@/components/field-workspace"),
   resources: () => import("@/components/v1/resources"),
+  documents: () => import("@/components/v1/documents"),
   engines: () => import("@/components/v1/engines"),
 };
 const HomeV1 = dynamic(() => loaders.home().then(m => m.HomeV1), { loading });
@@ -57,6 +58,7 @@ const FieldToday = dynamic(() => loaders.field().then(m => m.FieldToday), { load
 const ResourcesArea = dynamic(() => loaders.resources().then(m => m.ResourcesArea), { loading });
 const FieldWorkspace = dynamic(() => loaders.fieldRecords().then(m => m.FieldWorkspace), { loading });
 const DepotsArea = dynamic(() => import("@/components/v1/depots").then(m => m.DepotsArea), { loading });
+const DocumentsWorkspace = dynamic(() => loaders.documents().then(m => m.DocumentsWorkspace), { loading });
 const EngineOverview = dynamic(() => loaders.engines().then(m => m.EngineOverview), { loading });
 
 type Area = NavArea & { icon: LucideIcon; preload: () => Promise<unknown> };
@@ -64,7 +66,7 @@ type Area = NavArea & { icon: LucideIcon; preload: () => Promise<unknown> };
 const ICONS: Record<string, [LucideIcon, () => Promise<unknown>]> = {
   Home: [Home, loaders.home], Today: [CalendarCheck, loaders.field], CRM: [Contact, loaders.pipeline], Pipeline: [BriefcaseBusiness, loaders.pipeline],
   Projects: [ClipboardCheck, loaders.projects], Schedule: [CalendarDays, loaders.operations], Resources: [UsersRound, loaders.resources],
-  Commercial: [DollarSign, loaders.commercial], "IMS & HSEQ": [ShieldCheck, loaders.hseq], Documents: [FolderOpen, loaders.admin], Reports: [BarChart3, loaders.reports], Admin: [Settings, loaders.admin],
+  Commercial: [DollarSign, loaders.commercial], "IMS & HSEQ": [ShieldCheck, loaders.hseq], Documents: [FolderOpen, loaders.documents], Reports: [BarChart3, loaders.reports], Admin: [Settings, loaders.admin],
 };
 const toArea = (n: NavArea): Area => ({ ...n, icon: ICONS[n.key]?.[0] ?? Truck, preload: ICONS[n.key]?.[1] ?? loaders.home });
 
@@ -168,7 +170,7 @@ function WorkspaceShell() {
   else if (k === "Resources") content = sub === "Workshop" ? <Workshop /> : sub === "Crews" ? other(["crews"]) : sub === "Suppliers & Subcontractors" ? other(["suppliers", "subcontractors"]) : sub === "Depots" ? <DepotsArea /> : <ResourcesArea key={`${sub}-${route.id || ""}`} only initial={sub === "Plant & Equipment" ? "plant" : "workers"} initialQuery={route.id} />;
   else if (k === "Commercial") content = sub === "Dockets" ? <DocketDashboard /> : <CommercialArea />;
   else if (k === "IMS & HSEQ") content = <HseqArea />;
-  else if (k === "Documents") content = <LibraryArea />;
+  else if (k === "Documents") content = sub === "Company Library" ? <LibraryArea /> : <DocumentsWorkspace key={route.id || "all-documents"} initialQuery={route.id} />;
   else if (k === "Reports") content = sub === "Lifecycle" ? <div className="grid gap-4"><div className="flex flex-wrap gap-2" role="group" aria-label="Lifecycle stage">{ENGINES.map(e => <button key={e.key} aria-pressed={engine === e.key} onClick={() => setEngine(e.key)} className={`rounded-lg border px-3 py-1.5 text-sm ${engine === e.key ? "border-slate-950 bg-slate-950 text-white" : "bg-white text-slate-600"}`}>{e.key}</button>)}</div><EngineOverview key={engine} engine={engine} /></div> : <ReportsV1 />;
   else if (k === "Admin") content = <AdminArea sub={sub || "Company"} onNavigate={() => {}} />;
 

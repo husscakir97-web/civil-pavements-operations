@@ -86,6 +86,7 @@ assert.deepEqual(areas('admin'),['Home','CRM','Pipeline','Projects','Schedule','
 assert(!areas('admin').some(k=>ENGINES.some(e=>e.key===k)),'no engine names in primary navigation');
 assert.deepEqual(subs('admin','Pipeline'),['Opportunities','Tenders','Estimates']);
 assert.deepEqual(subs('admin','Resources'),['People','Plant & Equipment','Crews','Suppliers & Subcontractors','Depots','Workshop']);
+assert.deepEqual(subs('admin','Documents'),['All Documents','Company Library'],'Documents opens with the cross-workspace file view, while Company Library remains separate');
 assert.deepEqual(areas('project_engineer'),['Home','Today','CRM','Projects','Schedule','Resources','IMS & HSEQ','Documents','Reports']);
 assert.deepEqual(subs('project_engineer','Resources'),['People','Plant & Equipment','Crews','Suppliers & Subcontractors','Depots','Workshop']);
 assert.deepEqual(subs('project_engineer','Reports'),['Reports','Lifecycle']);
@@ -203,6 +204,8 @@ for(const r of perm.ROLES)for(const q of appNav.quickActions(r,access(r)))assert
  assert.deepEqual(sr.searchTarget(r('Variation',{projectId:'p1',area:'Commercial'}),'admin'),['Projects',undefined,'p1','commercial']);
  assert.deepEqual(sr.searchTarget(r('Claim',{projectId:'p1',area:'Commercial'}),'accounts'),['Projects',undefined,'p1','commercial']);
  assert.deepEqual(sr.searchTarget(r('SWMS',{projectId:'p1',area:'IMS & HSEQ'}),'admin'),['Projects',undefined,'p1','quality']);
+ assert.deepEqual(sr.searchTarget(r('Document',{projectId:'p1',name:'IFC drawing',area:'Documents'}),'admin'),['Projects',undefined,'p1','documents'],'project document opens in project context');
+ assert.deepEqual(sr.searchTarget(r('Document',{name:'Quality policy',area:'Documents'}),'admin'),['Documents','All Documents','Quality policy'],'standalone document opens the central document workspace pre-filtered');
  assert.deepEqual(sr.searchTarget(r('Docket',{projectId:'p1',area:'Operations/Dockets'}),'admin'),['Projects',undefined,'p1','delivery']);
  assert.deepEqual(sr.searchTarget(r('Docket',{area:'Operations/Dockets'}),'admin'),['Operations','Dockets'],'docket without a project opens the docket register');
  assert.deepEqual(sr.searchTarget(r('Shift',{projectId:'p1',area:'Operations/Schedule'}),'scheduler'),['Operations','Schedule','p1']);

@@ -40,7 +40,10 @@ export const NAV:NavArea[]=[
   {key:'Dockets',module:'dockets',capability:'docket.approve'},
  ]},
  {key:'IMS & HSEQ',label:'IMS & HSEQ',subs:[{key:'IMS & HSEQ',module:'ims',capability:'hseq.view'}]},
- {key:'Documents',label:'Documents',subs:[{key:'Company Library',anyOf:['project.view','library.edit','hseq.view']}]},
+ {key:'Documents',label:'Documents',defaultSub:'All Documents',subs:[
+  {key:'All Documents',anyOf:['project.view','pipeline.view','hseq.view','commercial.view','schedule.view']},
+  {key:'Company Library',anyOf:['project.view','library.edit','hseq.view']},
+ ]},
  {key:'Reports',label:'Reports',subs:[
   {key:'Reports',module:'reports',capability:'reports.view'},
   // The lifecycle (engine) view lives here now: useful context, not the front door.

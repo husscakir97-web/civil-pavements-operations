@@ -20,7 +20,7 @@ export const GET=api({permission:'read',module:'projects',capability:'project.vi
  if(!projectId)return {projects,activities:[],members:[],comments:[]};
  if(!projects.some(p=>p.id===projectId))fail(404,'Project not found.');
  const [activities,members,comments]=await Promise.all([
-  query<Activity&{sequence:number|null;revision:number}>('SELECT * FROM program_activities WHERE organisation_id=? AND project_id=?',[actor.organisationId,projectId]),
+  query<Activity&{sequence:number|null;revision:number;responsible:string}>('SELECT * FROM program_activities WHERE organisation_id=? AND project_id=?',[actor.organisationId,projectId]),
   query<{user_id:string;name:string|null;email:string;project_role:string}>("SELECT m.user_id,u.name,u.email,m.project_role FROM project_members m JOIN users u ON u.id=m.user_id AND u.organisation_id=m.organisation_id WHERE m.organisation_id=? AND m.project_id=? AND m.active=1 ORDER BY FIELD(m.project_role,'project_manager','project_engineer','site_engineer','supervisor','hseq','commercial','other'),u.name,u.email",[actor.organisationId,projectId]),
   query<{id:string;activity_id:string;summary:string;actor_user_id:string|null;actor_email:string|null;created_at:string;actor_name:string|null}>("SELECT a.id,a.entity_id AS activity_id,a.summary,a.actor_user_id,a.actor_email,a.created_at,u.name AS actor_name FROM audit_log a LEFT JOIN users u ON u.organisation_id=a.organisation_id AND u.id=a.actor_user_id WHERE a.organisation_id=? AND a.project_id=? AND a.entity_type='program_activity' AND a.event_type='program.comment' ORDER BY a.created_at DESC LIMIT 500",[actor.organisationId,projectId]),
  ]);

@@ -82,10 +82,11 @@ async function eligiblePeople(ctx:ContextInfo){
 }
 
 async function ensureThread(ctx:ContextInfo,conn:Conn){
- const a=actorContext.getStore()!;
- let t=await one('SELECT * FROM communication_threads WHERE organisation_id=? AND context_type=? AND context_id=? FOR UPDATE',[a.organisationId,ctx.type,ctx.id],conn);
- if(!t){const id=uuid(),now=nowIso();await exec('INSERT INTO communication_threads (id,organisation_id,context_type,context_id,project_id,title,status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,\'open\',?,?,?)',[id,a.organisationId,ctx.type,ctx.id,ctx.projectId,ctx.title,a.userId,now,now],conn);t={id,organisation_id:a.organisationId,context_type:ctx.type,context_id:ctx.id,project_id:ctx.projectId,title:ctx.title,status:'open',created_by:a.userId,created_at:now,updated_at:now};}
- return t!;
+ const a=actorContext.getStore()!,id=uuid(),now=nowIso();
+ await exec("INSERT INTO communication_threads (id,organisation_id,context_type,context_id,project_id,title,status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,'open',?,?,?) ON DUPLICATE KEY UPDATE id=id",[id,a.organisationId,ctx.type,ctx.id,ctx.projectId,ctx.title,a.userId,now,now],conn);
+ const t=await one('SELECT * FROM communication_threads WHERE organisation_id=? AND context_type=? AND context_id=? FOR UPDATE',[a.organisationId,ctx.type,ctx.id],conn);
+ if(!t)throw new Error('Communication thread was not created.');
+ return t;
 }
 
 const trim=(s:string,n:number)=>s.trim().slice(0,n);

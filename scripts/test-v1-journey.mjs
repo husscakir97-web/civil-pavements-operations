@@ -627,6 +627,16 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const schedSearch=await json(await call('/api/search?q=Priced','GET',undefined,R.cookie),200);assert(!schedSearch.results.some(r=>r.id===pricing.id),'nor find them in search');
  await as('estimator');
  assert.equal((await call('/api/documents?id='+pricing.id,'GET',undefined,R.cookie)).status,200,'estimator can open tender documents');
+ // Documents is Core, but it must respect the entitlement of the record that owns the file.
+ await json(await call('/api/platform/entitlements','PUT',{module:'pipeline',status:'read_only'},A.cookie),200,'pipeline read-only');
+ assert.equal((await call('/api/documents?id='+pricing.id,'GET',undefined,R.cookie)).status,200,'read-only module keeps existing tender documents viewable');
+ assert.equal((await upload(A.cookie,{contextType:'tender',contextId:tenderId,category:'Pricing',title:'Denied read-only upload'})).status,403,'read-only module refuses document writes');
+ await json(await call('/api/platform/entitlements','PUT',{module:'pipeline',status:'disabled'},A.cookie),200,'pipeline disabled');
+ assert.equal((await call('/api/documents?id='+pricing.id,'GET',undefined,R.cookie)).status,404,'disabled module hides its document by direct id');
+ assert.equal((await json(await call('/api/documents?contextType=tender&contextId='+tenderId,'GET',undefined,R.cookie),200)).documents.length,0,'disabled module hides its documents from All Documents');
+ assert(!(await json(await call('/api/search?q=Priced','GET',undefined,R.cookie),200)).results.some(r=>r.id===pricing.id),'disabled module hides its documents from global search');
+ await json(await call('/api/platform/entitlements','PUT',{module:'pipeline',status:'active'},A.cookie),200,'pipeline restored');
+ assert.equal((await call('/api/documents?id='+pricing.id,'GET',undefined,R.cookie)).status,200,'re-enable restores document access without data loss');
  await as('estimator');
  const sup=new FormData();sup.set('contextType','library');sup.set('supersedesId',insuranceDoc.id);sup.set('file',new File(['%PDF-1.4 v2'],'v2.pdf',{type:'application/pdf'}));
  assert.equal((await call('/api/documents','POST',sup,R.cookie)).status,403,'only the uploader or a document approver can replace a document');

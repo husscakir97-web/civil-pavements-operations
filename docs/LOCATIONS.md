@@ -32,7 +32,7 @@ One row per owned location: `organisation_id`, `owner_type` (`client_site`, `pro
 - **Provenance**: `provider`, `provider_place_id`, `precision` / result granularity, `source` (`autocomplete` / `manual` / `inherited`), `geocoded_at`, `reverse_geocoded_at`. Place Details results use non-accuracy labels such as `ADDRESS`, `ROUTE`, `INTERSECTION` or `PLACE`; true geocoding accuracy labels such as `ROOFTOP` or `RANGE_INTERPOLATED` are only stored when the Geocoding API actually returned them.
 - **Points**: `geocoded_lat/lng` is the provider's point for the address. `pin_lat/lng` is the exact operational point. Both are `decimal(10,7)`.
 - **Pin**: `pin_adjusted` is true when the pin differs from the geocoded point. `pin_address` is the reverse-geocoded address of a moved pin.
-- **Lifecycle**: `revision`, `status`, `created_by`, `created_at`, `updated_at`.
+- **Lifecycle**: `revision`, `created_by`, `created_at`, `updated_at`.
 
 Owner links are `client_sites.location_id`, `jobs.location_id` (project override), `shifts.location_id`,
 `depots.location_id`, `organisation_profiles.registered_location_id` / `operating_location_id`, and

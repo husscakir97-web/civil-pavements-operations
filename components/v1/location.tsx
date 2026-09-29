@@ -8,7 +8,7 @@ import {useEffect,useMemo,useRef,useState} from 'react';
 import {Crosshair,MapPin,Navigation,RotateCcw} from 'lucide-react';
 import {api,field,Field,useSession} from './kit';
 import {Lookup,type LookupItem} from './lookup';
-import {directionsUrl,pinState,precisionLabel,samePoint,validPoint,roundPoint,EMPTY_PARTS,APPROXIMATE,type LatLng,type LocationInput,type LocationView,type ResolvedPlace,type Suggestion} from '@/lib/v1/location';
+import {directionsUrl,pinState,precisionLabel,samePoint,validPoint,roundPoint,placeResultKind,EMPTY_PARTS,APPROXIMATE,type LatLng,type LocationInput,type LocationView,type ResolvedPlace,type Suggestion} from '@/lib/v1/location';
 
 type Config={provider:'google'|'fake'|'none';mode:'browser'|'server'|'none';browserKey:string|null;mapId:string|null;region:string};
 let configPromise:Promise<Config>|null=null;
@@ -54,7 +54,7 @@ function googleClient(g:any,region:string):Client{
    token=null;// the selection ends the billing session; the next search starts a new one
    const {mapAddressComponents}=await import('@/lib/v1/location');
    const loc=place.location;const types:string[]=place.types||[];
-   return {provider:'google',placeId:place.id,formattedAddress:place.formattedAddress||'',...mapAddressComponents(place.addressComponents),point:loc?roundPoint({lat:loc.lat(),lng:loc.lng()}):null,precision:types.includes('street_address')||types.includes('premise')||types.includes('subpremise')?'ROOFTOP':types.includes('route')?'GEOMETRIC_CENTER':'APPROXIMATE'};
+   return {provider:'google',placeId:place.id,formattedAddress:place.formattedAddress||'',...mapAddressComponents(place.addressComponents),point:loc?roundPoint({lat:loc.lat(),lng:loc.lng()}):null,precision:placeResultKind(types)};
   },
   async reverse(pt){
    geocoding??=await g.maps.importLibrary('geocoding');

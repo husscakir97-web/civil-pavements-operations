@@ -670,7 +670,7 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const docBContextOnly=(await json(await upload(A.cookie,{contextType:'project',contextId:pB,title:'Bravo context-only secret'}),201,'project-context document without project_id')).document;
  // Tranche 7: contextual communication, acknowledgement receipts, notifications and secure external links.
  const [[alphaShiftRow]]=await db.execute('SELECT metadata FROM shifts WHERE organisation_id=? AND id=?',[memberA.organisation_id,shiftA]);
- const alphaShiftMeta=JSON.parse(alphaShiftRow.metadata);alphaShiftMeta.assignments=[{resourceId:workerId,category:'workers',name:'Casey Field',role:'Worker',userId:C.user.id}];
+ const alphaShiftMeta=JSON.parse(alphaShiftRow.metadata);alphaShiftMeta.assignments=[{resourceId:workerId,category:'workers',name:'Casey Field',role:'Worker',hours:8,rate:88,payload:0,trips:0,userId:C.user.id}];
  await db.execute('UPDATE shifts SET metadata=? WHERE organisation_id=? AND id=?',[JSON.stringify(alphaShiftMeta),memberA.organisation_id,shiftA]);
  alphaShiftMeta.start='06:30';
  await json(await call('/api/delivery','POST',{kind:'shifts',record:{id:shiftA,name:'Alpha kerb pour',status:'Planned',metadata:alphaShiftMeta}},A.cookie),200,'office changes assigned shift time');

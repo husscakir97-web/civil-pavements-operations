@@ -7,7 +7,7 @@ import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sh
 import {REGISTERS,type RegisterDef,type FieldDef,type RegisterKey} from '@/lib/v1/registers';
 import {allowedTransitions,MACHINES} from '@/lib/platform/workflow';
 import {filterLookup} from '@/lib/v1/lookup';
-import {ClientPicker,SitePicker,PersonPicker} from './lookup';
+import {ClientPicker,SitePicker,ContactPicker,PersonPicker} from './lookup';
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,money,dateText,Section,humanStatus} from './kit';
 
 type Rec=Record<string,unknown>&{id:string;revision?:number};
@@ -38,7 +38,7 @@ function display(f:FieldDef,v:unknown,people:Array<{id:string;name:string}>):Rea
   case 'user':return people.find(p=>p.id===v)?.name||'Assigned';
   case 'document':return <a className="text-sky-700 underline" href={`/api/documents?id=${encodeURIComponent(String(v))}`} onClick={e=>e.stopPropagation()}>File</a>;
   case 'relation':return 'Linked';
-  case 'client':case 'site':return 'Linked';
+  case 'client':case 'site':case 'contact':return 'Linked';
   default:{const s=String(v);return s.length>90?s.slice(0,88)+'…':s;}
  }
 }
@@ -49,7 +49,11 @@ function Input({f,value,onChange,disabled,people,relationOptions,documentContext
   case 'client':{const site=form.def.fields.find(x=>x.type==='site');return <ClientPicker value={v?String(v):null} disabled={disabled} label={f.label} legacyName={f.snapshot?String(form.values[f.snapshot]||'')||null:null} onChange={c=>{const patch:Record<string,unknown>={[f.key]:c?.id??null};if(f.snapshot&&c)patch[f.snapshot]=c.name;
    // Keep the site only if it belongs to the new client; suggest the client's only site.
    if(site){const current=String(form.values[site.key]||'');if(!c||!c.sites.some(s=>s.id===current))patch[site.key]=c?.sites.length===1?c.sites[0].id:null;if(c?.sites.length===1&&site.snapshot&&!form.values[site.snapshot])patch[site.snapshot]=c.sites[0].label;}
+   // Keep the contact only if it belongs to the new client; suggest its primary contact.
+   const contact=form.def.fields.find(x=>x.type==='contact');
+   if(contact){const current=String(form.values[contact.key]||'');const list=c?.contacts||[];if(!c||!list.some(x=>x.id===current))patch[contact.key]=(list.find(x=>x.isPrimary)||(list.length===1?list[0]:null))?.id??null;}
    form.set(patch);}}/>;}
+  case 'contact':{const client=form.def.fields.find(x=>x.type==='client');return <ContactPicker clientId={client?String(form.values[client.key]||'')||null:null} value={v?String(v):null} disabled={disabled} label={f.label} onChange={c=>form.set({[f.key]:c?.id??null})}/>;}
   case 'site':{const client=form.def.fields.find(x=>x.type==='client');return <SitePicker clientId={client?String(form.values[client.key]||'')||null:null} value={v?String(v):null} disabled={disabled} label={f.label} onChange={s=>form.set({[f.key]:s?.id??null,...(f.snapshot&&s?{[f.snapshot]:s.label}:{})})}/>;}
   case 'textarea':return <textarea className={`${field} min-h-24`} value={String(v)} disabled={disabled} maxLength={f.max} onChange={e=>onChange(e.target.value)}/>;
   case 'number':case 'money':return <input className={field} type="number" inputMode="decimal" step={f.type==='money'?'0.01':'any'} min={f.min} max={f.max} value={String(v)} disabled={disabled} onChange={e=>onChange(e.target.value===''?null:e.target.value)}/>;
@@ -134,7 +138,7 @@ function RecordForm({def,record,parentId,defaults,people,relationOptions,docCtx,
  return <div className="grid gap-4 p-5">
   {record&&def.machine&&<div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-slate-500">Status</span><StatusBadge machine={def.machine} state={state!}/>{typeof record.reference==='string'&&<span className="text-slate-500">· {record.reference}</span>}{typeof record.origin==='string'&&record.origin!=='manual'&&<span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-900">Source: {String(record.origin)}{record.confidence!=null?` · confidence ${Number(record.confidence).toFixed(0)}%`:''}</span>}</div>}
   {locked&&<p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">This record is {state} and can no longer be edited.</p>}
-  {visible.filter(f=>(!f.derived||record)&&!(f.derived&&def.fields.some(x=>x.type==='client'&&x.snapshot===f.key))).map(f=>{if(!f.derived&&(f.type==='client'||f.type==='site'||f.type==='user'))return <div key={f.key}><Input f={f} value={values[f.key]} disabled={!editable(f)||busy} onChange={v=>setValues(s=>({...s,[f.key]:v}))} people={people} relationOptions={relationOptions} documentContext={docCtx} form={{def,values,set:patch=>setValues(s=>({...s,...patch}))}}/></div>;
+  {visible.filter(f=>(!f.derived||record)&&!(f.derived&&def.fields.some(x=>x.type==='client'&&x.snapshot===f.key))).map(f=>{if(!f.derived&&(f.type==='client'||f.type==='site'||f.type==='contact'||f.type==='user'))return <div key={f.key}><Input f={f} value={values[f.key]} disabled={!editable(f)||busy} onChange={v=>setValues(s=>({...s,[f.key]:v}))} people={people} relationOptions={relationOptions} documentContext={docCtx} form={{def,values,set:patch=>setValues(s=>({...s,...patch}))}}/></div>;
    const Wrap=['boolean','document'].includes(f.type)||f.derived?FieldGroup:Field;return <Wrap key={f.key} label={f.label} hint={f.help}>{f.derived?<div className="text-sm text-slate-700">{display(f,values[f.key],people)}</div>:<Input f={f} value={values[f.key]} disabled={!editable(f)||busy} onChange={v=>setValues(s=>({...s,[f.key]:v}))} people={people} relationOptions={relationOptions} documentContext={docCtx} form={{def,values,set:patch=>setValues(s=>({...s,...patch}))}}/>}</Wrap>;})}
   <ErrorState error={error}/>
   <div className="flex flex-wrap gap-2 border-t pt-4">

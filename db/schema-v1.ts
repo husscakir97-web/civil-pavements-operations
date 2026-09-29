@@ -139,6 +139,9 @@ export const clientContacts=mysqlTable('client_contacts',{
  id:id(),organisationId:org(),
  clientId:ref('client_id').notNull(),
  name:varchar('name',{length:160}).notNull(),
+ firstName:varchar('first_name',{length:80}),
+ lastName:varchar('last_name',{length:80}),
+ department:varchar('department',{length:120}),
  role:varchar('role',{length:120}),
  email:varchar('email',{length:254}),
  phone:varchar('phone',{length:60}),
@@ -180,7 +183,7 @@ export const tenders=mysqlTable('tenders',{
  outcomeAt:stamp('outcome_at'),
  outcomeReason:text('outcome_reason'),
  projectId:ref('project_id'),
- clientId:ref('client_id'),siteId:ref('site_id'),
+ clientId:ref('client_id'),siteId:ref('site_id'),contactId:ref('contact_id'),
  ...lifecycle(),
 },t=>[uniqueIndex('idx_tenders_org_opportunity').on(t.organisationId,t.opportunityId),index('idx_tenders_org_stage').on(t.organisationId,t.stage),index('idx_tenders_org_client').on(t.organisationId,t.clientId)]);
 

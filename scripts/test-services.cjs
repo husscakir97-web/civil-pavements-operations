@@ -5,7 +5,7 @@ const path=require('node:path');
 // that a suite creates later are retried after each subsequent CREATE TABLE.
 function v1(sql){
  const fs=require('node:fs');
- const statements=['0003_v1_platform.sql','0004_v1_resources_retention.sql','0006_domain_events.sql'].flatMap(f=>fs.readFileSync(path.join(__dirname,'..','migrations','mysql',f),'utf8').split('--> statement-breakpoint')).map(s=>s.trim()).filter(s=>s&&!/ADD CONSTRAINT/.test(s));
+ const statements=['0003_v1_platform.sql','0004_v1_resources_retention.sql','0006_core_clients_sites.sql','0006_domain_events.sql','0007_client_contacts.sql','0016_crm_completion.sql'].flatMap(f=>fs.readFileSync(path.join(__dirname,'..','migrations','mysql',f),'utf8').split('--> statement-breakpoint')).map(s=>s.trim()).filter(s=>s&&!/ADD CONSTRAINT/.test(s));
  let pending=[];
  const exec=sql.exec.bind(sql);
  const attempt=()=>{pending=pending.filter(s=>{try{exec(s);return false;}catch(e){return !/duplicate column|already exists/.test(String(e.message));}});};

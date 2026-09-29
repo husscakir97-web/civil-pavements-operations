@@ -30,6 +30,10 @@ export const CAPABILITIES=[
  'field.capture','docket.submit','docket.approve',
  'variation.edit','variation.approve','claim.edit','claim.approve','invoice.manage',
  'reports.view','library.edit','knowledge.view','knowledge.edit',
+ // Core client master: create (quick create client/site/contact in a workflow), edit existing
+ // master records, manage (import, merge, legacy linking, bulk status/owner). Viewing clients
+ // follows pipeline/project/schedule access; commercial client fields still need commercial.view.
+ 'crm.create','crm.edit','crm.manage',
 ] as const;
 export type Capability=typeof CAPABILITIES[number];
 
@@ -41,9 +45,9 @@ const READ:Capability[]=['pipeline.view','project.view','project.all.view','hseq
 export const ROLE_CAPABILITIES:Record<Role,readonly Capability[]>={
  admin:CAPABILITIES,
  office:OFFICE,
- estimator:[...READ,'pipeline.edit','estimate.edit','tender.submit','library.edit','document.upload','audit.view','variation.edit'],
- scheduler:['workshop.view','project.view','project.all.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','knowledge.view','document.upload'],
- project_manager:[...READ,'project.edit','project.baseline','project.close','schedule.edit','resources.edit','hseq.edit','hseq.report','swms.approve','document.approve','docket.approve','variation.edit','claim.edit','document.upload','itp.complete','audit.view'],
+ estimator:[...READ,'crm.create','pipeline.edit','estimate.edit','tender.submit','library.edit','document.upload','audit.view','variation.edit'],
+ scheduler:['crm.create','workshop.view','project.view','project.all.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','knowledge.view','document.upload'],
+ project_manager:[...READ,'crm.create','project.edit','project.baseline','project.close','schedule.edit','resources.edit','hseq.edit','hseq.report','swms.approve','document.approve','docket.approve','variation.edit','claim.edit','document.upload','itp.complete','audit.view'],
  // No 'project.all.view': these roles work only in projects where they are an active project
  // member (lib/platform/project-access.ts), and never see money or approvals.
  project_engineer:[...FIELD,'project.view','project.edit','schedule.view','hseq.view','hseq.edit','reports.view','knowledge.view','workshop.view'],

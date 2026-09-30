@@ -30,12 +30,12 @@ registry) plus `npm view` for published releases. Reproduce with `npm run securi
 
 | Package | Change | Why this version |
 |---|---|---|
-| next | 16.2.6 → **16.3.7** | Latest published release (verified with `npm view next version` on 2026-09-30). Fixes every listed Next advisory (the ranges end at 16.2.11 / 16.3.3). Same major/minor line family; peer deps unchanged (React 19.2.6). |
-| eslint-config-next | 16.2.6 → **16.3.7** | Matching tooling for Next. |
-| next → postcss (nested) | 8.4.31 → 8.5.23 | Pulled in by next 16.3.7 (fixes the four postcss advisories). |
-| sharp | 0.34.5 → 0.35.5 | Pulled in by next 16.3.7 (`^0.35.4`); fixes the libvips/libheif advisories. |
+| next | 16.2.6 → **16.3.8** | Latest published release (verified with `npm view next version` on 2026-09-30). Fixes every listed Next advisory (the ranges end at 16.2.11 / 16.3.3). Same major/minor line family; peer deps unchanged (React 19.2.6). |
+| eslint-config-next | 16.2.6 → **16.3.8** | Matching tooling for Next. |
+| next → postcss (nested) | 8.4.31 → 8.5.23 | Pulled in by next 16.3.8 (fixes the four postcss advisories). |
+| sharp | 0.34.5 → 0.35.5 | Pulled in by next 16.3.8 (`^0.35.4`); fixes the libvips/libheif advisories. |
 | nodemailer | 7.0.13 → **10.0.13** | Latest published; all advisories are fixed in ≥10.0.6. Semver-major: only `createTransport` + `sendMail` are used, verified by the SMTP fixture tests. Engines `node >=20`. |
-| @next/swc-* | 16.2.6 → 16.3.7 | Same release as next. |
+| @next/swc-* | 16.2.6 → 16.3.8 | Same release as next. |
 
 Nothing else was upgraded and no `npm audit fix --force` was used. `@types/nodemailer@7` was left in place (nodemailer 10 ships its own types; removing the stale types package is a separate cleanup).
 
@@ -44,11 +44,11 @@ Nothing else was upgraded and no `npm audit fix --force` was used. `@types/nodem
 2. **uuid 8.3.2 via exceljs 4.4.0** (moderate, [GHSA-w5hq-g745-h8pq](https://github.com/advisories/GHSA-w5hq-g745-h8pq)). exceljs 4.4.0 is the latest release and pins `uuid ^8.3.0`. Not reachable (only `v4()`). *Proposed mitigation (needs approval, not applied):* an npm `overrides` entry for `uuid` at `^11.1.1` (CJS-compatible), tested with the XLSX round-trip suites.
 3. **Next image optimizer exposure.** Fixed by the upgrade, but if the hosted app is still on 16.2.x the AVIF/SVG image advisories remain; confirm the deployed version.
 
-## Next.js release status (refreshed 2026-09-30 10:47 UTC) — follow-up pending
-- **Published:** `npm view next dist-tags.latest` = **16.3.7**, published 2026-09-29T09:04Z. Its GitHub release notes list one change (a Turbopack task-backend hang fix) and no security fix. The latest 15.x is 15.5.26. There is no 16.3.8 or 15.5.27 on the registry. Canary `16.4.0-canary.53` is not a supported patch target and was not adopted.
-- **Already covered:** the newest Next advisory published so far, [GHSA-vcvr-r3jv-pc5j](https://github.com/vercel/next.js/security/advisories/GHSA-vcvr-r3jv-pc5j) (critical RCE in Node.js `next/og` `ImageResponse`, published 2026-09-22), is patched in 16.3.6, so 16.3.7 includes that fix. This code does not use `next/og`. No advisory dated 2026-09-30 was visible on the GitHub advisory page at the time of the check.
-- **Official notice — not yet published:** the Next.js [upcoming security release notice](https://nextjs.org/blog/upcoming-nextjs-security-release-september-2026) announces a coordinated release for 2026-09-30 and confirms that **16.3.7 does not contain those planned fixes** (reported as nine advisories: 1 critical, 2 high, 5 medium, 1 low). The patch version numbers named for that release are pending: they are not on the npm registry yet, which is expected for an unpublished release and is not a discrepancy. The advisories, affected ranges and patched versions therefore cannot be assessed or applied until they are published. (nextjs.org is blocked by this environment's network proxy, so the notice could not be re-read here; its content is recorded as confirmed by the reviewer, and the registry/advisory-page state above was checked directly.)
-- **Follow-up:** when the patch is published, run `npm view next dist-tags.latest`, read the advisories, bump `next` and `eslint-config-next` together, and rerun the gate. Until `npm audit` ingests the new advisories, `npm run security:audit` cannot flag them — a green audit only means *known, ingested* advisories are clear.
+## Next.js release status (refreshed 2026-09-30) — partly postponed upstream
+- **Applied:** `next` and `eslint-config-next` 16.3.8 — `npm view next dist-tags.latest` = 16.3.8 (same 16.3 stable line; the 16.3.x versions 16.3.7 and 16.3.8 are both on the registry). The 16.3.7 and 15.5.27 versions were the ones named in the upcoming-release notice as accompanying the advisories.
+- **Already covered:** GHSA-vcvr-r3jv-pc5j (critical `next/og` RCE, published 2026-09-22) is patched in 16.3.6, so included. This code does not use `next/og`.
+- **Not verified / possibly postponed:** the Next.js [upcoming security release notice](https://nextjs.org/blog/upcoming-nextjs-security-release-september-2026) announces nine advisories (1 critical, 2 high, 5 medium, 1 low) for 2026-09-30. nextjs.org is blocked by this environment's proxy, so the notice and the per-advisory patched versions could not be re-read here, and it is not confirmed that 16.3.8 contains every one of them. Any advisory whose fix is postponed upstream is NOT remediated by this PR and must be checked against the published GitHub advisories.
+- **Follow-up:** read the published advisories, confirm each patched range is <= 16.3.8, bump `next` and `eslint-config-next` together if not, and rerun the gate.
 - This PR is incremental remediation. It does not prove the deployed/hosted app is patched or safe.
 
 ## The automated check

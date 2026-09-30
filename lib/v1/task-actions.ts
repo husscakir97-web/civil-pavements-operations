@@ -5,6 +5,7 @@
 // (canOpen) and an optional availability condition, so nothing appears that cannot be used.
 import type {Capability} from '@/lib/platform/permissions';
 import {canOpen,type NavAccess} from './app-nav';
+import {MACHINES} from '@/lib/platform/workflow';
 
 export type TaskContextType='home'|'project';
 export type TaskTarget={area:string;sub?:string;tab?:string;/** Carry the current context record id into the route (project id). */withContext?:boolean};
@@ -16,12 +17,14 @@ export type TaskAction={
  target:TaskTarget;
  /** Lower sorts first within a context (roles may reorder on Home). */
  priority:number;
- /** Optional extra availability, e.g. project stage. */
- when?:(ctx:ProjectTaskContext|null)=>boolean;
+ /** Project lifecycle stages (lib/platform/workflow.ts) in which a project task is offered. Omitted = any stage. */
+ stages?:readonly string[];
 };
 
-const notClosed=(c:ProjectTaskContext|null)=>c?.stage!=='closed';
-const inStages=(...s:string[])=>(c:ProjectTaskContext|null)=>Boolean(c&&s.includes(c.stage));
+// Project stages come from the authoritative lifecycle (setup → ready → active → practical_completion → closeout → closed).
+export const PROJECT_STAGES:readonly string[]=Object.keys(MACHINES.project.states);
+const stage=(...names:string[])=>{const bad=names.filter(n=>!PROJECT_STAGES.includes(n));if(bad.length)throw new Error('Unknown project stage in task action: '+bad.join(', '));return names;};
+const NOT_CLOSED=PROJECT_STAGES.filter(n=>n!=='closed');
 
 export const TASK_ACTIONS:TaskAction[]=[
  // ---- Home: start something
@@ -42,16 +45,16 @@ export const TASK_ACTIONS:TaskAction[]=[
  {key:'review-reports',label:'Review reports',description:'Derived from your records',icon:'chart',context:'home',capability:'reports.view',module:'reports',target:{area:'Reports',sub:'Reports'},priority:120},
 
  // ---- Project: what do you need to do? Every route keeps this project's id.
- {key:'project-setup',label:'Complete project setup',description:'Baseline, team and readiness',icon:'wrench',context:'project',capability:'project.edit',target:{area:'Projects',sub:'Projects',tab:'setup',withContext:true},priority:5,when:inStages('setup','ready')},
- {key:'project-plan-work',label:'Plan work',description:'Programme for this project',icon:'list-checks',context:'project',capability:'programme.edit',module:'projects',target:{area:'Projects',sub:'Projects',tab:'programme',withContext:true},priority:10,when:notClosed},
- {key:'project-schedule-work',label:'Schedule work',description:'Crews, plant and shifts for this project',icon:'calendar',context:'project',capability:'schedule.edit',module:'operations',target:{area:'Schedule',sub:'Schedule',withContext:true},priority:20,when:inStages('ready','delivery')},
+ {key:'project-setup',label:'Complete project setup',description:'Baseline, team and readiness',icon:'wrench',context:'project',capability:'project.edit',target:{area:'Projects',sub:'Projects',tab:'setup',withContext:true},priority:5,stages:stage('setup','ready')},
+ {key:'project-plan-work',label:'Plan work',description:'Programme for this project',icon:'list-checks',context:'project',capability:'programme.edit',module:'projects',target:{area:'Projects',sub:'Projects',tab:'programme',withContext:true},priority:10,stages:NOT_CLOSED},
+ {key:'project-schedule-work',label:'Schedule work',description:'Crews, plant and shifts for this project',icon:'calendar',context:'project',capability:'schedule.edit',module:'operations',target:{area:'Schedule',sub:'Schedule',withContext:true},priority:20,stages:stage('ready','active')},
  {key:'project-review-work-records',label:'Review work records',description:'Completed work and dockets',icon:'clipboard-check',context:'project',capability:'docket.approve',module:'dockets',target:{area:'Projects',sub:'Projects',tab:'delivery',withContext:true},priority:30},
- {key:'project-raise-variation',label:'Raise variation',description:'Record a change to the contract',icon:'file-diff',context:'project',capability:'variation.edit',module:'commercial',target:{area:'Projects',sub:'Projects',tab:'commercial',withContext:true},priority:40,when:notClosed},
+ {key:'project-raise-variation',label:'Raise variation',description:'Record a change to the contract',icon:'file-diff',context:'project',capability:'variation.edit',module:'commercial',target:{area:'Projects',sub:'Projects',tab:'commercial',withContext:true},priority:40,stages:NOT_CLOSED},
  {key:'project-review-commercial',label:'Review commercial',description:'Variations, claims and billing',icon:'dollar',context:'project',capability:'commercial.view',module:'commercial',target:{area:'Projects',sub:'Projects',tab:'commercial',withContext:true},priority:50},
- {key:'project-add-document',label:'Add document',description:'Drawings, records and files',icon:'file-plus',context:'project',anyOf:['document.upload','document.edit'],target:{area:'Projects',sub:'Projects',tab:'documents',withContext:true},priority:60,when:notClosed},
+ {key:'project-add-document',label:'Add document',description:'Drawings, records and files',icon:'file-plus',context:'project',anyOf:['document.upload','document.edit'],target:{area:'Projects',sub:'Projects',tab:'documents',withContext:true},priority:60,stages:NOT_CLOSED},
  {key:'project-review-hseq',label:'Review HSEQ',description:'SWMS, incidents, risks and NCRs',icon:'shield',context:'project',capability:'hseq.view',module:'ims',target:{area:'Projects',sub:'Projects',tab:'quality',withContext:true},priority:70},
- {key:'project-report-issue',label:'Report issue',description:'Incident, hazard or defect',icon:'siren',context:'project',anyOf:['hseq.report','hseq.edit'],module:'ims',target:{area:'Projects',sub:'Projects',tab:'quality',withContext:true},priority:80,when:notClosed},
- {key:'project-close-out',label:'Close out project',description:'Closeout checklist',icon:'flag',context:'project',capability:'project.close',target:{area:'Projects',sub:'Projects',tab:'closeout',withContext:true},priority:90,when:inStages('delivery','closeout')},
+ {key:'project-report-issue',label:'Report issue',description:'Incident, hazard or defect',icon:'siren',context:'project',anyOf:['hseq.report','hseq.edit'],module:'ims',target:{area:'Projects',sub:'Projects',tab:'quality',withContext:true},priority:80,stages:NOT_CLOSED},
+ {key:'project-close-out',label:'Close out project',description:'Closeout checklist',icon:'flag',context:'project',capability:'project.close',target:{area:'Projects',sub:'Projects',tab:'closeout',withContext:true},priority:90,stages:stage('practical_completion','closeout')},
 ];
 
 /** Role order for Home. Each role gets its own work; unlisted roles fall back to DEFAULT_HOME. */
@@ -69,7 +72,7 @@ export const MAX_HOME_TASKS=6;
 
 const ruleOk=(t:TaskAction,a:NavAccess)=>(!t.module||a.module(t.module))&&(!t.capability||a.can(t.capability))&&(!t.anyOf?.length||t.anyOf.some(c=>a.can(c)));
 /** Presentation check only: capability + entitlement + the target really opens for this user + availability. */
-export const taskAvailable=(t:TaskAction,a:NavAccess,ctx:ProjectTaskContext|null=null)=>ruleOk(t,a)&&canOpen(a,t.target.area,t.target.sub)&&(!t.when||t.when(ctx));
+export const taskAvailable=(t:TaskAction,a:NavAccess,ctx:ProjectTaskContext|null=null)=>ruleOk(t,a)&&canOpen(a,t.target.area,t.target.sub)&&(!t.stages||Boolean(ctx&&t.stages.includes(ctx.stage)));
 
 export type TaskRoute={area:string;sub?:string;id?:string;tab?:string};
 export const taskRoute=(t:TaskAction,ctx:ProjectTaskContext|null=null):TaskRoute=>({area:t.target.area,sub:t.target.sub,id:t.target.withContext&&ctx?ctx.id:undefined,tab:t.target.tab});

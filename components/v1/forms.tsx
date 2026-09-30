@@ -176,6 +176,11 @@ export function SubmissionList({context}:{context?:FormsContext}){
  </Section>;
 }
 
+/** Opens the authoritative submission (read through the normal Forms API, so scope is re-checked server-side). */
+export function SubmissionSheet({id,onClose}:{id:string|null;onClose:()=>void}){
+ return <Sheet open={!!id} onOpenChange={o=>{if(!o)onClose();}}><SheetContent className="w-full overflow-y-auto sm:max-w-2xl">{id&&<SubmissionView id={id}/>}</SheetContent></Sheet>;
+}
+
 function SubmissionView({id}:{id:string}){
  const {data,error,loading,refresh}=useApi<SubmissionDetail>(`/api/forms?op=submission&id=${encodeURIComponent(id)}`);
  const [view,setView]=useState<string>('effective'),[amending,setAmending]=useState(false);
@@ -195,6 +200,7 @@ function SubmissionView({id}:{id:string}){
    <FormRenderer schema={data.schema} values={shown} evidence={null} readOnly labels={data.labels}/>
    {changed.size>0&&view!=='original'&&<p className="text-xs text-amber-800">Corrected fields: {allFields(data.schema).filter(f=>changed.has(f.id)).map(f=>f.label).join(', ')}</p>}
    {data.canAmend&&<Btn variant="secondary" className="justify-self-start" onClick={()=>setAmending(true)}><PenLine aria-hidden className="size-4"/>Correct this record</Btn>}
+   <FormDefects submissionId={s.id} schema={data.schema}/>
   </>}
  </div>;
 }
@@ -207,6 +213,38 @@ function AmendForm({data,onDone,onCancel}:{data:SubmissionDetail;onDone:()=>void
   <ErrorState error={error}/>
   <div className="flex flex-wrap gap-2"><Btn type="submit" busy={busy} disabled={reason.trim().length<3}>Save correction</Btn><Btn type="button" variant="ghost" onClick={onCancel}>Cancel</Btn></div>
  </form>;
+}
+
+// ---------------------------------------------------------------- defects (form → Workshop seam)
+type Defect={id:string;title:string;severity:string;status:string;fieldId:string;assetName:string;safetyHold:boolean;createdAt:string;amendmentSequence:number|null};
+const DEFECT_STATUS:Record<string,string>={open:'Awaiting repair',rework:'Rework required',awaiting_verification:'Repaired — awaiting verification',closed:'Verified — returned to service'};
+const newDraft=()=>({assetId:'',fieldId:'',title:'',severity:'major',note:'',clientRequestId:crypto.randomUUID()});
+function FormDefects({submissionId,schema}:{submissionId:string;schema:FormSchema}){
+ const session=useSession(),on=session.module('workshop');
+ const {data,error,refresh}=useApi<{defects:Defect[];assets:Array<{id:string;name:string;safetyHold:boolean}>;canRaise:boolean}>(on?`/api/forms/defects?submissionId=${encodeURIComponent(submissionId)}`:null);
+ // The request id is fixed for one deliberate defect: a retry after a failed or dropped request replays it,
+ // and a new defect (even from the same answer) starts a new id.
+ const [draft,setDraft]=useState(newDraft),[open,setOpen]=useState(false);const {busy,error:saveError,run}=useAction();
+ if(!on)return null;
+ const fields=allFields(schema).filter(f=>!['signature','photo','file'].includes(f.type));
+ const canRaise=Boolean(data?.canRaise)&&session.writable('workshop')&&session.can('workshop.defect.report');
+ return <section aria-label="Defects" className="grid gap-2 rounded-lg border p-3 text-sm">
+  <div className="flex flex-wrap items-center justify-between gap-2"><p className="font-medium">Plant defects</p>{canRaise&&data&&data.assets.length>0&&!open&&<Btn variant="secondary" className="min-h-9 py-1" onClick={()=>{setDraft(newDraft());setOpen(true);}}><Plus aria-hidden className="size-4"/>Raise defect</Btn>}</div>
+  <ErrorState error={error}/>
+  {data&&!canRaise&&<p className="text-xs text-slate-500">{session.writable('workshop')?'You do not have permission to raise Workshop defects.':'Workshop is read-only for your organisation: existing defects stay visible, new defects cannot be raised.'}</p>}
+  {data?.assets.filter(a=>a.safetyHold).map(a=><p key={a.id} className="rounded bg-red-50 p-2 text-red-900"><strong>{a.name}</strong> is on safety hold — out of service until repaired and independently verified.</p>)}
+  {data&&!data.defects.length&&!open&&<p className="text-slate-500">{data.assets.length?'No defects raised from this form.':'This form does not record plant, so defects are raised in Workshop.'}</p>}
+  {data?.defects.map(d=><div key={d.id} className="flex flex-wrap items-center gap-2 rounded border bg-white p-2"><span className="min-w-0 flex-1"><span className="block font-medium">{d.title}</span><span className="block text-xs text-slate-500">{d.assetName} · answer: {allFields(schema).find(f=>f.id===d.fieldId)?.label||d.fieldId}{d.amendmentSequence==null?'':d.amendmentSequence===0?' · raised on the original record':` · raised on correction ${d.amendmentSequence}`}</span></span><Pill tone={d.severity==='critical'?'danger':d.severity==='major'?'warning':'neutral'}>{d.severity}</Pill><Pill tone={d.status==='closed'?'success':'info'}>{DEFECT_STATUS[d.status]||d.status}</Pill></div>)}
+  {open&&canRaise&&data&&<form className="grid gap-2 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();void run(()=>api('/api/forms/defects',{method:'POST',body:{submissionId,...draft}}),()=>{setOpen(false);setDraft(newDraft());refresh();});}}>
+   <Field label="Plant" required><select className={field} required value={draft.assetId} onChange={e=>setDraft({...draft,assetId:e.target.value})}><option value="">Choose…</option>{data.assets.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></Field>
+   <Field label="Answer showing the defect" required><select className={field} required value={draft.fieldId} onChange={e=>setDraft({...draft,fieldId:e.target.value})}><option value="">Choose…</option>{fields.map(f=><option key={f.id} value={f.id}>{f.label}</option>)}</select></Field>
+   <Field label="Defect" required><input className={field} required value={draft.title} onChange={e=>setDraft({...draft,title:e.target.value})}/></Field>
+   <Field label="Severity" required><select className={field} value={draft.severity} onChange={e=>setDraft({...draft,severity:e.target.value})}><option value="minor">Minor</option><option value="major">Major</option><option value="critical">Critical — take out of service</option></select></Field>
+   <div className="sm:col-span-2"><Field label="Details" required><textarea className={`${field} min-h-16`} required value={draft.note} onChange={e=>setDraft({...draft,note:e.target.value})}/></Field></div>
+   <ErrorState error={saveError}/>
+   <div className="flex gap-2 sm:col-span-2"><Btn type="submit" busy={busy}>Raise defect</Btn><Btn type="button" variant="ghost" onClick={()=>setOpen(false)}>Cancel</Btn></div>
+  </form>}
+ </section>;
 }
 
 // ---------------------------------------------------------------- templates (form managers)

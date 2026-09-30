@@ -22,6 +22,8 @@ export const CAPABILITIES=[
  'org.admin','team.admin','entitlements.manage','rates.edit','audit.view',
  'commercial.view','pipeline.view','pipeline.edit','tender.approve','tender.submit','tender.award',
  'workshop.view','workshop.edit','workshop.verify',
+ // Report a plant/asset defect into Workshop (e.g. from a Form). Grants no repair, verify or asset admin.
+ 'workshop.defect.report',
  'estimate.edit','estimate.approve',
  'project.view','project.all.view','project.edit','programme.edit','project.baseline','project.close',
  'communication.view','communication.send','external.share',
@@ -44,7 +46,7 @@ export const CAPABILITIES=[
 ] as const;
 export type Capability=typeof CAPABILITIES[number];
 
-const FIELD:Capability[]=['swms.acknowledge','itp.complete','hseq.report','field.capture','docket.submit','document.upload','communication.view','communication.send','forms.view','forms.submit'];
+const FIELD:Capability[]=['swms.acknowledge','itp.complete','hseq.report','field.capture','docket.submit','document.upload','communication.view','communication.send','forms.view','forms.submit','workshop.defect.report'];
 const ADMIN_ONLY:Capability[]=['org.admin','team.admin','entitlements.manage','rates.edit'];
 const OFFICE:Capability[]=CAPABILITIES.filter(c=>!ADMIN_ONLY.includes(c));
 const READ:Capability[]=['pipeline.view','project.view','project.all.view','hseq.view','schedule.view','reports.view','commercial.view','knowledge.view','communication.view','forms.view'];
@@ -53,8 +55,8 @@ export const ROLE_CAPABILITIES:Record<Role,readonly Capability[]>={
  admin:CAPABILITIES,
  office:OFFICE,
  estimator:[...READ,'crm.create','pipeline.edit','estimate.edit','tender.submit','library.edit','document.upload','audit.view','variation.edit','communication.send'],
- scheduler:['crm.create','workshop.view','project.view','project.all.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','knowledge.view','document.upload','communication.view','communication.send','external.share','forms.view','forms.submit'],
- project_manager:[...READ,'crm.create','project.edit','programme.edit','project.baseline','project.close','schedule.edit','resources.edit','hseq.edit','hseq.report','swms.approve','document.approve','docket.approve','variation.edit','claim.edit','document.upload','itp.complete','audit.view','communication.send','external.share','hseq.verify','forms.submit','forms.manage','forms.publish','forms.amend'],
+ scheduler:['crm.create','workshop.view','project.view','project.all.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','knowledge.view','document.upload','communication.view','communication.send','external.share','forms.view','forms.submit','workshop.defect.report'],
+ project_manager:[...READ,'crm.create','project.edit','programme.edit','project.baseline','project.close','schedule.edit','resources.edit','hseq.edit','hseq.report','swms.approve','document.approve','docket.approve','variation.edit','claim.edit','document.upload','itp.complete','audit.view','communication.send','external.share','hseq.verify','forms.submit','forms.manage','forms.publish','forms.amend','workshop.defect.report'],
  // No 'project.all.view': these roles work only in projects where they are an active project
  // member (lib/platform/project-access.ts), and never see money or approvals.
  project_engineer:[...FIELD,'project.view','project.edit','programme.edit','schedule.view','hseq.view','hseq.edit','hseq.verify','reports.view','knowledge.view','workshop.view','forms.amend'],

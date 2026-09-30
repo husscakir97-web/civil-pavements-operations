@@ -367,6 +367,40 @@ export async function getSubmission(id:string){
  };
 }
 
+/**
+ * Downstream-workflow read model of one submission (e.g. the Workshop defect seam). Server-only and not
+ * exposed over HTTP: callers are seams that have already checked their own capability and entitlements.
+ * Access is re-derived here exactly as for a Forms read — forms.view plus the owning context's project /
+ * shift scope — so a downstream link never widens what the actor may see. Pass `conn` with `lock` inside a
+ * transaction to serialise against amendments, so the returned amendment sequence is the one that is
+ * effective when the downstream record is written.
+ */
+export type WorkflowSubmission={
+ submissionId:string;templateId:string;templateName:string;versionId:string;versionNumber:number;schema:FormSchema;
+ contextType:FormContext;contextId:string;contextLabel:string;projectId:string|null;shiftId:string|null;
+ submittedBy:string;submittedByName:string|null;submittedAt:string;
+ responses:Answers;amendmentSequence:number;assetIds:string[];
+};
+export async function resolveFormSubmissionForWorkflow(submissionId:string,opts:{conn?:Conn;lock?:boolean}={}):Promise<WorkflowSubmission>{
+ need('forms.view','You are not authorised to view forms.');
+ const org=actor().organisationId,{conn}=opts;
+ const {s,t,ctx}=await loadSubmission(submissionId,conn,opts.lock);
+ const v=await one('SELECT id,version_number,schema_json FROM form_template_versions WHERE organisation_id=? AND id=?',[org,s.template_version_id],conn);
+ if(!v)fail(404,'Submission not found.');
+ const last=await one('SELECT sequence,responses_json FROM form_submission_amendments WHERE organisation_id=? AND submission_id=? ORDER BY sequence DESC LIMIT 1',[org,submissionId],conn);
+ const schema=parse<FormSchema>(v!.schema_json,emptySchema()),responses=parse<Answers>(last?.responses_json??s.responses_json,{});
+ const assets=new Set<string>();
+ if(ctx.type==='asset')assets.add(ctx.id);
+ for(const f of allFields(schema))if(f.type==='asset'&&typeof responses[f.id]==='string'&&responses[f.id])assets.add(String(responses[f.id]));
+ const submitter=await one('SELECT name FROM users WHERE organisation_id=? AND id=?',[org,s.submitted_by],conn);
+ return {
+  submissionId:String(s.id),templateId:String(t.id),templateName:String(t.name),versionId:String(v!.id),versionNumber:Number(v!.version_number),schema,
+  contextType:ctx.type,contextId:ctx.id,contextLabel:ctx.label,projectId:ctx.projectId,shiftId:ctx.type==='shift'?ctx.id:null,
+  submittedBy:String(s.submitted_by),submittedByName:submitter?String(submitter.name):null,submittedAt:String(s.submitted_at),
+  responses,amendmentSequence:Number(last?.sequence||0),assetIds:[...assets],
+ };
+}
+
 export async function listSubmissions(filter:{contextType?:string|null;contextId?:string|null;templateId?:string|null;limit?:number}){
  const a=actor();need('forms.view','You are not authorised to view forms.');
  const where=['s.organisation_id=?'],params:unknown[]=[a.organisationId];

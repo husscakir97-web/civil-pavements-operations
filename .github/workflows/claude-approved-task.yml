@@ -77,6 +77,7 @@ jobs:
             or network, then rechecks approval and creates/reuses an isolated draft PR.
             Do not run tests yourself, commit, push, merge, deploy or alter git state.
             Report any guard failure; never attempt to bypass it.
+            If subscription usage is exhausted, stop. Do not retry or use API billing.
           claude_args: >-
             --max-turns 12
             --model sonnet
@@ -98,6 +99,18 @@ jobs:
                 }]
               }
             }
+      - name: Explain stopped run for owner handoff
+        if: ${{ failure() && steps.claude.outcome == 'failure' }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'NOTICE'
+          Claude stopped without an automatic retry or API fallback.
+          If the provider reports exhausted Pro allowance, hand the same approved task to Dot/Codex.
+          Wait until this run has ended, recheck the issue approval hash and current main,
+          and inspect the task's deterministic branch/draft before resuming to avoid duplicate work.
+          This notice does not diagnose quota exhaustion: other failures require investigation.
+          Unpublished runner edits are not preserved. An existing task branch/draft is the only remote checkpoint.
+          Do not include credentials in a handoff. No merge or deployment is authorized.
+          NOTICE
       - name: Require actual publication receipt
         if: steps.claude.outputs.conclusion == 'success'
         run: test -s /tmp/claude-approved/published.json

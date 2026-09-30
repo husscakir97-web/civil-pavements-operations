@@ -252,7 +252,7 @@ test('Linux CI: actual isolated runner executes lint, typecheck and the regressi
   try {
     for (const p of ['package.json', 'package-lock.json']) fs.copyFileSync(path.join(root, p), path.join(directory, p));
     execFileSync('docker', ['pull', 'node:22-bookworm'], { stdio: 'pipe', timeout: 180000 });
-    const base = execFileSync('docker', ['image', 'inspect', 'node:22-bookworm', '--format', '{{.Id}}'], { encoding: 'utf8' }).trim();
+    const base = execFileSync('docker', ['image', 'inspect', 'node:22-bookworm', '--format', '{{index .RepoDigests 0}}'], { encoding: 'utf8' }).trim();
     fs.writeFileSync(path.join(directory, 'Dockerfile'), 'FROM ' + base + '\nWORKDIR /deps\nCOPY package.json package-lock.json ./\nRUN npm ci --ignore-scripts --no-audit --no-fund\n');
     const imageFile = path.join(directory, 'image-id');
     execFileSync('docker', ['build', '--iidfile', imageFile, directory], { stdio: 'pipe', timeout: 300000, maxBuffer: 8 * 1024 * 1024 });

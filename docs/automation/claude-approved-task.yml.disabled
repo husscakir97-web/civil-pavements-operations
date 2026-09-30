@@ -50,7 +50,7 @@ jobs:
           cp package.json package-lock.json /tmp/claude-approved/image/
           # Resolve the image before AI starts; subsequent checks use its immutable local ID.
           docker pull node:22-bookworm
-          base_image="$(docker image inspect node:22-bookworm --format '{{.Id}}')"
+          base_image="$(docker image inspect node:22-bookworm --format '{{index .RepoDigests 0}}')"
           printf 'FROM %s\nWORKDIR /deps\nCOPY package.json package-lock.json ./\nRUN npm ci --ignore-scripts --no-audit --no-fund\n' "$base_image" > /tmp/claude-approved/image/Dockerfile
           docker build --tag claude-approved-tests /tmp/claude-approved/image
           docker image inspect claude-approved-tests --format '{{.Id}}' > /tmp/claude-approved/test-image.txt

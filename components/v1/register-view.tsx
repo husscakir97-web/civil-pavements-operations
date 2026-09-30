@@ -9,6 +9,7 @@ import {allowedTransitions,MACHINES} from '@/lib/platform/workflow';
 import {filterLookup} from '@/lib/v1/lookup';
 import {ClientPicker,SitePicker,ContactPicker,PersonPicker} from './lookup';
 import {AddressLocationPicker,locationInputFrom} from './location';
+import {HseqChain,ActionReviewPanel} from './hseq-chain';
 import type {LocationInput,LocationView} from '@/lib/v1/location';
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,money,dateText,Section,humanStatus} from './kit';
 
@@ -145,6 +146,8 @@ function RecordForm({def,record,parentId,defaults,people,relationOptions,docCtx,
   {visible.filter(f=>(!f.derived||record)&&!(f.derived&&def.fields.some(x=>x.type==='client'&&x.snapshot===f.key))).map(f=>{if(!f.derived&&(f.type==='client'||f.type==='site'||f.type==='contact'||f.type==='user'||f.type==='location'))return <div key={f.key}><Input f={f} value={values[f.key]} disabled={!editable(f)||busy} onChange={v=>setValues(s=>({...s,[f.key]:v}))} people={people} relationOptions={relationOptions} documentContext={docCtx} form={{def,values,set:patch=>setValues(s=>({...s,...patch}))}}/></div>;
    const Wrap=['boolean','document'].includes(f.type)||f.derived?FieldGroup:Field;return <Wrap key={f.key} label={f.label} hint={f.help}>{f.derived?<div className="text-sm text-slate-700">{display(f,values[f.key],people)}</div>:<Input f={f} value={values[f.key]} disabled={!editable(f)||busy} onChange={v=>setValues(s=>({...s,[f.key]:v}))} people={people} relationOptions={relationOptions} documentContext={docCtx} form={{def,values,set:patch=>setValues(s=>({...s,...patch}))}}/>}</Wrap>;})}
   <ErrorState error={error}/>
+  {record&&(def.key==='incidents'||def.key==='ncrs')&&session.can('hseq.view')&&<HseqChain sourceType={def.key==='incidents'?'incident':'ncr'} sourceId={String(record.id)}/>}
+  {record&&def.key==='actions'&&session.can('hseq.verify')&&<ActionReviewPanel record={record} onChanged={onDeleted}/>}
   <div className="flex flex-wrap gap-2 border-t pt-4">
    {(fullEdit||fieldEdit)&&<Btn busy={busy} onClick={()=>void save()}>{record?'Save changes':'Create'}</Btn>}
    <Btn variant="secondary" onClick={onClose}>Close</Btn>

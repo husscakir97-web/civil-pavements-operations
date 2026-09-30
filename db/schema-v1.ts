@@ -466,6 +466,7 @@ export const hseqIncidents=mysqlTable('hseq_incidents',{
  reportedBy:ref('reported_by'),
  locationId:ref('location_id'),
  locationDescription:varchar('location_description',{length:500}),
+ closureRationale:text('closure_rationale'),closedBy:ref('closed_by'),closedAt:stamp('closed_at'),
  ...lifecycle(),
 },t=>[index('idx_incidents_org_project').on(t.organisationId,t.projectId)]);
 
@@ -494,8 +495,22 @@ export const hseqActions=mysqlTable('hseq_actions',{
  completionNotes:text('completion_notes'),
  completionDocumentId:ref('completion_document_id'),
  completedBy:ref('completed_by'),completedAt:stamp('completed_at'),
+ verifiedBy:ref('verified_by'),verifiedAt:stamp('verified_at'),verificationNote:text('verification_note'),verificationDocumentId:ref('verification_document_id'),
  ...lifecycle(),
-},t=>[index('idx_actions_org_project').on(t.organisationId,t.projectId,t.status)]);
+},t=>[index('idx_actions_org_project').on(t.organisationId,t.projectId,t.status),index('idx_actions_org_source').on(t.organisationId,t.sourceType,t.sourceId),index('idx_actions_org_owner').on(t.organisationId,t.ownerUserId,t.status)]);
+
+// Investigation of an HSEQ source (incident/NCR today; form submissions, ITP items, risks later).
+export const hseqInvestigations=mysqlTable('hseq_investigations',{
+ id:id(),organisationId:org(),projectId:ref('project_id'),sourceType:varchar('source_type',{length:30}).notNull(),sourceId:ref('source_id').notNull(),
+ status:varchar('status',{length:20}).notNull().default('investigating'),summary:text('summary'),facts:text('facts'),finding:text('finding'),
+ rootCause:text('root_cause'),rootCauseNotEstablished:int('root_cause_not_established').notNull().default(0),contributingFactors:text('contributing_factors'),
+ method:varchar('method',{length:80}),investigatorUserId:ref('investigator_user_id'),completedBy:ref('completed_by'),completedAt:stamp('completed_at'),...lifecycle(),
+},t=>[uniqueIndex('idx_hseq_investigations_source').on(t.organisationId,t.sourceType,t.sourceId),index('idx_hseq_investigations_project').on(t.organisationId,t.projectId,t.status)]);
+// Append-only verification decisions; each keeps a snapshot of the completion it judged.
+export const hseqActionReviews=mysqlTable('hseq_action_reviews',{
+ id:id(),organisationId:org(),actionId:ref('action_id').notNull(),outcome:varchar('outcome',{length:20}).notNull(),note:text('note').notNull(),documentId:ref('document_id'),
+ reviewerUserId:ref('reviewer_user_id').notNull(),completedBy:ref('completed_by'),completedAt:stamp('completed_at'),completionNotes:text('completion_notes'),completionDocumentId:ref('completion_document_id'),createdAt:stamp('created_at').notNull(),
+},t=>[index('idx_hseq_action_reviews_action').on(t.organisationId,t.actionId,t.createdAt)]);
 
 // ---------------------------------------------------------------- money
 export const costTransactions=mysqlTable('cost_transactions',{

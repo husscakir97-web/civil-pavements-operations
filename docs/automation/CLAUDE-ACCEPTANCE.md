@@ -6,7 +6,8 @@ or evidence of successful end-to-end execution. PR46 is outside this change.
 ## Proposed activation changes
 
 The new workflow copies the reviewed disabled template, changes its introductory
-comments, and removes only the leading literal false from the job condition.
+comments, removes the leading literal false from the job condition, tells Claude
+to stop on exhausted subscription allowance, and adds a fixed failure handoff notice.
 The original disabled template and retired claude.yml remain unchanged.
 Owner-only workflow_dispatch from main, exact issue-content SHA-256, protected
 claude-approved-tasks environment, pinned actions, runtime hooks, isolated tests,
@@ -52,6 +53,34 @@ verbose credential-bearing output to compensate.
 After the run, set CLAUDE_TASKS_ENABLED=false. On any unexpected behavior,
 also cancel the active/queued run; changing the variable alone does not cancel it.
 Continued automation and the parent's PR review webhook require separate setup.
+
+## Quota handoff to Dot/Codex
+
+The user requested Sonnet and continuation by Dot/Codex if Claude exhausts its
+allowance. The workflow explicitly selects --model sonnet with the existing
+12-turn bound. It never retries Claude or switches to API billing. A failed
+Claude step writes a fixed, credential-free job summary explaining the handoff;
+the summary cannot itself distinguish quota exhaustion from another failure.
+Confirm quota exhaustion from the provider's safe error status before calling
+the failure a quota event. Do not expose raw environment or credential data.
+
+There is no automatic failover agent or reliable quota notification webhook in
+this PR. During an approved run the parent monitors its exact run/head. Only
+after that run has ended and no Claude writer remains may Dot/Codex resume the
+same approved task using its own coding tools. Re-fetch the issue and verify
+its approval hash; inspect current main and any claude/task-N-HASH branch or
+matching draft first. Preserve any published checkpoint and avoid a second PR.
+If scope, task content, or base changed, obtain renewed approval before adapting.
+Use an isolated checkout and run the same checks before producing a draft.
+Do not copy Claude credentials or start another Claude run for this handoff.
+
+Checkpoint limit: the trusted helper publishes only after passing checks. A
+quota stop before publication leaves no remotely recoverable edits; Dot/Codex
+must restart from the approved baseline. A branch created before a PR failure
+is recoverable after verifying its exact contents and identity. This PR does
+not upload unchecked patches, add token grants, or implement background failover.
+The acceptance run below does not deliberately exhaust quota; a quota handoff
+cannot be claimed end-to-end tested until an actual approved handoff is observed.
 
 ## Exact proposed issue
 

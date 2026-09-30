@@ -537,4 +537,36 @@ console.log('PASS estimate paste: header skipped, $ and thousands parsed, catego
  assert(!Pm.can('accounts','forms.view'));
  console.log('PASS forms engine: schema rules, stable ids, deterministic chained conditions, hidden values dropped, required/conditional required, typed values and choices, unknown fields, references and signatures, changed fields, capabilities');
 }
+{
+ const H=load('lib/modules/hseq/corrective.ts'),W=load('lib/platform/workflow.ts'),Pc=load('lib/platform/permissions.ts');
+ // hseq.verify: Admin, Office, PM, PE — never field, supervisor, site engineer, scheduler, accounts, estimator, read-only.
+ for(const r of ['admin','office','project_manager','project_engineer'])assert(Pc.can(r,'hseq.verify'),r+' verifies');
+ for(const r of ['field','supervisor','site_engineer','scheduler','accounts','estimator','read_only'])assert(!Pc.can(r,'hseq.verify'),r+' does not verify');
+ // Verification, rework and closure are dedicated actions, never plain status buttons.
+ assert.throws(()=>W.assertTransition('action','complete','verified','admin'),/dedicated action/);
+ assert.throws(()=>W.assertTransition('action','complete','in_progress','admin'),/dedicated action/);
+ assert.throws(()=>W.assertTransition('action','complete','verified','site_engineer',{system:true}),/not authorised/);
+ assert.throws(()=>W.assertTransition('ncr','verification','closed','admin'),/dedicated action/);
+ assert.throws(()=>W.assertTransition('incident','investigating','closed','admin'),/dedicated action/);
+ assert.equal(W.assertTransition('action','in_progress','complete','site_engineer').to,'complete');
+ assert(!W.allowedTransitions('action','complete','admin').length,'no generic verify button');
+ // Investigation completion needs facts/summary, a finding and a root cause or an explicit "not established".
+ assert.equal(H.investigationGaps({}).length,3);
+ assert.deepEqual(H.investigationGaps({facts:'x',finding:'y',root_cause_not_established:1}),[]);
+ assert.equal(H.investigationGaps({summary:'x',finding:'y',root_cause:''}).length,1,'empty root cause is not a conclusion');
+ // Overdue is derived: past due and not verified.
+ assert.equal(H.isOverdue({status:'complete',due_date:'2026-01-01'},'2026-02-01'),true);
+ assert.equal(H.isOverdue({status:'verified',due_date:'2026-01-01'},'2026-02-01'),false);
+ assert.equal(H.isOverdue({status:'open',due_date:null},'2026-02-01'),false);
+ // Closure gates.
+ assert(H.closureBlockers('incident',{status:'investigating'},{status:'investigating'},[]).some(b=>b.includes('investigation')));
+ assert(H.closureBlockers('incident',{status:'reported'},null,[]).some(b=>b.includes('rationale')),'nothing entered is not "no investigation required"');
+ assert.deepEqual(H.closureBlockers('incident',{status:'reported'},null,[],{rationale:'Minor spill cleaned; no systemic cause.'}),[]);
+ assert(H.closureBlockers('incident',{},{status:'complete'},[{status:'verified'},{status:'complete'}]).some(b=>b.includes('not yet independently verified')));
+ assert(H.closureBlockers('ncr',{status:'verification',cause:'c',verification:'ok'},null,[{status:'complete'}]).some(b=>b.includes('verified')),'complete is not verified');
+ assert.deepEqual(H.closureBlockers('ncr',{status:'verification',cause:'c'},null,[{status:'verified'}],{verification:'Retested OK'}),[]);
+ assert(H.closureBlockers('ncr',{status:'verification'},null,[{status:'verified'}],{verification:'x'}).some(b=>b.includes('cause')));
+ assert(H.closureBlockers('ncr',{status:'action',cause:'c',verification:'v'},null,[{status:'verified'}]).some(b=>b.includes('verification first')));
+ console.log('PASS HSEQ chain: hseq.verify roles, verification/closure are dedicated actions, investigation completion rules, derived overdue, incident and NCR closure gates');
+}
 console.log('PASS V1 logic: lifecycle guards, capability matrix and eleven-role route gate, primary navigation, legacy route resolution, Home quick actions, ABN checksum, forecast/claim/GST/retention arithmetic, risk ratings, register identifiers, estimate items, docket cost lines, legacy stage mapping, scheduling conflict engine, legacy resource mapping');

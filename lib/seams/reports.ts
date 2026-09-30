@@ -62,7 +62,7 @@ export async function reportsV1(){
  }
  if(usable(e,'ims')&&can(a.role,'hseq.view')){
   const [actions,incidents,ncrs,swms,itp]=await Promise.all([
-   one<{open:number;overdue:number}>(`SELECT SUM(status IN ('open','in_progress')) AS open,SUM(status IN ('open','in_progress') AND due_date<?) AS overdue FROM hseq_actions WHERE organisation_id=?${inScope('project_id',true)}`,[today,org,...sp()]),
+   one<{open:number;overdue:number}>(`SELECT SUM(status IN ('open','in_progress')) AS open,SUM(status<>'verified' AND due_date<?) AS overdue FROM hseq_actions WHERE organisation_id=?${inScope('project_id',true)}`,[today,org,...sp()]),
    query(`SELECT incident_type,status,COUNT(*) AS n FROM hseq_incidents WHERE organisation_id=?${inScope('project_id',true)} GROUP BY incident_type,status`,[org,...sp()]),
    query(`SELECT status,COUNT(*) AS n FROM hseq_ncrs WHERE organisation_id=?${inScope('project_id',true)} GROUP BY status`,[org,...sp()]),
    query(`SELECT status,COUNT(*) AS n FROM swms WHERE organisation_id=?${inScope('project_id')} GROUP BY status`,[org,...sp()]),

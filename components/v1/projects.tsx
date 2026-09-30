@@ -303,7 +303,7 @@ function Quality({projectId,closed,onChanged}:{projectId:string;closed:boolean;o
   <RegisterView register="itps" parentId={projectId} hideCreate={closed} rowActions={r=><Btn variant="ghost" onClick={()=>setItp({id:r.id,title:String(r.title)})}>Inspection points<ArrowRight aria-hidden className="size-4"/></Btn>}/>
   <RegisterView register="incidents" parentId={projectId} hideCreate={closed} focus={{label:'Open',test:r=>String(r.status)!=='closed',empty:'No open incidents.'}}/>
   <RegisterView register="ncrs" parentId={projectId} hideCreate={closed} focus={{label:'Open',test:r=>String(r.status)!=='closed',empty:'No open non-conformances.'}}/>
-  <RegisterView register="actions" parentId={projectId} hideCreate={closed} focus={{label:'Open',test:r=>!['closed','complete','verified'].includes(String(r.status)),empty:'No open corrective actions.'}}/>
+  <RegisterView register="actions" parentId={projectId} hideCreate={closed} focus={{label:'Outstanding',test:r=>String(r.status)!=='verified',empty:'Every corrective action has been independently verified.'}}/>
   <Sheet open={Boolean(itp)} onOpenChange={o=>{if(!o)setItp(null);}}><SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-3xl"><SheetTitle className="border-b px-5 py-4 text-lg font-semibold">{itp?.title}</SheetTitle><SheetDescription className="sr-only">Inspection points</SheetDescription>{itp&&<div className="p-4"><RegisterView register="itp_items" parentId={itp.id} projectId={projectId} hideCreate={closed}/></div>}</SheetContent></Sheet>
  </div>;
 }

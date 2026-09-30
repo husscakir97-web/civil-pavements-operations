@@ -75,14 +75,20 @@ export async function homeFeed(){
   if(can(a.role,'hseq.view')){
    const ncr=await count(`SELECT COUNT(*) AS n FROM hseq_ncrs WHERE organisation_id=? AND status<>'closed'${inScope('project_id',true)}`,[org,...sp()]);if(ncr)attention.push({key:'ncrs',title:`${plural(ncr,'open NCR')}`,detail:'Non-conformances awaiting action or verification',area:'IMS & HSEQ',severity:'warning'});
    const inc=await count(`SELECT COUNT(*) AS n FROM hseq_incidents WHERE organisation_id=? AND status<>'closed'${inScope('project_id',true)}`,[org,...sp()]);if(inc)attention.push({key:'incidents',title:`${plural(inc,'open incident')}`,detail:'Reported or under investigation',area:'IMS & HSEQ',severity:'danger'});
-   const overdue=await count(`SELECT COUNT(*) AS n FROM hseq_actions WHERE organisation_id=? AND status IN ('open','in_progress') AND due_date IS NOT NULL AND due_date<?${inScope('project_id',true)}`,[org,today,...sp()]);if(overdue)attention.push({key:'actions-overdue',title:`${plural(overdue,'overdue corrective action')}`,detail:'Past their due date',area:'IMS & HSEQ',severity:'danger'});
+   const overdue=await count(`SELECT COUNT(*) AS n FROM hseq_actions WHERE organisation_id=? AND status<>'verified' AND due_date IS NOT NULL AND due_date<?${inScope('project_id',true)}`,[org,today,...sp()]);if(overdue)attention.push({key:'actions-overdue',title:`${plural(overdue,'overdue corrective action')}`,detail:'Past their due date and not yet verified',area:'IMS & HSEQ',severity:'danger'});
+  }
+  // Independent verification queue: completed actions this person may verify (never their own completion).
+  if(can(a.role,'hseq.verify')){
+   const toVerify=await count(`SELECT COUNT(*) AS n FROM hseq_actions WHERE organisation_id=? AND status='complete' AND (completed_by IS NULL OR completed_by<>?)${inScope('project_id',true)}`,[org,a.userId,...sp()]);
+   if(toVerify)mine.push({key:'actions-verify',title:`Verify ${plural(toVerify,'completed corrective action')}`,detail:'Completed by someone else and awaiting independent verification',area:'IMS & HSEQ',severity:'warning'});
   }
   // My Work reads existing assignments (ITP points, corrective actions); no task copies are created.
   if(can(a.role,'itp.complete')){
    const itp=await count(`SELECT COUNT(*) AS n FROM itp_items WHERE organisation_id=? AND assigned_user_id=? AND status='open'${inScope('project_id')}`,[org,a.userId,...sp()]);if(itp)mine.push({key:'itp',title:`Complete ${plural(itp,'inspection point')}`,detail:'Quality records assigned to you',area:can(a.role,'schedule.edit')||can(a.role,'pipeline.view')?'Projects':'Field',severity:'info'});
   }
-  const acts=await query<{id:string;action:string;due_date:string|null;project_id:string|null}>(`SELECT id,action,due_date,project_id FROM hseq_actions WHERE organisation_id=? AND owner_user_id=? AND status IN ('open','in_progress')${inScope('project_id',true)} ORDER BY due_date IS NULL,due_date LIMIT 5`,[org,a.userId,...sp()]);
-  for(const x of acts)mine.push({key:`action-${x.id}`,title:`Action: ${String(x.action).slice(0,90)}`,detail:x.due_date?`Due ${x.due_date}`:'No due date',area:'IMS & HSEQ',severity:x.due_date&&x.due_date<today?'danger':'info'});
+  const acts=await query<{id:string;action:string;due_date:string|null;project_id:string|null;status:string}>(`SELECT id,action,due_date,project_id,status FROM hseq_actions WHERE organisation_id=? AND owner_user_id=? AND status IN ('open','in_progress','complete')${inScope('project_id',true)} ORDER BY status='complete',due_date IS NULL,due_date LIMIT 8`,[org,a.userId,...sp()]);
+  // Open/in-progress actions are mine to do; completed ones are shown as awaiting verification, verified ones drop off.
+  for(const x of acts)mine.push({key:`action-${x.id}`,title:`${x.status==='complete'?'Awaiting verification':'Action'}: ${String(x.action).slice(0,90)}`,detail:[x.due_date?`Due ${x.due_date}`:'No due date',x.status==='complete'?'completed, not yet verified':x.due_date&&x.due_date<today?'overdue':null].filter(Boolean).join(' · '),area:'IMS & HSEQ',target:x.project_id?{type:'project',id:x.project_id,tab:'quality'}:undefined,severity:x.status==='complete'?'info':x.due_date&&x.due_date<today?'danger':'info'});
   if(can(a.role,'hseq.view')||can(a.role,'itp.complete')){
    const holds=await count(`SELECT COUNT(*) AS n FROM itp_items WHERE organisation_id=? AND point_type='hold' AND status='open'${inScope('project_id')}`,[org,...sp()]);
    indicators.push({key:'hold-points',label:'Open hold points',value:String(holds),detail:'Work cannot proceed past these until released',area:'IMS & HSEQ',severity:holds?'warning':'ok'});

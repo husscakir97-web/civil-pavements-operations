@@ -1198,6 +1198,178 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  await json(await call('/api/platform/entitlements','PUT',{module:'ims',status:'active'},A.cookie),200,'restore IMS');
  console.log('PASS F8 forms: draft→publish→immutable v1, v2 revision without touching v1, v1 evidence renders v1, stale version refused, server-side required/conditional/choice/unknown/person/asset/document/location/signature validation, hidden answers dropped, immutable submissions with reasoned append-only corrections, Alpha/Bravo engineer scope, assigned-shift field submission, tenant isolation, audit trail, archive, IMS entitlement; evidence in a controlled IMS Forms document context works with Field disabled, re-derives shift/project scope on every open, never appears in generic document routes, and cannot be moved between contexts');
 
+ // ---------------------------------------------------------------- Scenario 8B: HSEQ investigation & corrective-action chain
+ step='8B HSEQ chain';
+ await as('project_engineer');
+ await json(await call('/api/projects/team','POST',{projectId:pA,userId:S.user.id,projectRole:'site_engineer'},A.cookie),200,'site engineer back on Alpha');
+ const hPost=(body,cookie=R.cookie)=>call('/api/hseq/chain','POST',body,cookie);
+ const hChain=(type,id,cookie=R.cookie)=>call(`/api/hseq/chain?sourceType=${type}&sourceId=${encodeURIComponent(id)}`,'GET',undefined,cookie);
+ const complete=(id,cookie,note)=>call('/api/registers/actions','PATCH',{id,transition:'complete',note},cookie);
+ // 1–2. Field worker reports; scope applies.
+ const hInc=(await json(await reg('incidents',C.cookie).create(pA,{incident_type:'near miss',occurred_at:`${today}T08:15`,description:'Excavator slewed towards a spotter'}),201,'field worker reports Incident Alpha')).record;
+ assert.equal(hInc.status,'reported');
+ await json(await hChain('incident',hInc.id,B.cookie),404,'other tenant cannot open the chain');
+ await json(await hChain('incident',hInc.id,C.cookie),403,'field worker cannot open the HSEQ chain');
+ await json(await hPost({action:'startInvestigation',sourceType:'incident',sourceId:hInc.id},C.cookie),403,'field worker cannot investigate');
+ // 3–5. Investigation.
+ const hInv=(await json(await hPost({action:'startInvestigation',sourceType:'incident',sourceId:hInc.id,summary:'Slew near spotter at pit 4'}),201,'engineer starts investigation')).id;
+ assert.equal((await json(await hChain('incident',hInc.id),200)).source.status,'investigating','incident moves to investigating');
+ await json(await hPost({action:'startInvestigation',sourceType:'incident',sourceId:hInc.id}),409,'one investigation per source');
+ await json(await hPost({action:'completeInvestigation',id:hInv}),422,'cannot complete without finding and root cause');
+ let hInvRow=(await json(await hChain('incident',hInc.id),200)).investigation;
+ await json(await hPost({action:'updateInvestigation',id:hInv,revision:hInvRow.revision,values:{facts:'Spotter inside slew radius; no exclusion zone marked',finding:'Exclusion zone not set out'}}),200);
+ await json(await hPost({action:'completeInvestigation',id:hInv}),422,'finding alone is not enough — root cause or explicit conclusion required');
+ hInvRow=(await json(await hChain('incident',hInc.id),200)).investigation;
+ await json(await hPost({action:'updateInvestigation',id:hInv,revision:hInvRow.revision-1,values:{rootCause:'x'}}),409,'stale investigation edit refused');
+ await json(await hPost({action:'updateInvestigation',id:hInv,revision:hInvRow.revision,values:{rootCause:'Pre-start did not cover exclusion zones',contributingFactors:'New spotter'}}),200);
+ await json(await hPost({action:'completeInvestigation',id:hInv}),200,'investigation complete');
+ await json(await hPost({action:'updateInvestigation',id:hInv,values:{finding:'rewrite'}}),409,'completed investigation is locked');
+ await json(await hPost({action:'reopenInvestigation',id:hInv}),400,'reopen needs a reason');
+ await json(await hPost({action:'reopenInvestigation',id:hInv,reason:'Add CCTV evidence'}),200,'controlled reopen');
+ await json(await hPost({action:'completeInvestigation',id:hInv}),200,'re-complete');
+ // 6–7. Two actions from the incident, real owners and due dates; project derived.
+ const hA1=(await json(await hPost({action:'addAction',sourceType:'incident',sourceId:hInc.id,actionText:'Mark exclusion zones in pre-start',ownerUserId:R.user.id,dueDate:'2020-01-01'}),201)).id;
+ const hA2=(await json(await hPost({action:'addAction',sourceType:'incident',sourceId:hInc.id,actionText:'Spotter refresher training',ownerUserId:S.user.id,dueDate:'2099-12-31'}),201)).id;
+ await json(await hPost({action:'addAction',sourceType:'incident',sourceId:hInc.id,actionText:'No owner'}),400,'actions need a real owner');
+ await json(await hPost({action:'addAction',sourceType:'incident',sourceId:hInc.id,actionText:'Foreign owner',ownerUserId:B.user.id}),400,'owner must be in the organisation');
+ const [[hA1Row]]=await db.execute('SELECT project_id,owner_user_id,owner_name,source_type,source_id FROM hseq_actions WHERE organisation_id=? AND id=?',[memberA.organisation_id,hA1]);
+ assert.equal(hA1Row.project_id,pA,'project derived from the incident');assert.equal(hA1Row.owner_user_id,R.user.id);assert(hA1Row.owner_name,'owner name snapshot');
+ let hView=await json(await hChain('incident',hInc.id),200);assert.equal(hView.actions.length,2);assert.equal(hView.actions.find(x=>x.id===hA1).overdue,true,'past due and unverified is overdue');
+ // 8–10. Completion and independent verification.
+ await json(await complete(hA1,R.cookie),422,'completion notes required');
+ await json(await complete(hA1,R.cookie,'Pre-start template updated with exclusion zones'),200,'owner completes action 1');
+ const [[hA1Done]]=await db.execute('SELECT completed_by,completed_at FROM hseq_actions WHERE organisation_id=? AND id=?',[memberA.organisation_id,hA1]);assert.equal(hA1Done.completed_by,R.user.id);assert(hA1Done.completed_at,'completion stamped by the server');
+ await json(await call('/api/registers/actions','PATCH',{id:hA1,transition:'verified'},A.cookie),409,'verification is not a status button');
+ await json(await hPost({action:'reviewAction',id:hA1,outcome:'accepted',note:'Looks good'}),403,'the completer cannot verify their own completion');
+ await json(await hPost({action:'reviewAction',id:hA1,outcome:'accepted',note:'Looks good'},S.cookie),403,'site engineers do not hold hseq.verify');
+ await json(await hPost({action:'reviewAction',id:hA1,outcome:'accepted'},A.cookie),400,'verification needs a note');
+ await json(await hPost({action:'reviewAction',id:hA1,outcome:'accepted',note:'Checked template and briefed crew'},A.cookie),200,'independent verifier accepts');
+ assert.equal((await json(await hChain('incident',hInc.id),200)).actions.find(x=>x.id===hA1).overdue,false,'verified actions are not overdue');
+ await json(await call('/api/registers/actions','PATCH',{id:hA1,revision:99,values:{action:'rewrite'}},A.cookie),409,'verified actions are locked');
+ // 11–12. Second action still open → incident cannot close.
+ await json(await hPost({action:'close',sourceType:'incident',sourceId:hInc.id,rationale:'Done'}),422,'incident cannot close with an open action');
+ await json(await call('/api/registers/incidents','PATCH',{id:hInc.id,transition:'closed'},A.cookie),409,'closure is not a status button');
+ // 13–16. Rejection keeps history, then acceptance.
+ await json(await complete(hA2,S.cookie,'Training delivered'),200,'owner completes action 2');
+ const hHome=await json(await call('/api/platform/home','GET',undefined,R.cookie),200);assert(hHome.myActions.some(x=>x.key==='actions-verify'),'verifier sees the verification queue in My Work');
+ await json(await hPost({action:'reviewAction',id:hA2,outcome:'rejected',note:'No attendance record attached'},A.cookie),200,'verifier rejects with a reason');
+ hView=await json(await hChain('incident',hInc.id),200);const hA2View=hView.actions.find(x=>x.id===hA2);
+ assert.equal(hA2View.status,'in_progress','rejection reopens the action');assert.equal(hA2View.reviews.length,1);assert.equal(hA2View.reviews[0].completionNotes,'Training delivered','rejected completion kept in history');assert.equal(hA2View.reviews[0].completedBy,S.user.id);
+ await json(await complete(hA2,S.cookie,'Training delivered; attendance sheet attached'),200,'completed again');
+ await json(await hPost({action:'reviewAction',id:hA2,outcome:'accepted',note:'Attendance sheet checked'},R.cookie),200,'a different verifier accepts');
+ // 17. Incident closes.
+ await json(await hPost({action:'close',sourceType:'incident',sourceId:hInc.id},C.cookie),403,'field workers cannot close controlled HSEQ records');
+ await json(await hPost({action:'close',sourceType:'incident',sourceId:hInc.id,rationale:'Actions verified'}),200,'incident closes once every action is verified');
+ const [[hIncRow]]=await db.execute('SELECT status,closed_by,closed_at,closure_rationale FROM hseq_incidents WHERE organisation_id=? AND id=?',[memberA.organisation_id,hInc.id]);assert.equal(hIncRow.status,'closed');assert.equal(hIncRow.closed_by,R.user.id);assert(hIncRow.closed_at);
+ // Closing without any chain needs an explicit rationale.
+ const hInc2=(await json(await reg('incidents',C.cookie).create(pA,{incident_type:'other',occurred_at:`${today}T09:00`,description:'Minor spill of water from cart'}),201)).record;
+ await json(await hPost({action:'close',sourceType:'incident',sourceId:hInc2.id}),422,'nothing entered is not "no investigation required"');
+ await json(await hPost({action:'close',sourceType:'incident',sourceId:hInc2.id,rationale:'Water only; no hazard, no systemic cause.'}),200,'closure with explicit rationale');
+ // NCR chain.
+ const hNcr=(await json(await reg('ncrs',A.cookie).create(pA,{issue:'Kerb profile out of tolerance',requirement:'±5 mm per spec R15'}),201,'raise NCR')).record;
+ const hNInv=(await json(await hPost({action:'startInvestigation',sourceType:'ncr',sourceId:hNcr.id,summary:'Survey of 40 m kerb'}),201)).id;
+ const hNInvRow=(await json(await hChain('ncr',hNcr.id),200)).investigation;
+ await json(await hPost({action:'updateInvestigation',id:hNInv,revision:hNInvRow.revision,values:{finding:'Stringline set 8 mm high',rootCause:'Unchecked survey control point'}}),200);
+ await json(await hPost({action:'completeInvestigation',id:hNInv}),200,'NCR investigation complete');
+ const hN1=(await json(await hPost({action:'addAction',sourceType:'ncr',sourceId:hNcr.id,actionText:'Break out and relay 40 m',ownerUserId:S.user.id,dueDate:'2099-01-01'}),201)).id;
+ const hN2=(await json(await hPost({action:'addAction',sourceType:'ncr',sourceId:hNcr.id,actionText:'Add control check to ITP',ownerUserId:R.user.id,dueDate:'2099-01-01'}),201)).id;
+ const [[hNcrRow]]=await db.execute('SELECT status,cause FROM hseq_ncrs WHERE organisation_id=? AND id=?',[memberA.organisation_id,hNcr.id]);assert.equal(hNcrRow.status,'action');assert.equal(hNcrRow.cause,'Unchecked survey control point','cause snapshot kept for compatibility');
+ await json(await complete(hN1,S.cookie,'Relaid and resurveyed'),200);await json(await complete(hN2,R.cookie,'ITP updated'),200);
+ await json(await reg('ncrs',A.cookie).move(hNcr.id,'verification'),200,'NCR ready for verification');
+ await json(await hPost({action:'close',sourceType:'ncr',sourceId:hNcr.id,verification:'Resurvey within tolerance'},A.cookie),422,'NCR cannot close while actions are only complete');
+ await json(await reg('ncrs',A.cookie).move(hNcr.id,'closed'),409,'NCR closure is not a status button');
+ await json(await hPost({action:'reviewAction',id:hN1,outcome:'accepted',note:'Resurvey report checked'},R.cookie),200);
+ await json(await hPost({action:'reviewAction',id:hN2,outcome:'accepted',note:'ITP revision reviewed'},A.cookie),200);
+ await json(await hPost({action:'close',sourceType:'ncr',sourceId:hNcr.id,verification:'Resurvey within tolerance'},S.cookie),403,'only verifiers close NCRs');
+ await json(await hPost({action:'close',sourceType:'ncr',sourceId:hNcr.id},A.cookie),422,'final verification required');
+ await json(await hPost({action:'close',sourceType:'ncr',sourceId:hNcr.id,verification:'Resurvey within tolerance on 40 m'},A.cookie),200,'NCR verified and closed');
+ const [[hNcrClosed]]=await db.execute('SELECT status,closed_by,closed_at,verification FROM hseq_ncrs WHERE organisation_id=? AND id=?',[memberA.organisation_id,hNcr.id]);assert.equal(hNcrClosed.status,'closed');assert.equal(hNcrClosed.closed_by,A.user.id);assert(hNcrClosed.closed_at);assert.equal(hNcrClosed.verification,'Resurvey within tolerance on 40 m');
+ const [[hN1Row]]=await db.execute('SELECT verified_by,verified_at,verification_note FROM hseq_actions WHERE organisation_id=? AND id=?',[memberA.organisation_id,hN1]);assert.equal(hN1Row.verified_by,R.user.id);assert(hN1Row.verified_at);assert.equal(hN1Row.verification_note,'Resurvey report checked');
+ // Relationship integrity.
+ await json(await reg('actions',A.cookie).create(pB,{source_type:'incident',source_id:hInc2.id,action:'Mismatch',owner_user_id:A.user.id}),400,'Incident Alpha → Bravo action refused');
+ await json(await reg('actions',A.cookie).create(pA,{source_type:'incident',source_id:'no-such-incident',action:'Ghost',owner_user_id:A.user.id}),404,'nonexistent source refused');
+ await json(await reg('actions',A.cookie).create(pA,{source_type:'other',source_id:'free text',action:'Free id',owner_user_id:A.user.id}),400,'free-text source ids refused');
+ const hBInc=(await json(await reg('incidents',B.cookie).create(null,{incident_type:'other',occurred_at:`${today}T09:00`,description:'Other org incident'}),201)).record;
+ await json(await hPost({action:'addAction',sourceType:'incident',sourceId:hBInc.id,actionText:'Cross tenant',ownerUserId:R.user.id},A.cookie),404,'source in another tenant refused');
+ await json(await reg('actions',A.cookie).create(null,{source_type:'incident',source_id:hBInc.id,action:'Cross tenant register',owner_user_id:A.user.id}),404,'register refuses cross-tenant sources');
+ const hBravoInc=(await json(await reg('incidents',A.cookie).create(pB,{incident_type:'other',occurred_at:`${today}T10:00`,description:'Bravo incident'}),201)).record;
+ const hBravoAct=(await json(await hPost({action:'addAction',sourceType:'incident',sourceId:hBravoInc.id,actionText:'Bravo action',ownerUserId:A.user.id},A.cookie),201)).id;
+ await json(await hChain('incident',hBravoInc.id),404,'engineer cannot open a Bravo chain');
+ await json(await hPost({action:'startInvestigation',sourceType:'incident',sourceId:hBravoInc.id}),404,'engineer cannot investigate Bravo');
+ await json(await complete(hBravoAct,A.cookie,'done'),200);
+ await json(await hPost({action:'reviewAction',id:hBravoAct,outcome:'accepted',note:'guess'}),404,'engineer cannot verify a Bravo action by id');
+ await json(await hPost({action:'reviewAction',id:hA1,outcome:'accepted',note:'guess'},C.cookie),403,'field worker cannot verify by guessed id');
+ await json(await hPost({action:'updateInvestigation',id:hInv,values:{finding:'x'}},C.cookie),403,'field worker cannot touch investigations by guessed id');
+ await json(await hPost({action:'reopenInvestigation',id:hInv,reason:'Guess'},B.cookie),404,'other tenant cannot reach an investigation');
+ // Forms seam: an authorised form submission can source a corrective action (project derived).
+ const hFormAct=(await json(await hPost({action:'addAction',sourceType:'form_submission',sourceId:fSubA,actionText:'Fix hazard found in prestart',ownerUserId:R.user.id,dueDate:'2099-01-01'}),201,'action from a form submission')).id;
+ const [[hFormRow]]=await db.execute('SELECT project_id,source_type FROM hseq_actions WHERE organisation_id=? AND id=?',[memberA.organisation_id,hFormAct]);assert.equal(hFormRow.project_id,pA);assert.equal(hFormRow.source_type,'form_submission');
+ await json(await hPost({action:'addAction',sourceType:'form_submission',sourceId:fSubB,actionText:'Bravo form',ownerUserId:R.user.id}),404,'unrelated project submission refused');
+ await json(await hPost({action:'addAction',sourceType:'form_submission',sourceId:fSubA,actionText:'Cross tenant',ownerUserId:B.user.id},B.cookie),404,'other tenant submission refused');
+ const [[hFormUnchanged]]=await db.execute('SELECT responses_json FROM form_submissions WHERE organisation_id=? AND id=?',[memberA.organisation_id,fSubA]);assert.equal(hFormUnchanged.responses_json,fRowAfter.responses_json,'form evidence untouched');
+ // Ownership: every new corrective action has a real organisation user owner, whichever path creates it.
+ const hInc3=(await json(await reg('incidents',C.cookie).create(pA,{incident_type:'near miss',occurred_at:`${today}T12:00`,description:'Unsecured load on ute'}),201)).record;
+ await json(await reg('actions',A.cookie).create(pA,{source_type:'incident',source_id:hInc3.id,action:'Ownerless'}),400,'generic create without an owner refused');
+ await json(await hPost({action:'addAction',sourceType:'incident',sourceId:hInc3.id,actionText:'Ownerless chain'}),400,'chain create without an owner still refused');
+ await json(await reg('actions',A.cookie).create(pA,{source_type:'incident',source_id:hInc3.id,action:'Foreign owner',owner_user_id:B.user.id}),400,'owner from another organisation refused');
+ const eGeneric=(await json(await reg('actions',A.cookie).create(pA,{source_type:'incident',source_id:hInc3.id,action:'Load restraint toolbox',owner_user_id:S.user.id,due_date:'2099-03-01'}),201,'generic create with a real owner')).record;
+ assert.equal(eGeneric.owner_user_id,S.user.id);assert(eGeneric.owner_name,'owner name snapshot populated');assert.equal(eGeneric.project_id,pA);
+ await json(await call('/api/registers/actions','PATCH',{id:eGeneric.id,revision:eGeneric.revision,values:{owner_user_id:null}},A.cookie),400,'an owned action cannot have its owner cleared');
+ await json(await reg('actions',A.cookie).create(pA,{source_type:'incident',source_id:hInc3.id,action:'Evidence on create',owner_user_id:S.user.id,completion_document_id:fOrdinary.id}),400,'evidence is attached after the action exists');
+ // Evidence integrity: completion and verification evidence must be current 'action' documents for that exact action.
+ const eA=(await json(await hPost({action:'addAction',sourceType:'incident',sourceId:hInc3.id,actionText:'Fit load restraint',ownerUserId:R.user.id,dueDate:'2099-03-01'}),201)).id;
+ const eB=(await json(await hPost({action:'addAction',sourceType:'incident',sourceId:hInc3.id,actionText:'Audit utes',ownerUserId:R.user.id,dueDate:'2099-03-01'}),201)).id;
+ const eRev=async id=>Number((await db.execute('SELECT revision FROM hseq_actions WHERE organisation_id=? AND id=?',[memberA.organisation_id,id]))[0][0].revision);
+ const setEvidence=async(id,docId,cookie=R.cookie)=>call('/api/registers/actions','PATCH',{id,revision:await eRev(id),values:{completion_document_id:docId}},cookie);
+ const eDocA=(await json(await upload(R.cookie,{contextType:'action',contextId:eA,title:'Restraint photo'}),201,'upload evidence against action A')).document;
+ assert.equal(eDocA.projectId,pA,'evidence project comes from the action');
+ const eDocB=(await json(await upload(R.cookie,{contextType:'action',contextId:eB,title:'Audit sheet'}),201)).document;
+ await json(await upload(R.cookie,{contextType:'action',contextId:eA,projectId:pB,title:'Wrong project'}),400,'evidence cannot claim another project');
+ await json(await upload(R.cookie,{contextType:'action',contextId:hBravoAct,title:'Bravo evidence'}),404,'PE cannot upload evidence to an unassigned project action');
+ await json(await upload(R.cookie,{contextType:'action',contextId:'no-such-action',title:'Ghost'}),404,'evidence needs a real action');
+ const eDocBravo=(await json(await upload(A.cookie,{contextType:'action',contextId:hBravoAct,title:'Bravo evidence'}),201)).document;
+ const eOrgDoc=(await json(await upload(A.cookie,{contextType:'organisation',title:'Company policy'}),201)).document;
+ const eOtherOrg=(await json(await upload(B.cookie,{contextType:'organisation',title:'Other org policy'}),201)).document;
+ await json(await setEvidence(eA,eDocA.id),200,'action A uses its own evidence');
+ await json(await setEvidence(eB,eDocA.id),400,'action B cannot use action A evidence');
+ await json(await setEvidence(eA,eDocBravo.id,A.cookie),400,'Alpha action cannot use Bravo evidence');
+ await json(await setEvidence(eB,eOrgDoc.id,A.cookie),400,'unrelated organisation document refused');
+ await json(await setEvidence(eB,fOrdinary.id,A.cookie),400,'unrelated project document refused');
+ await json(await setEvidence(eB,fPhotoR.id,A.cookie),400,'controlled Forms evidence refused');
+ await json(await setEvidence(eB,eOtherOrg.id,A.cookie),400,'other-tenant document refused');
+ await json(await complete(eA,R.cookie,'Restraint fitted'),200);
+ assert.equal((await call('/api/documents?id='+eDocA.id,'GET',undefined,R.cookie)).status,200,'completion evidence available after completion');
+ await json(await hPost({action:'reviewAction',id:eA,outcome:'rejected',note:'Photo does not show the tie-down points'},A.cookie),200,'reject reviewed completion');
+ const [[eRej]]=await db.execute("SELECT completion_document_id,completion_notes FROM hseq_action_reviews WHERE organisation_id=? AND action_id=? AND outcome='rejected'",[memberA.organisation_id,eA]);
+ assert.equal(eRej.completion_document_id,eDocA.id,'rejection keeps the completion evidence snapshot');assert.equal(eRej.completion_notes,'Restraint fitted');
+ await json(await complete(eA,R.cookie,'Restraint fitted; tie-down points shown'),200);
+ const eVerDoc=(await json(await upload(A.cookie,{contextType:'action',contextId:eA,title:'Verification inspection'}),201)).document;
+ await json(await hPost({action:'reviewAction',id:eA,outcome:'accepted',note:'Inspected',documentId:eDocB.id},A.cookie),400,'verification cannot use another action evidence');
+ await json(await hPost({action:'reviewAction',id:eA,outcome:'accepted',note:'Inspected',documentId:eDocBravo.id},A.cookie),400,'verification cannot use another project evidence');
+ await json(await hPost({action:'reviewAction',id:eA,outcome:'accepted',note:'Inspected',documentId:eOrgDoc.id},A.cookie),400,'verification cannot use an unrelated organisation document');
+ await json(await hPost({action:'reviewAction',id:eA,outcome:'accepted',note:'Inspected',documentId:fPhotoR.id},A.cookie),400,'verification cannot use controlled Forms evidence');
+ await json(await hPost({action:'reviewAction',id:eA,outcome:'accepted',note:'Inspected on site',documentId:eVerDoc.id},A.cookie),200,'verification with its own evidence');
+ const [[eAcc]]=await db.execute("SELECT r.document_id,a.verification_document_id,a.completion_document_id FROM hseq_action_reviews r JOIN hseq_actions a ON a.id=r.action_id WHERE r.organisation_id=? AND r.action_id=? AND r.outcome='accepted'",[memberA.organisation_id,eA]);
+ assert.equal(eAcc.document_id,eVerDoc.id,'verification evidence kept in review history');assert.equal(eAcc.verification_document_id,eVerDoc.id);assert.equal(eAcc.completion_document_id,eDocA.id,'verification never rewrites completion evidence');
+ // Legacy rows keep reading and closing safely.
+ const hLegacyAct=crypto.randomUUID(),hLegacyNcr=crypto.randomUUID(),hNow=new Date().toISOString();
+ await db.execute("INSERT INTO hseq_actions (id,organisation_id,project_id,source_type,source_id,action,owner_name,status,revision,created_at,updated_at) VALUES (?,?,?,'other','LEGACY-7','Legacy action','Pat Legacy','open',1,?,?)",[hLegacyAct,memberA.organisation_id,pA,hNow,hNow]);
+ await db.execute("INSERT INTO hseq_ncrs (id,organisation_id,project_id,reference,issue,cause,corrective_action,verification,status,revision,created_at,updated_at) VALUES (?,?,?,'NCR-L1','Legacy NCR','Legacy cause','Legacy corrective action text','Legacy verification','verification',1,?,?)",[hLegacyNcr,memberA.organisation_id,pA,hNow,hNow]);
+ assert((await json(await reg('actions',R.cookie).list('?parentId='+pA),200)).records.some(r=>r.id===hLegacyAct&&r.owner_name==='Pat Legacy'),'legacy action reads');
+ await json(await call('/api/registers/actions','PATCH',{id:hLegacyAct,revision:1,values:{due_date:'2099-06-30'}},A.cookie),200,'legacy action edits without touching its source');
+ await json(await call('/api/registers/actions','PATCH',{id:hLegacyAct,revision:2,values:{owner_user_id:S.user.id}},A.cookie),200,'legacy ownerless action can be given a real owner');
+ const [[hLegacyOwned]]=await db.execute('SELECT owner_user_id,owner_name FROM hseq_actions WHERE organisation_id=? AND id=?',[memberA.organisation_id,hLegacyAct]);assert.equal(hLegacyOwned.owner_user_id,S.user.id);assert.notEqual(hLegacyOwned.owner_name,'Pat Legacy','owner snapshot follows the real owner');
+ const hLegacyEvid=crypto.randomUUID();
+ await db.execute("INSERT INTO hseq_actions (id,organisation_id,project_id,source_type,action,owner_name,status,completion_notes,completion_document_id,completed_at,revision,created_at,updated_at) VALUES (?,?,?,'other','Legacy evidence action','Pat Legacy','complete','Done long ago',?,?,1,?,?)",[hLegacyEvid,memberA.organisation_id,pA,fOrdinary.id,hNow,hNow,hNow]);
+ assert((await json(await reg('actions',R.cookie).list('?parentId='+pA),200)).records.some(r=>r.id===hLegacyEvid&&r.completion_document_id===fOrdinary.id),'legacy evidence reference still reads');
+ assert.equal((await json(await hChain('ncr',hLegacyNcr),200)).closure.blockers.length,0,'legacy NCR with cause, action text and verification is closable');
+ await json(await hPost({action:'close',sourceType:'ncr',sourceId:hLegacyNcr},A.cookie),200,'legacy NCR closes');
+ // Audit trail.
+ const [hAud]=await db.execute('SELECT event_type,after_state FROM audit_log WHERE organisation_id=? AND entity_id IN (?,?,?,?)',[memberA.organisation_id,hInv,hA2,hInc.id,hNcr.id]);const hEv=new Set(hAud.map(r=>r.event_type));
+ for(const e of ['hseq_investigation.started','hseq_investigation.updated','hseq_investigation.completed','hseq_investigation.reopened','corrective_action.created','corrective_action.rejected','corrective_action.verified','actions.complete','incident.closed','ncr.closed'])assert(hEv.has(e),'audit: '+e);
+ const hRej=hAud.find(r=>r.event_type==='corrective_action.rejected');const hRejAfter=typeof hRej.after_state==='string'?JSON.parse(hRej.after_state):hRej.after_state;assert.equal(hRejAfter.completedBy,S.user.id);assert.equal(hRejAfter.reviewerUserId,A.user.id,'verification events name completer and verifier');
+ console.log('PASS 8B HSEQ chain: field-reported incident → gated investigation (explicit root-cause conclusion, controlled reopen) → multiple owned actions with derived project → server-stamped completion → independent verification (self-verify and non-verifier refused) → rejection keeps history → closure gates for incidents (rationale when no chain) and NCRs (all actions verified, final verification), dedicated closure/verify actions, Alpha/Bravo scope, tenant and nonexistent sources refused, forms seam, legacy rows, My Work verification queue, audit; action evidence bound to the exact action (other action/project/org/Forms/tenant documents refused, snapshots kept) and a real owner on every new action');
+
  step='H ABN';
  let reg1=await json(await call('/api/platform/abn?abn=51824753556&lookup=1','GET',undefined,A.cookie),200);assert.equal(reg1.registry.status,'found');assert.equal(reg1.registry.record.entityName,'ALPHA CIVIL PTY LTD');
  const nf=await json(await call('/api/platform/abn','POST',{abn:'53004085616'},A.cookie),404);assert.equal(nf.code,'ABN_NOT_FOUND');

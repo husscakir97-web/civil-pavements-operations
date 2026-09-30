@@ -92,20 +92,22 @@ export const MACHINES={
   closed:[{to:'open',label:'Reopen',capability:'hseq.edit'}],
  }),
  incident:m('reported',{reported:{label:'Reported',tone:'danger'},investigating:{label:'Investigating',tone:'warning'},closed:{label:'Closed',tone:'success'}},{
-  reported:[{to:'investigating',label:'Start investigation',capability:'hseq.edit'},{to:'closed',label:'Close',capability:'hseq.edit'}],
-  investigating:[{to:'closed',label:'Close',capability:'hseq.edit'}],
+  // Closing runs the closure gate (investigation complete, every linked action verified, or a recorded rationale).
+  reported:[{to:'investigating',label:'Start investigation',capability:'hseq.edit'},{to:'closed',label:'Close',capability:'hseq.edit',system:true}],
+  investigating:[{to:'closed',label:'Close',capability:'hseq.edit',system:true}],
   closed:[{to:'investigating',label:'Reopen',capability:'hseq.edit'}],
  }),
  ncr:m('open',{open:{label:'Open',tone:'danger'},action:{label:'Corrective action',tone:'warning'},verification:{label:'Verification',tone:'info'},closed:{label:'Closed',tone:'success'}},{
   open:[{to:'action',label:'Assign corrective action',capability:'hseq.edit'}],
   action:[{to:'verification',label:'Ready for verification',capability:'hseq.edit'}],
-  verification:[{to:'closed',label:'Verify and close',capability:'document.approve'},{to:'action',label:'Return to action',capability:'hseq.edit'}],
-  closed:[{to:'action',label:'Reopen',capability:'document.approve'}],
+  verification:[{to:'closed',label:'Verify and close',capability:'hseq.verify',system:true},{to:'action',label:'Return to action',capability:'hseq.edit'}],
+  closed:[{to:'action',label:'Reopen',capability:'hseq.verify'}],
  }),
  action:m('open',{open:{label:'Open',tone:'warning'},in_progress:{label:'In progress',tone:'info'},complete:{label:'Complete',tone:'success'},verified:{label:'Verified',tone:'success',terminal:true}},{
   open:[{to:'in_progress',label:'Start',capability:'hseq.edit'},{to:'complete',label:'Complete',capability:'hseq.edit'}],
   in_progress:[{to:'complete',label:'Complete',capability:'hseq.edit'}],
-  complete:[{to:'verified',label:'Verify',capability:'document.approve'},{to:'in_progress',label:'Reopen',capability:'hseq.edit'}],
+  // Verification is an independent review (different person, reason recorded): accept → verified, reject → rework.
+  complete:[{to:'verified',label:'Verify',capability:'hseq.verify',system:true},{to:'in_progress',label:'Reject for rework',capability:'hseq.verify',system:true}],
  }),
  itp:m('draft',{draft:{label:'Draft',tone:'neutral'},active:{label:'Active',tone:'info'},closed:{label:'Closed',tone:'success'}},{
   draft:[{to:'active',label:'Activate',capability:'document.approve'}],

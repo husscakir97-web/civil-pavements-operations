@@ -14,6 +14,8 @@ import {getPool} from '@/lib/platform/database';
 import {resolveClientContext,visibleClientIds} from '@/lib/platform/clients';
 import {canAccessProject,projectFilter} from '@/lib/platform/project-access';
 import {saveLocation,loadLocations,locationInput} from '@/lib/platform/locations';
+import {linkActionSource} from '@/lib/modules/hseq/corrective';
+import {resolveAuthorisedDocument} from '@/lib/platform/documents';
 import type {LocationInput} from '@/lib/v1/location';
 const getPoolConn=()=>getPool();
 
@@ -99,6 +101,8 @@ async function derive(def:RegisterDef,values:Row,existing:Row|null,conn:Conn){
   if(client?.snapshot&&client.key in values&&ctx.clientName)values[client.snapshot]=ctx.clientName;
   if(site?.snapshot&&site.key in values&&ctx.siteLabel&&!values[site.snapshot])values[site.snapshot]=ctx.siteLabel;
  }
+ // Action owners are real users; the name is kept as a readable snapshot.
+ if(def.key==='actions'&&'owner_user_id' in values){const u=values.owner_user_id?await one('SELECT name FROM users WHERE organisation_id=? AND id=?',[actor().organisationId,values.owner_user_id],conn):null;values.owner_name=u?String(u.name).slice(0,160):null;}
  if(def.key==='risks'){
   const m=await orgMatrix(conn),merged={...existing,...values};
   values.initial_rating=riskRating(merged.initial_likelihood,merged.initial_consequence,m);
@@ -172,6 +176,13 @@ export async function createRecord(key:string,parentId:string|null,input:Record<
   const pendingLocations=takeLocations(def,values);
   await validateRefs(def,values,conn);
   await derive(def,values,null,conn);
+  if(def.key==='actions'){
+   // Every new corrective action has a real owner (validated in-organisation above; name snapshot in derive).
+   if(!values.owner_user_id)fail(400,'Choose the person who owns this action.');
+   // Evidence is bound to an existing action, so it is attached after the action exists.
+   if(values.completion_document_id)fail(400,'Attach completion evidence after the action is created.');
+   const pid=await linkActionSource(values,null,(parent.project_id as string)??null,conn);if(pid!==undefined)values.project_id=pid;
+  }
   if(def.key==='clients'&&await one('SELECT id FROM clients WHERE organisation_id=? AND LOWER(TRIM(name))=LOWER(?) LIMIT 1',[a.organisationId,values.name],conn))fail(409,'A client with this name already exists. Search for it instead.');
   const id=uuid(),now=nowIso();
   const row:Row={id,organisation_id:a.organisationId,...values,...(def.fixed||{}),created_by:a.userId,created_at:now,updated_at:now,revision:1};
@@ -226,6 +237,10 @@ export async function updateRecord(key:string,id:string,revision:number,input:Re
   Object.assign(values,await storeLocations(def,id,pendingLocations,row,conn));
   await validateRefs(def,values,conn);
   await derive(def,values,row,conn);
+  if(def.key==='actions'&&('source_type' in values||'source_id' in values))await linkActionSource(values,row,null,conn);
+  if(def.key==='actions'&&'owner_user_id' in values&&!values.owner_user_id&&row.owner_user_id)fail(400,'A corrective action must keep a real owner. Choose a different person instead of clearing it.');
+  if(def.key==='actions'&&values.completion_document_id&&values.completion_document_id!==row.completion_document_id)await resolveAuthorisedDocument(String(values.completion_document_id),{contextType:'action',contextId:id,projectId:row.project_id??null},conn);
+  if(def.key==='actions'&&['verified','complete'].includes(row.status)&&['action','owner_user_id','due_date','completion_notes','completion_document_id','source_type','source_id'].some(k=>k in values))fail(409,row.status==='verified'?'A verified action is closed. Raise a new action instead.':'This action is awaiting verification. It can be rejected for rework, not edited.');
   if(!Object.keys(values).length)return {record:project(def,row,a.role)};
   if(def.key==='library'&&row.status==='current')values.version=Number(row.version||1)+1;
   if(def.key==='opportunities'){const m={...(()=>{try{return JSON.parse(row.metadata||'{}')}catch{return {}}})(),client:values.client_name??row.client_name,estimatedValue:values.estimated_value??row.estimated_value,probability:values.probability??row.probability,tenderCloseDate:values.closing_date??row.closing_date};values.metadata=JSON.stringify(m);}
@@ -251,8 +266,7 @@ export async function transitionRecord(key:string,id:string,to:string,note:strin
   if(def.key==='requirements'&&from==='suggested'&&to==='open'){set.confirmed_by=a.userId;set.confirmed_at=now;}
   if(def.key==='returnables'&&to==='complete'){set.completed_by=a.userId;set.completed_at=now;}
   if(def.key==='risks'&&to==='controlled'){if(!String(row.controls||'').trim())fail(422,'Record controls before approving them.');set.controls_approved_by=a.userId;set.controls_approved_at=now;}
-  if(def.key==='ncrs'&&to==='closed'){if(!String(row.verification||'').trim())fail(422,'Record verification before closing the NCR.');set.closed_by=a.userId;set.closed_at=now;}
-  if(def.key==='actions'&&to==='complete'){set.completed_by=a.userId;set.completed_at=now;}
+  if(def.key==='actions'&&to==='complete'){const notes=String(note||row.completion_notes||'').trim();if(!notes)fail(422,'Record completion notes before completing the action.');set.completion_notes=notes.slice(0,5000);set.completed_by=a.userId;set.completed_at=now;set.verified_by=null;set.verified_at=null;set.verification_note=null;set.verification_document_id=null;}
   if(def.key==='readiness'||def.key==='closeout'){if(to==='complete'){set.completed_by=a.userId;set.completed_at=now;}if(to==='not_applicable'&&!note&&!row.notes)fail(422,'Give a reason before marking this not applicable.');if(note)set.notes=note;}
   if(def.key==='itp_items'&&['pass','fail','na'].includes(to)){
    if(row.point_type==='hold'&&to==='pass'){if(!can(a.role,'document.approve'))fail(403,'Hold points must be released by an authorised manager.');set.released_by=a.userId;set.released_at=now;}

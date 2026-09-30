@@ -23,13 +23,13 @@
 import {actorContext} from './context';
 import {audit} from './audit';
 import {fail} from './http';
-import {can} from './permissions';
+import {can,type Capability} from './permissions';
 import {getEntitlements} from './entitlements';
 import {usable,writable} from './modules';
 import {query,one,exec,tx,nowIso,uuid,type Row,type Conn} from './sql';
 import {canAccessProject,projectFilter} from './project-access';
 import {canViewClients,visibleClientIds} from './clients';
-import {assertStorable,authoriseDocumentRow,streamDocument,insertPhysicalDocument,storageKey,putObject,sha256Of,DOCUMENT_CONTEXT_MODULE,documentContextsForAccess,fieldDocumentContextsForAccess,type DocumentContext} from './documents';
+import {assertStorable,authoriseDocumentRow,streamDocument,insertPhysicalDocument,storageKey,putObject,discardUploadedObject,sha256Of,DOCUMENT_CONTEXT_MODULE,documentContextsForAccess,fieldDocumentContextsForAccess,type DocumentContext} from './documents';
 
 const actor=()=>actorContext.getStore()!;
 const trim=(v:unknown,n:number)=>typeof v==='string'?v.trim().slice(0,n):'';
@@ -106,13 +106,20 @@ async function authoriseRead(m:Managed,file:Row|null,conn?:Conn){
  if(!file)fail(404,'Document not found.');
  try{await authoriseDocumentRow(asFileRow(m,file!),conn);}catch{fail(404,'Document not found.');}
 }
-/** Writing needs read access, a writable module and (for company files) library.edit — the same gate as storing a file. */
+/** The capability that legitimately mutates each owning business domain. Document capabilities alone never suffice. */
+export const CONTEXT_WRITE_CAPABILITY:Record<ManagedContext,Capability>={organisation:'library.edit',library:'library.edit',project:'project.edit',tender:'pipeline.edit',variation:'variation.edit',claim:'claim.edit',action:'hseq.edit'};
+/** The single context-write gate: the owning context's mutation capability. Applies to generated artifacts too. */
+function assertManagedContextWritable(contextType:string){
+ const a=actor(),cap=isManagedContext(contextType)?CONTEXT_WRITE_CAPABILITY[contextType]:null;
+ if(!cap||!can(a.role,cap))fail(403,contextType==='organisation'||contextType==='library'?'You are not authorised to manage company documents.':'You are not authorised to change documents owned by this record.');
+}
+/** Writing needs read access, a writable module and the owning context's mutation capability. */
 async function assertWritable(m:Managed,file:Row|null,conn?:Conn){
  await authoriseRead(m,file,conn);
  const a=actor(),e=await getEntitlements(a.organisationId);
  if(a.role==='field')fail(404,'Document not found.');
  if(!writable(e,DOCUMENT_CONTEXT_MODULE[m.context_type as DocumentContext]))fail(403,'This module is read-only or disabled. Existing documents remain available where permitted.');
- if((m.context_type==='organisation'||m.context_type==='library')&&!can(a.role,'library.edit'))fail(403,'You are not authorised to manage company documents.');
+ assertManagedContextWritable(m.context_type);
 }
 const mayWrite=async(m:Managed,file:Row|null)=>{try{await assertWritable(m,file);return true;}catch{return false;}};
 
@@ -139,20 +146,28 @@ const CURRENT_JOIN=`FROM managed_documents m
  JOIN documents f ON f.organisation_id=v.organisation_id AND f.id=v.file_document_id`;
 const CURRENT_COLS='m.*,v.version_number,v.revision_label,v.issue_date,v.file_document_id,f.file_name,f.size_bytes,f.content_type,f.visibility AS file_visibility';
 
+/** Runs the DB write for a freshly uploaded object; on failure removes only that new key (best effort) and rethrows the original error. */
+export async function withUploadCleanup<T>(newKey:string,write:()=>Promise<T>):Promise<T>{
+ try{return await write();}catch(error){await discardUploadedObject(newKey);throw error;}
+}
+
 // ---------------------------------------------------------------- create
 export type CreateInput={title?:unknown;description?:unknown;documentNumber?:unknown;documentType?:unknown;discipline?:unknown;tags?:unknown;contextType?:unknown;contextId?:unknown;visibility?:unknown;
  revisionLabel?:unknown;issueDate?:unknown;author?:unknown;company?:unknown;changeNote?:unknown;content:ContentInput;source?:string;generated?:boolean};
 export async function createManagedDocument(input:CreateInput){
  const a=actor();
  if(!input.generated&&!can(a.role,'document.upload'))fail(403,'You are not authorised to upload documents.');
+ if(a.role==='field')fail(404,'Document not found.');
  const contextType=String(input.contextType||'organisation');
  if(!isManagedContext(contextType))fail(400,'Unknown document context.');
  let contextId:string|null=null,projectId:string|null=null;
  if(contextType!=='organisation'&&contextType!=='library'){
   contextId=String(input.contextId||'');
   const t=await resolveTarget(contextType,contextId);projectId=t.projectId;
+  assertManagedContextWritable(contextType);
   if(contextType==='project'){const p=await one('SELECT stage FROM jobs WHERE organisation_id=? AND id=?',[a.organisationId,contextId]);if(p?.stage==='closed')fail(409,'This project is closed. Reopen it before adding documents.');}
  }
+ assertManagedContextWritable(contextType);
  const content=await readContent(input.content);
  await assertStorable({name:content.fileName,size:content.bytes.byteLength},{contextType,contextId,projectId});
  const meta=versionMeta(input);
@@ -160,7 +175,7 @@ export async function createManagedDocument(input:CreateInput){
  const documentType=opt(input.documentType,80),visibility:'office'|'field'=input.visibility==='field'&&a.role!=='field'?'field':'office';
  const sha256=sha256Of(content.bytes),fileId=uuid(),mid=uuid(),vid=uuid(),now=nowIso();
  await putObject(storageKey(fileId),content.bytes,content.contentType);
- return tx(async conn=>{
+ return withUploadCleanup(storageKey(fileId),()=>tx(async conn=>{
   await insertPhysicalDocument(conn,{id:fileId,key:storageKey(fileId),bytes:content.bytes,sha256,fileName:content.fileName,contentType:content.contentType,contextType:contextType as DocumentContext,contextId,projectId,category:documentType||'General',title,visibility,version:1,supersedesId:null,source:input.source||'managed',now});
   await exec("INSERT INTO managed_documents (id,organisation_id,title,description,document_number,document_type,discipline,tags,status,current_version_id,context_type,context_id,project_id,source,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,'active',NULL,?,?,?,?,1,?,?,?)",
    [mid,a.organisationId,title,opt(input.description,5000),opt(input.documentNumber,80),documentType,opt(input.discipline,80),JSON.stringify(normaliseTags(input.tags)),contextType,contextId,projectId,input.source||'upload',a.userId,now,now],conn);
@@ -170,7 +185,7 @@ export async function createManagedDocument(input:CreateInput){
   await audit({event:'managed_document.created',entityType:'managed_document',entityId:mid,projectId,summary:title,after:{contextType,contextId,documentType,documentNumber:opt(input.documentNumber,80)}},conn);
   await audit({event:'managed_document.version_created',entityType:'managed_document',entityId:mid,projectId,summary:`${title} — version 1${meta.revisionLabel?` (Rev ${meta.revisionLabel})`:''}`,after:{versionId:vid,versionNumber:1,revisionLabel:meta.revisionLabel,fileDocumentId:fileId,sha256,previousVersionId:null}},conn);
   return {id:mid,versionId:vid,versionNumber:1,fileDocumentId:fileId,sha256};
- });
+ }));
 }
 
 // ---------------------------------------------------------------- new revision
@@ -187,7 +202,7 @@ export async function addDocumentVersion(managedId:string,input:VersionInput){
  await assertStorable({name:content.fileName,size:content.bytes.byteLength},{contextType:first.m.context_type,contextId:first.m.context_id,projectId:first.m.project_id});
  const meta=versionMeta(input),sha256=sha256Of(content.bytes),fileId=uuid(),vid=uuid(),now=nowIso();
  await putObject(storageKey(fileId),content.bytes,content.contentType);
- return tx(async conn=>{
+ return withUploadCleanup(storageKey(fileId),()=>tx(async conn=>{
   // Lock order: managed document, then its current file. Serialises concurrent revisions.
   const {m,file:prev}=await loadManaged(managedId,conn,true);
   if(m.status!=='active')fail(409,'This document is archived. Restore it before adding a revision.');
@@ -205,7 +220,7 @@ export async function addDocumentVersion(managedId:string,input:VersionInput){
   await audit({event:'managed_document.version_created',entityType:'managed_document',entityId:m.id,projectId:m.project_id,summary:`${m.title} — version ${next}${meta.revisionLabel?` (Rev ${meta.revisionLabel})`:''} is now current`.slice(0,500),
    before:{currentVersionId:m.current_version_id},after:{versionId:vid,versionNumber:next,revisionLabel:meta.revisionLabel,fileDocumentId:fileId,sha256,previousVersionId:m.current_version_id}},conn);
   return {id:m.id,versionId:vid,versionNumber:next,fileDocumentId:fileId,sha256};
- });
+ }));
 }
 
 // ---------------------------------------------------------------- metadata, archive

@@ -1617,7 +1617,56 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  await as('accounts');await json(await mdGet(cDoc.id,R.cookie),200,'accounts (commercial.view) opens the claim artifact');
  await json(await call('/api/managed-documents','PATCH',{id:cDoc.id,revision:1,title:'x'},R.cookie),403,'…without document administration rights');
  assert.equal((await mdCreate({title:'Accounts upload'},R.cookie,'x.pdf','x')).status,403,'accounts has no document.upload');
+ // Context-write boundary: document capabilities never substitute for authority over the owning record.
+ const hCtxNow=new Date().toISOString().slice(0,19).replace('T',' '),hCtxAct=crypto.randomUUID();
+ await db.execute("INSERT INTO hseq_actions (id,organisation_id,project_id,source_type,action,owner_name,status,revision,created_at,updated_at) VALUES (?,?,?,'other','Context boundary action','Pat',?,1,?,?)",[hCtxAct,org9,pA,'open',hCtxNow,hCtxNow]);
+ const aDoc=await json(await mdCreate({title:'Action evidence pack',contextType:'action',contextId:hCtxAct},A.cookie,'action.pdf','%PDF-1.4 action'),201,'admin creates an HSEQ action managed document');
+ const refused=async(res,label)=>{assert.equal(res.status,403,label);};
+ const patchAs=async(id,body,cookie)=>call('/api/managed-documents','PATCH',{id,revision:Number((await db.execute('SELECT revision FROM managed_documents WHERE organisation_id=? AND id=?',[org9,id]))[0][0].revision),...body},cookie);
+ await as('estimator');
+ const eDoc=await json(await mdCreate({title:'Estimator tender doc',contextType:'tender',contextId:tenderId},R.cookie,'t.pdf','%PDF-1.4 t'),201,'estimator creates a tender document (pipeline.edit)');
+ await json(await patchAs(eDoc.id,{title:'Estimator tender doc (edited)'},R.cookie),200,'estimator edits a tender document');
+ await json(await mdRevise({id:eDoc.id,revisionLabel:'B'},R.cookie,'t2.pdf','%PDF-1.4 t2'),201,'estimator versions a tender document');
+ await refused(await mdCreate({title:'Estimator project doc',contextType:'project',contextId:pA},R.cookie,'p.pdf','x'),'estimator lacks project.edit: create');
+ await refused(await patchAs(dA.id,{title:'x'},R.cookie),'estimator lacks project.edit: edit');
+ await refused(await mdRevise({id:dA.id},R.cookie,'x.pdf','x'),'estimator lacks project.edit: version');
+ await refused(await patchAs(dA.id,{archived:true},R.cookie),'estimator lacks project.edit: archive');
+ await refused(await link(dA.id,{targetType:'tender',targetId:tenderId},R.cookie),'estimator lacks project.edit: link');
+ await refused(await mdCreate({title:'Estimator action doc',contextType:'action',contextId:hCtxAct},R.cookie,'a.pdf','x'),'estimator lacks hseq.edit: create');
+ await refused(await patchAs(aDoc.id,{title:'x'},R.cookie),'estimator lacks hseq.edit: edit');
+ await refused(await mdRevise({id:aDoc.id},R.cookie,'x.pdf','x'),'estimator lacks hseq.edit: version');
+ await refused(await mdCreate({title:'Estimator claim doc',contextType:'claim',contextId:claim.claimId},R.cookie,'c.pdf','x'),'estimator lacks claim.edit: create');
+ await refused(await patchAs(cDoc.id,{title:'x'},R.cookie),'estimator lacks claim.edit: edit');
+ await refused(await mdRevise({id:cDoc.id},R.cookie,'x.pdf','x'),'estimator lacks claim.edit: version');
+ await refused(await patchAs(cDoc.id,{archived:true},R.cookie),'estimator lacks claim.edit: archive');
  await as('project_engineer');
+ await json(await mdCreate({title:'PE Alpha doc',contextType:'project',contextId:pA},R.cookie,'pe.pdf','%PDF-1.4 pe'),201,'PE creates a document on an assigned project');
+ await json(await patchAs(dA.id,{title:'Alpha drawing (PE edit)'},R.cookie),200,'PE edits an assigned project document');
+ await json(await mdCreate({title:'PE action doc',contextType:'action',contextId:hCtxAct},R.cookie,'pea.pdf','%PDF-1.4 pea'),201,'PE holds hseq.edit: assigned action document');
+ await json(await mdCreate({title:'PE Bravo doc',contextType:'project',contextId:pB},R.cookie,'x.pdf','x'),404,'PE cannot create on another project');
+ await json(await mdCreate({title:'PE claim doc',contextType:'claim',contextId:claim.claimId},R.cookie,'x.pdf','x'),404,'PE has no Commercial authority');
+ await json(await mdRevise({id:cDoc.id},R.cookie,'x.pdf','x'),404,'PE cannot version a claim artifact');
+ await as('project_manager');
+ await refused(await mdCreate({title:'PM tender doc',contextType:'tender',contextId:tenderId},R.cookie,'x.pdf','x'),'PM has no pipeline.edit');
+ await json(await mdCreate({title:'PM claim doc',contextType:'claim',contextId:claim.claimId},R.cookie,'pmc.pdf','%PDF-1.4 pmc'),201,'PM holds claim.edit');
+ await as('accounts');
+ await json(await mdGet(cDoc.id,R.cookie),200,'accounts reads the claim artifact');
+ await refused(await patchAs(cDoc.id,{title:'x'},R.cookie),'accounts: no metadata edit');
+ await refused(await patchAs(cDoc.id,{archived:true},R.cookie),'accounts: no archive');
+ await refused(await mdRevise({id:cDoc.id},R.cookie,'x.pdf','x'),'accounts: no versioning');
+ await refused(await link(cDoc.id,{targetType:'project',targetId:pA},R.cookie),'accounts: no linking');
+ await refused(await mdCreate({title:'Accounts claim replacement',contextType:'claim',contextId:claim.claimId},R.cookie,'x.pdf','x'),'accounts: no replacement artifact through the public path');
+ await as('project_engineer');
+ // Failed revision: a stale caller loses cleanly — no rows, no orphaned object, history untouched.
+ const snap=async()=>({docs:Number((await db.execute('SELECT COUNT(*) n FROM documents WHERE organisation_id=?',[org9]))[0][0].n),vers:Number((await db.execute('SELECT COUNT(*) n FROM document_versions WHERE organisation_id=? AND managed_document_id=?',[org9,md.id]))[0][0].n),
+  cur:(await db.execute('SELECT current_version_id FROM managed_documents WHERE organisation_id=? AND id=?',[org9,md.id]))[0][0].current_version_id,
+  files:(await db.execute('SELECT v.version_number,v.sha256,f.storage_key,f.sha256 fsha FROM document_versions v JOIN documents f ON f.id=v.file_document_id AND f.organisation_id=v.organisation_id WHERE v.organisation_id=? AND v.managed_document_id=? ORDER BY v.version_number',[org9,md.id]))[0].map(r=>({...r})),keys:[...objects.keys()].sort().join('|')});
+ const before=await snap();
+ await json(await mdRevise({id:md.id,revisionLabel:'STALE',expectedVersion:'1'},A.cookie,'stale.pdf','%PDF-1.4 stale loser'),409,'stale revision against version 1 while a later version is current');
+ const after=await snap();
+ assert.deepEqual(after,before,'a failed revision commits no documents/versions rows, leaves history and current pointer untouched and removes its uploaded object');
+ assert(after.files.length>=2&&after.files[0].sha256===hash(Buffer.from(c1))&&after.files[1].sha256===hash(Buffer.from(c2)),'version 1 and 2 hashes unchanged');
+ assert.equal(after.files.every(f=>objects.has(f.storage_key)),true,'committed version objects are never deleted');
  // Archive/restore: never a delete.
  const ar=(await json(await mdGet(tDoc.id),200)).document;
  await json(await call('/api/managed-documents','PATCH',{id:tDoc.id,revision:ar.revision,archived:true},A.cookie),200,'archive');
@@ -1659,6 +1708,15 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const dlPinned=await asAdmin(async()=>Buffer.from(await (await svc.openManagedVersion(gen.id,gen.versionId)).arrayBuffer()));assert.equal(dlPinned.toString(),genA.toString(),'the pinned version never resolves to the current file');
  await assert.rejects(ctx.actorContext.run(actorOf(A.user.id,org9,'accounts'),()=>svc.createManagedDocument({title:'x',contextType:'organisation',generated:true,content:{fileName:'x.pdf',bytes:new Uint8Array([1])}})),/company documents/,'generated:true skips only the upload capability, not the context gate');
  await assert.rejects(ctx.actorContext.run(actorOf(B.user.id,memberB.organisation_id,'admin'),()=>svc.getManagedVersion(gen.id,gen.versionId)),/not found/i,'cross-tenant service call fails closed');
+ // generated:true never bypasses the owning context's mutation authority.
+ const asRole=(role,fn)=>ctx.actorContext.run(actorOf(A.user.id,org9,role),fn);
+ const genC=Buffer.from('%PDF-1.4 GENERATED by a claim writer');
+ const byWriter=await asRole('accounts',()=>svc.createManagedDocument({title:'Accounts-generated proforma',contextType:'claim',contextId:claim.claimId,generated:true,source:'generated',content:{fileName:'w.pdf',bytes:new Uint8Array(genC)}}));
+ assert.equal(byWriter.sha256,hash(genC),'a claim-writing actor (claim.edit) can generate the artifact without document.upload');
+ await assert.rejects(asRole('estimator',()=>svc.createManagedDocument({title:'x',contextType:'claim',contextId:claim.claimId,generated:true,content:{fileName:'x.pdf',bytes:new Uint8Array([1])}})),/not authorised/i,'commercial read authority alone cannot generate a claim artifact');
+ await assert.rejects(asRole('estimator',()=>svc.addDocumentVersion(gen.id,{generated:true,expectedVersion:2,content:{fileName:'x.pdf',bytes:new Uint8Array([2])}})),/not authorised/i,'…nor replace one');
+ assert.equal((await asAdmin(()=>svc.getManagedVersion(gen.id,gen.versionId))).sha256,hash(genA),'refused attempts leave the pinned version intact');
+ assert.equal(svc.CONTEXT_WRITE_CAPABILITY.claim,'claim.edit');
  assert.equal((await json(await mdGet(gen.id),200)).versions.length,2,'generated artifact is visible through the normal API');
  console.log('PASS 9A managed documents: standalone create, immutable revisions with exact-version download and hashes, revision labels, metadata, one search result per document, legacy attachments, project scope (PE/SE), links that never widen access, tenant isolation, field visibility, commercial/tender contexts, archive, audit, and server-side generated artifact seam');
  }

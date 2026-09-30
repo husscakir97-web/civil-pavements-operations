@@ -87,6 +87,8 @@ export async function insertPhysicalDocument(conn:Conn,d:{id:string;key:string;b
 }
 export const storageKey=(id:string)=>`documents/${actorContext.getStore()!.organisationId}/${id}`;
 export const putObject=async(key:string,bytes:Uint8Array,contentType:string)=>{await bucket.put(key,bytes,{httpMetadata:{contentType}});};
+/** Best-effort removal of an object this operation itself just uploaded (never a committed one). Never throws. */
+export const discardUploadedObject=async(key:string)=>{try{await bucket.delete(key);}catch(error){console.error('storage cleanup failed',key,error instanceof Error?error.message:error);}};
 export const sha256Of=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 
 export async function storeDocument(file:File,meta:StoreMeta){

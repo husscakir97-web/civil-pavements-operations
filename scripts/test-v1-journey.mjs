@@ -1569,6 +1569,16 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  await json(await mdRevise({id:dA.id,revisionLabel:'B'},R.cookie,'alpha-b.pdf','%PDF-1.4 alpha b'),201,'project engineer revises an Alpha document');
  await json(await mdRevise({id:dB.id,revisionLabel:'B'},R.cookie,'bravo-b.pdf','x'),404,'project engineer cannot revise a Bravo document');
  await json(await call('/api/managed-documents','PATCH',{id:dB.id,revision:1,title:'hijack'},R.cookie),404,'project engineer cannot edit a Bravo document');
+ // UX-A: hidden task buttons are presentation only — the same guarantees hold for direct calls.
+ await json(await call('/api/projects/workspace?id='+pA,'GET',undefined,R.cookie),200,'PE opens assigned Alpha workspace');
+ await json(await call('/api/projects/workspace?id='+pB,'GET',undefined,R.cookie),404,'PE cannot open Bravo by guessed project id (task actions cannot reach it either)');
+ assert.notEqual((await call('/api/registers/variations?parentId='+pA,'GET',undefined,R.cookie)).status,200,'PE has no Commercial data even by direct call');
+ assert.equal((await call('/api/projects','POST',{name:'PE-created'},R.cookie)).status>=400,true,'a task-free direct project create is still capability-checked (project.all.view)');
+ await as('accounts');
+ assert.equal((await call('/api/projects','POST',{name:'Accounts-created'},R.cookie)).status>=400,true,'accounts cannot create projects by direct call');
+ await as('estimator');
+ assert.equal((await call('/api/projects','POST',{name:'Estimator-created'},R.cookie)).status>=400,true,'estimator cannot create projects by direct call');
+ await as('project_engineer');
  await as('project_manager');
  await json(await mdGet(dB.id,R.cookie),200,'org-wide project manager opens Bravo');
  // Links: validated, tenant-safe, never widening access.

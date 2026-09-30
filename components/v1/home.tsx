@@ -4,7 +4,8 @@ import {ArrowRight,CalendarDays,CheckCheck,ClipboardList,Siren,BarChart3,Search 
 import {useApi,useSession,ErrorState,Loading,Btn,money,pct,StatusBadge} from './kit';
 import {useNav,areaTarget} from './nav';
 import type {HomeItem,HomeIndicator} from '@/lib/seams/home';
-import {quickActions} from '@/lib/v1/app-nav';
+import {homeTasks} from '@/lib/v1/task-actions';
+import {TaskLauncher} from './task-launcher';
 
 // Home answers "what needs me?": my work first, then today, then exceptions, and only
 // then portfolio figures. Everything comes from the role-aware home feed.
@@ -37,12 +38,11 @@ export function HomeV1(){
  const {data,error,loading,refresh}=useApi<Feed>('/api/platform/home');
  const {brand,userName,can,module,role}=useSession();const {navigate}=useNav();
  const hour=new Date().getHours();
- const actions=quickActions(role,{can,module});
+ const tasks=homeTasks(role,{can,module});
  const [query,setQuery]=useState('');
  return <div className="grid gap-5">
   <header className="flex flex-wrap items-end justify-between gap-3">
    <div><p className="text-sm text-slate-500">{new Intl.DateTimeFormat('en-AU',{timeZone:'Australia/Sydney',dateStyle:'full'}).format(new Date())} · {brand.companyName}</p><h1 className="mt-0.5 text-2xl font-semibold tracking-tight">Good {hour<12?'morning':hour<17?'afternoon':'evening'}{userName?`, ${userName.split(' ')[0]}`:''}</h1></div>
-   <div className="flex flex-wrap gap-2">{actions.map((q,i)=><Btn key={q.label} variant={i===0?'primary':'secondary'} onClick={()=>navigate(q.area,q.sub)}>{q.area==='Schedule'&&<CalendarDays aria-hidden className="size-4"/>}{q.label}</Btn>)}</div>
   </header>
   {/* One box finds clients, projects, plant (TMA001), people and documents without knowing where they live. */}
   <form role="search" onSubmit={e=>{e.preventDefault();const q=query.trim();if(q.length>=2)navigate('Search',undefined,q);}} className="relative">
@@ -50,6 +50,7 @@ export function HomeV1(){
    <SearchIcon aria-hidden className="pointer-events-none absolute left-3 top-3.5 size-4 text-slate-400"/>
    <input id="home-search" type="search" className="min-h-12 w-full rounded-xl border border-slate-300 bg-white pl-9 pr-3 text-base shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20" placeholder="Search clients, projects, plant no., people, documents…" value={query} onChange={e=>setQuery(e.target.value)}/>
   </form>
+  <TaskLauncher title="Start something" label="Start something" actions={tasks}/>
   <ErrorState error={error} onRetry={refresh}/>
   {loading&&!data?<Loading label="Loading your work…"/>:data&&<>
    {data.indicators&&data.indicators.length>0&&<section aria-label="Operational indicators" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{data.indicators.map(x=><button key={x.key} onClick={()=>navigate(x.area)} className="surface p-4 text-left hover:bg-slate-50"><p className={`text-2xl font-semibold tabular-nums ${tone[x.severity]}`}>{x.value}</p><p className="mt-1 text-sm font-medium">{x.label}</p><p className="text-xs text-slate-500">{x.detail}</p></button>)}</section>}

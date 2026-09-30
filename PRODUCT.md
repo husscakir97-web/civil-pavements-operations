@@ -2,6 +2,22 @@
 
 Infrastruct is a modular, white-label operating system for civil and infrastructure contractors (civil construction, road maintenance, asphalt, profiling, traffic management, linemarking, earthworks, drainage, utilities, concrete, landscaping, maintenance, plant hire and specialist subcontractors). Doctrine: simple, fast, reliable, scalable. Roadworx is an existing customer workspace, not the platform identity. Preserve its records; never copy customer data, rates, people or branding into another customer's defaults.
 
+## UX doctrine (binding)
+
+Full text: [docs/UX-DOCTRINE.md](docs/UX-DOCTRINE.md). Unified experience above, modular architecture below.
+
+1. **Ask once** — never ask for what Infrastruct already knows.
+2. **Ask progressively** — only what the current decision needs.
+3. **Context first** — actions carry the current organisation, project, tender, estimate, shift, asset or commercial record.
+4. **Task before module** — users pick an outcome; Infrastruct picks the capability. Entry points use verbs.
+5. **Generic engine, industry presets** — core stays generic; contractor terminology sits above it.
+6. **Chat is an accelerator** — major workflows should eventually be callable conversationally on the same deterministic services.
+7. **Outputs belong to the work** — dockets, PDFs, forms, documents and reports originate from authoritative records.
+8. **Human confirms controlled decisions** — automation prepares; authorised people approve.
+9. **Create once, reuse downstream** — enter a fact once at its earliest authoritative point and inherit it (Client → Project → Programme → Schedule → Work completed → Docket → Claim).
+
+Different roles get different work. Task actions (`lib/v1/task-actions.ts`) only decide what is shown; server routes remain authoritative. Internal modules and the six engines are not the ordinary mental model.
+
 ## Document capture
 
 - Standard extraction reads digital PDF text first and uses local OCR for printed scans. It incurs no AI-provider charge.

@@ -125,15 +125,61 @@ assert.deepEqual(R({area:'Admin',sub:'Plant'}),{area:'Resources',sub:'Plant & Eq
 assert.deepEqual(R({area:'Admin',sub:'Settings'}),{area:'Admin',sub:'Settings'},'current admin pages unchanged');
 assert.deepEqual(R({area:'Field'}),{area:'Today'});assert.deepEqual(R({area:'Projects',id:'p1',tab:'setup'}),{area:'Projects',sub:'Projects',id:'p1',tab:'setup'});
 assert.deepEqual(R({area:'Home'}),{area:'Home'});assert.deepEqual(R({area:'Search',id:'abc'}),{area:'Search',id:'abc'});
-// Home quick actions: role priorities, never more than three, never a shortcut the user cannot open.
-const qa=(r,mods)=>appNav.quickActions(r,access(r,mods)).map(q=>q.label);
-assert.deepEqual(qa('scheduler'),['Schedule','People','Plant & equipment']);
-assert.deepEqual(qa('project_manager'),['My projects','Programme','Commercial']);
-assert.deepEqual(qa('project_engineer'),['Projects','Programme','IMS & HSEQ']);
-assert.deepEqual(qa('site_engineer'),['Today','Projects','IMS & HSEQ']);
-assert.deepEqual(qa('accounts'),['Commercial','Dockets','Reports']);
-assert.deepEqual(qa('admin',['ims']),['IMS & HSEQ','Documents']);
-for(const r of perm.ROLES)for(const q of appNav.quickActions(r,access(r)))assert(appNav.canOpen(access(r),q.area,q.sub),r+' quick action '+q.label+' must be openable');
+// Task actions (Home "Start something" + Project "What do you need to do?"): verbs, role-aware, capability/entitlement filtered.
+const tasks=load('lib/v1/task-actions.ts');
+const ht=(r,mods)=>tasks.homeTasks(r,access(r,mods)).map(t=>t.label);
+assert.deepEqual(ht('estimator'),['Create estimate','Review tenders','Review opportunities','Find a document']);
+assert.deepEqual(ht('scheduler'),['Schedule work','Find resource','Review upcoming work','Find a document']);
+assert.deepEqual(ht('project_manager').slice(0,3),['Open my projects','Plan work','Review commercial position']);
+assert.deepEqual(ht('project_engineer'),['Open my projects','Update programme','Review HSEQ','Find a document']);
+assert.deepEqual(ht('site_engineer'),['Today','Open my projects','Review HSEQ','Find a document']);
+assert.deepEqual(ht('accounts'),['Review commercial position','Review work records','Review reports']);
+assert(!ht('estimator').some(l=>/commercial|work records/i.test(l)),'estimator sees Win Work tasks, not Commercial');
+assert(!ht('scheduler').some(l=>/commercial|estimate|tender/i.test(l)),'scheduler has no pricing or tender tasks');
+assert(!ht('accounts').some(l=>/plan|programme|hseq/i.test(l)),'accounts has no project-editing or HSEQ tasks');
+assert(!ht('site_engineer').some(l=>/commercial|estimate|tender/i.test(l)),'site engineer sees no Commercial/admin tasks');
+for(const r of perm.ROLES){for(const t of tasks.homeTasks(r,access(r))){assert(appNav.canOpen(access(r),t.target.area,t.target.sub),r+' task '+t.label+' must be openable');assert(!ENGINES.some(e=>e.key===t.target.area),'tasks never route through an engine');}assert(tasks.homeTasks(r,access(r)).length<=tasks.MAX_HOME_TASKS);}
+// Entitlement degradation: unavailable modules remove their tasks entirely (no teasers, no broken buttons).
+assert(!ht('admin',['ims']).some(l=>/estimate|tender|schedule|commercial/i.test(l)));assert.deepEqual(ht('admin',['ims']),['Review HSEQ','Find a document']);
+assert(!ht('project_manager',['projects','ims']).some(l=>/commercial/i.test(l)),'no Commercial entitlement: no Commercial task');
+assert(!ht('scheduler',['pipeline']).some(l=>/schedule|resource/i.test(l)),'no Operations: no Schedule task');
+// Project context: the project supplies its own id; tasks are filtered by stage, capability and entitlement.
+const pt=(r,stage,mods)=>tasks.projectTasks({id:'alpha',stage},access(r,mods));
+const route=(r,stage,key,mods)=>{const t=pt(r,stage,mods).find(x=>x.key===key);return t&&tasks.taskRoute(t,{id:'alpha',stage});};
+assert.deepEqual(route('project_engineer','active','project-plan-work'),{area:'Projects',sub:'Projects',id:'alpha',tab:'programme'},'PE: Plan work → Alpha Programme');
+assert.deepEqual(route('project_engineer','active','project-add-document'),{area:'Projects',sub:'Projects',id:'alpha',tab:'documents'},'PE: Add document → Alpha Documents');
+assert.deepEqual(route('project_engineer','active','project-review-hseq'),{area:'Projects',sub:'Projects',id:'alpha',tab:'quality'},'PE: Review HSEQ → Alpha Quality');
+for(const t of pt('project_engineer','active'))assert.equal(tasks.taskRoute(t,{id:'alpha',stage:'active'}).id,'alpha','every project task keeps the project id');
+assert(!pt('project_engineer','active').some(t=>/commercial|variation/i.test(t.label)),'PE has no Commercial project tasks');
+assert.deepEqual(route('project_manager','active','project-schedule-work'),{area:'Schedule',sub:'Schedule',id:'alpha',tab:undefined},'Schedule work hands the project id to the existing schedule surface');
+assert.deepEqual(route('project_manager','active','project-raise-variation'),{area:'Projects',sub:'Projects',id:'alpha',tab:'commercial'});
+assert(!route('project_manager','active','project-review-commercial',['projects','ims','operations']),'Commercial disabled: project Commercial task disappears');
+assert(!route('project_manager','active','project-review-hseq',['projects','commercial','operations']),'IMS disabled: HSEQ task disappears');
+assert(!route('project_manager','active','project-schedule-work',['projects','commercial','ims']),'Operations disabled: Schedule task disappears');
+assert(!route('project_manager','closed','project-add-document')&&!route('project_manager','closed','project-plan-work'),'closed project offers no editing tasks');
+assert(route('project_manager','setup','project-setup')&&!route('project_manager','active','project-setup'),'setup task follows stage');
+assert(route('project_manager','closeout','project-close-out')&&!route('project_manager','setup','project-close-out'),'close-out task follows stage');
+assert(!pt('accounts','active').some(t=>/plan|setup|hseq|document|close/i.test(t.label)),'accounts has no project-editing tasks');
+assert.deepEqual(pt('site_engineer','active').map(t=>t.key).filter(k=>/commercial|variation|close|setup/.test(k)),[]);
+// Lifecycle stages are the authoritative ones (workflow.ts); no task may reference an unknown stage.
+{const wf=load('lib/platform/workflow.ts'),stages=Object.keys(wf.MACHINES.project.states);
+ assert.deepEqual(stages,['setup','ready','active','practical_completion','closeout','closed']);assert.deepEqual([...tasks.PROJECT_STAGES],stages,'task actions read the canonical lifecycle');
+ for(const t of tasks.TASK_ACTIONS)for(const st of t.stages||[])assert(stages.includes(st),t.key+' references unknown project stage '+st);
+ }
+const keysAt=(r,stage,mods)=>pt(r,stage,mods).map(t=>t.key);
+for(const st of ['ready','active'])assert(keysAt('project_manager',st).includes('project-schedule-work'),'Schedule work is offered at '+st);
+for(const st of ['setup','practical_completion','closeout','closed'])assert(!keysAt('project_manager',st).includes('project-schedule-work'),'no scheduling at '+st);
+for(const st of ['practical_completion','closeout'])assert(keysAt('project_manager',st).includes('project-close-out'),'Close out is offered at '+st);
+for(const st of ['setup','ready','active','closed'])assert(!keysAt('project_manager',st).includes('project-close-out'),'no Close out at '+st);
+assert(!keysAt('project_engineer','closeout').includes('project-close-out'),'close-out keeps the project.close capability (PE lacks it)');
+for(const st of ['setup','ready'])assert(keysAt('project_manager',st).includes('project-setup'),'setup task at '+st);
+for(const st of ['active','practical_completion','closeout','closed'])assert(!keysAt('project_manager',st).includes('project-setup'));
+assert.deepEqual(['project-plan-work','project-add-document','project-review-hseq'].filter(k=>!keysAt('project_engineer','active').includes(k)),[],'active: programme, document and HSEQ actions');
+for(const k of ['project-plan-work','project-add-document','project-raise-variation','project-report-issue','project-schedule-work','project-setup','project-close-out'])assert(!keysAt('project_manager','closed').includes(k),'closed project hides editing task '+k);
+assert.deepEqual(pt('project_manager','delivery').map(t=>t.key).filter(k=>/schedule|close-out|setup|plan|document|variation|issue/.test(k)),[],'an unknown stage offers no stage-gated task');
+// Commercial → Work Records: user-facing label changes, the 'Dockets' route key and bookmarks do not.
+assert.deepEqual(appNav.navFor(access('admin')).find(a=>a.key==='Commercial').subs.map(s=>[s.key,s.label]),[['Commercial','Overview'],['Dockets','Work Records']]);
+assert.deepEqual(R({area:'Deliver Work',sub:'Dockets'}),{area:'Commercial',sub:'Dockets',id:undefined,tab:undefined},'old Dockets bookmark still resolves');
 
 // Civil Knowledge Engine: deterministic rule evaluation, missing-context handling and source provenance.
 {const k=load('lib/platform/knowledge-rules.ts');

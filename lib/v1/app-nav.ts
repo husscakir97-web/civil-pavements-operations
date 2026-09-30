@@ -8,7 +8,8 @@ import {ADMIN_SUBS} from './navigation';
 
 export type NavAccess={can:(c:Capability)=>boolean;module:(m:string)=>boolean};
 type Rule={module?:string;modules?:string[];capability?:Capability;anyOf?:Capability[];when?:(a:NavAccess)=>boolean};
-export type NavSub=Rule&{key:string};
+/** `key` is the stable route key (bookmarks, code); `label` is the user-facing wording when it differs. */
+export type NavSub=Rule&{key:string;label?:string};
 export type NavArea=Rule&{key:string;label:string;subs?:NavSub[];defaultSub?:string};
 
 const RESOURCE_MODULES=['operations'];
@@ -36,8 +37,9 @@ export const NAV:NavArea[]=[
   {key:'Workshop',module:'workshop',capability:'workshop.view'},
  ]},
  {key:'Commercial',label:'Commercial',subs:[
-  {key:'Commercial',module:'commercial',capability:'commercial.view'},
-  {key:'Dockets',module:'dockets',capability:'docket.approve'},
+  {key:'Commercial',label:'Overview',module:'commercial',capability:'commercial.view'},
+  // Route key stays 'Dockets' for bookmarks; the office presents it as Work Records.
+  {key:'Dockets',label:'Work Records',module:'dockets',capability:'docket.approve'},
  ]},
  {key:'IMS & HSEQ',label:'IMS & HSEQ',subs:[{key:'IMS & HSEQ',module:'ims',capability:'hseq.view'}]},
  {key:'Documents',label:'Documents',defaultSub:'All Documents',subs:[
@@ -87,25 +89,4 @@ export function resolveRoute(r:Route):Route{
  if(area==='Resources'&&sub==='People'&&r.tab==='plant')sub='Plant & Equipment';
  const tab=area==='Resources'?undefined:r.tab;
  return {area,sub,id:r.id,tab};
-}
-
-export type QuickAction={label:string;area:string;sub?:string};
-// One table of role priorities for Home shortcuts. Every action is still filtered by
-// capability and entitlement (canOpen), so a role never gets a shortcut it cannot use.
-const QUICK:Record<string,QuickAction[]>={
- scheduler:[{label:'Schedule',area:'Schedule',sub:'Schedule'},{label:'People',area:'Resources',sub:'People'},{label:'Plant & equipment',area:'Resources',sub:'Plant & Equipment'}],
- project_manager:[{label:'My projects',area:'Projects',sub:'Projects'},{label:'Programme',area:'Projects',sub:'Programme'},{label:'Commercial',area:'Commercial',sub:'Commercial'}],
- project_engineer:[{label:'Projects',area:'Projects',sub:'Projects'},{label:'Programme',area:'Projects',sub:'Programme'},{label:'IMS & HSEQ',area:'IMS & HSEQ'}],
- site_engineer:[{label:'Today',area:'Today'},{label:'Projects',area:'Projects',sub:'Projects'},{label:'IMS & HSEQ',area:'IMS & HSEQ'}],
- estimator:[{label:'Tenders',area:'Pipeline',sub:'Tenders'},{label:'Estimates',area:'Pipeline',sub:'Estimates'},{label:'Opportunities',area:'Pipeline',sub:'Opportunities'}],
- accounts:[{label:'Commercial',area:'Commercial',sub:'Commercial'},{label:'Dockets',area:'Commercial',sub:'Dockets'},{label:'Reports',area:'Reports',sub:'Reports'}],
- office:[{label:'Tenders',area:'Pipeline',sub:'Tenders'},{label:'Projects',area:'Projects',sub:'Projects'},{label:'Schedule',area:'Schedule',sub:'Schedule'}],
- admin:[{label:'Tenders',area:'Pipeline',sub:'Tenders'},{label:'Projects',area:'Projects',sub:'Projects'},{label:'Schedule',area:'Schedule',sub:'Schedule'}],
- read_only:[{label:'Projects',area:'Projects',sub:'Projects'},{label:'Reports',area:'Reports',sub:'Reports'}],
-};
-/** At most three shortcuts for the role, only where the user can actually open them. HSEQ-heavy users fall back to IMS. */
-export function quickActions(role:string,a:NavAccess):QuickAction[]{
- const fallback:QuickAction[]=[{label:'IMS & HSEQ',area:'IMS & HSEQ'},{label:'Projects',area:'Projects',sub:'Projects'},{label:'Schedule',area:'Schedule',sub:'Schedule'},{label:'Tenders',area:'Pipeline',sub:'Tenders'},{label:'Documents',area:'Documents'}];
- const seen=new Set<string>();
- return [...(QUICK[role]||[]),...fallback].filter(q=>canOpen(a,q.area,q.sub)&&!seen.has(q.label)&&seen.add(q.label)).slice(0,3);
 }

@@ -1793,6 +1793,20 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const tAspRev=(await json(await call('/api/tenders/workspace?id='+tAsp,'GET',undefined,A.cookie),200)).tender.revision;
  await json(await call('/api/tenders/workspace','PATCH',{id:tAsp,revision:tAspRev,businessUnitId:divDrainage},A.cookie),200);
  assert.equal((await json(await call('/api/estimates?id='+eAsp,'GET',undefined,A.cookie),200)).estimate.businessUnitId,divDrainage,'the estimate follows its tender when the tender changes division');
+ // One inheritance rule: a tender-linked estimate FOLLOWS its tender. It cannot be overridden on its own, and only a real
+ // tender division change propagates -- re-saving the tender (title-only edit, same division) never touches the estimate.
+ await json(await call('/api/estimates','PUT',{id:eAsp,action:'set-division',businessUnitId:asp},A.cookie),409,'a tender-linked estimate cannot override its tender division');
+ await db.execute('UPDATE estimates SET business_unit_id=? WHERE organisation_id=? AND id=?',[defA,org,eAsp]); // simulate a pre-existing divergence
+ const tRev2=async()=>(await json(await call('/api/tenders/workspace?id='+tAsp,'GET',undefined,A.cookie),200)).tender;
+ let tCur=await tRev2();assert.equal(tCur.businessUnitId,divDrainage);
+ await json(await call('/api/tenders/workspace','PATCH',{id:tAsp,revision:tCur.revision,title:'Asphalt tender (renamed)',businessUnitId:tCur.businessUnitId},A.cookie),200,'title-only edit that re-sends the unchanged division');
+ assert.equal((await json(await call('/api/estimates?id='+eAsp,'GET',undefined,A.cookie),200)).estimate.businessUnitId,defA,'a title-only tender edit leaves the estimate division alone');
+ tCur=await tRev2();await json(await call('/api/tenders/workspace','PATCH',{id:tAsp,revision:tCur.revision,title:'Asphalt tender (renamed again)'},A.cookie),200,'edit without any division');
+ assert.equal((await json(await call('/api/estimates?id='+eAsp,'GET',undefined,A.cookie),200)).estimate.businessUnitId,defA);
+ tCur=await tRev2();await json(await call('/api/tenders/workspace','PATCH',{id:tAsp,revision:tCur.revision,businessUnitId:asp},A.cookie),200,'a REAL tender division change');
+ assert.equal((await json(await call('/api/estimates?id='+eAsp,'GET',undefined,A.cookie),200)).estimate.businessUnitId,asp,'…propagates to its estimate');
+ assert.equal((await json(await call('/api/estimates?id='+eAsp,'GET',undefined,A.cookie),200)).estimate.tenderId,tAsp,'the API exposes the link so the picker can be read-only');
+ tCur=await tRev2();await json(await call('/api/tenders/workspace','PATCH',{id:tAsp,revision:tCur.revision,businessUnitId:divDrainage},A.cookie),200);
  // A standalone estimate: division chosen at creation, changed without creating a revision, default otherwise.
  const eNew=(await json(await call('/api/estimates','POST',{data:{name:'Standalone'},businessUnitId:asp},A.cookie),201)).estimate;assert.equal(eNew.businessUnitId,asp);
  const eNone=(await json(await call('/api/estimates','POST',{data:{name:'Standalone default'}},A.cookie),201)).estimate;assert.equal(eNone.businessUnitId,defA);
@@ -1820,6 +1834,19 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  await json(await call('/api/business-units','PATCH',{action:'make-default',id:divDrainage,revision:drn.revision},A.cookie),200);
  assert.equal((await list()).defaultId,divDrainage);assert.equal((await list()).divisions.filter(x=>x.isDefault).length,1,'exactly one default');
  const pNewDef=(await json(await call('/api/projects','POST',{name:'After default change'},A.cookie),201)).projectId;assert.equal((await proj(pNewDef)).businessUnitId,divDrainage);assert.equal((await proj(pDef)).businessUnitId,defA,'existing records keep their division when the default moves');
+ // Concurrency: the database, not a SELECT, enforces organisation-scoped name (and code) uniqueness.
+ {const race=await Promise.all(Array.from({length:8},(_,i)=>call('/api/business-units','POST',{name:i%2?'  Race   Co ':'race co',code:'RC'+i},A.cookie)));
+  const st=race.map(r=>r.status).sort();assert.deepEqual(st,[201,409,409,409,409,409,409,409],'simultaneous creates with the same normalised name: exactly one wins, the rest get a clear conflict');
+  const lose=await race.find(r=>r.status===409).json();assert(/already exists/i.test(lose.error),'clear conflict message: '+lose.error);
+  assert.equal(Number((await db.execute("SELECT COUNT(*) n FROM business_units WHERE organisation_id=? AND name_key='race co'",[org]))[0][0].n),1,'exactly one row for the normalised name');
+  const codeRace=await Promise.all(Array.from({length:6},(_,i)=>call('/api/business-units','POST',{name:'Code race '+i,code:'CR'},A.cookie)));
+  assert.deepEqual(codeRace.map(r=>r.status).sort(),[201,409,409,409,409,409],'same-code races also resolve to one 201 and clear 409s (never a 500)');
+  const x=(await json(await call('/api/business-units','POST',{name:'Rename one',code:'RN1'},A.cookie),201)).id,y=(await json(await call('/api/business-units','POST',{name:'Rename two',code:'RN2'},A.cookie),201)).id;
+  const rows=(await list()).divisions;const rx=rows.find(d=>d.id===x),ry=rows.find(d=>d.id===y);
+  const ren=await Promise.all([call('/api/business-units','PATCH',{action:'update',id:x,revision:rx.revision,name:'Shared Name'},A.cookie),call('/api/business-units','PATCH',{action:'update',id:y,revision:ry.revision,name:'shared  name'},A.cookie)]);
+  assert.deepEqual(ren.map(r=>r.status).sort(),[200,409],'simultaneous renames to the same name: one wins');
+  assert.equal(Number((await db.execute("SELECT COUNT(*) n FROM business_units WHERE organisation_id=? AND name_key='shared name'",[org]))[0][0].n),1);
+  await json(await call('/api/business-units','POST',{name:'RACE co',code:'ZZ9'},A.cookie),409,'sequential duplicate differing only by case is refused too');}
  // Tenant isolation.
  await json(await call('/api/business-units','PATCH',{action:'archive',id:asp,revision:1},B.cookie),404,"another organisation's division cannot be changed");
  assert(!(await list(B.cookie)).divisions.some(x=>[asp,divDrainage,defA].includes(x.id)),"another organisation's divisions are never listed");

@@ -168,13 +168,21 @@ export async function updateTender(id:string,revision:number,input:TenderInput){
    if('contactId' in input||clientChanged)set.contact_id=ctx.contactId;
    if('siteId' in input){set.site_id=ctx.siteId;if(ctx.siteLabel&&!('location' in input))set.location=ctx.siteLabel;}
   }
-  if('businessUnitId' in input){set.business_unit_id=(await resolveDivisionChange(input.businessUnitId,t.business_unit_id,conn))??await ensureDefaultDivision(a.organisationId,conn);}
+  // Inheritance rule: the tender's division flows to its estimate (and, on award, the project) ONLY when the tender's
+  // division actually changes. Re-saving the same value (e.g. a title-only edit from the form) touches nothing.
+  let divisionChanged=false;
+  if('businessUnitId' in input){
+   const def=await ensureDefaultDivision(a.organisationId,conn);
+   const next=(await resolveDivisionChange(input.businessUnitId,t.business_unit_id,conn))??def;
+   // NULL reads as the default division, so NULL -> default is not a change.
+   if(next!==(t.business_unit_id??def)){set.business_unit_id=next;divisionChanged=true;}
+  }
   if('estimatedValue' in input&&!can(a.role,'commercial.view'))delete set.estimated_value;
   if(set.title==='')fail(400,'A tender title is required.');
   const cols=Object.keys(set);if(!cols.length)return getTender(id);
   await exec(`UPDATE tenders SET ${cols.map(c=>`${c}=?`).join(',')},revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?`,[...cols.map(c=>set[c]),nowIso(),a.organisationId,id],conn);
   // The estimate follows its tender's division so both stay in the same place until award.
-  if(set.business_unit_id&&t.estimate_id)await exec('UPDATE estimates SET business_unit_id=?,updated_at=? WHERE organisation_id=? AND id=?',[set.business_unit_id,nowIso(),a.organisationId,t.estimate_id],conn);
+  if(divisionChanged&&t.estimate_id)await exec('UPDATE estimates SET business_unit_id=?,updated_at=? WHERE organisation_id=? AND id=?',[set.business_unit_id,nowIso(),a.organisationId,t.estimate_id],conn);
   await audit({event:'tender.updated',entityType:'tender',entityId:id,summary:'Tender details updated',before:Object.fromEntries(cols.map(c=>[c,t[c]])),after:set},conn);
  }).then(()=>getTender(id));
 }

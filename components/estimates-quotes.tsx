@@ -56,6 +56,7 @@ import {
 type EstimateRecord = {
   id: string;
   businessUnitId?: string | null;
+  tenderId?: string | null;
   name: string;
   status: EstimateStatus;
   createdAt: string;
@@ -322,9 +323,12 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
     if (!selectedId) return;
     setBusy(true);
     try {
-      await readJson(await fetch("/api/estimates", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: selectedId, action: "set-division", businessUnitId }) }));
+      // Division is filing metadata, not part of the working form: update only the register entry so unsaved
+      // quantities, rates and names in the open estimate are never reloaded, saved or discarded.
+      const payload = await readJson(await fetch("/api/estimates", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: selectedId, action: "set-division", businessUnitId }) })) as { estimate?: EstimateRecord };
+      const saved = payload.estimate?.businessUnitId ?? businessUnitId;
+      setEstimates((list) => list.map((item) => (item.id === selectedId ? { ...item, businessUnitId: saved } : item)));
       toast.success("Division updated.");
-      await refresh(selectedId);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "The division could not be changed.");
     } finally {
@@ -458,7 +462,7 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
           <section className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
             <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><h3 className="text-lg font-semibold text-slate-950">{form.name || form.projectName || "New estimate"}</h3>{workflow ? <WorkflowBadge machine="estimate" state={workflow} /> : !selectedId ? <WorkflowBadge machine="estimate" state="draft" label="Unsaved" /> : null}{!embedded && outcome !== "open" && <StatusBadge status={currentStatus === "Submitted" ? "Submitted to client" as EstimateStatus : currentStatus} />}</div><p className="mt-1 text-sm text-slate-500">{selectedId ? `Estimate ID ${selectedId.slice(0, 8)} · Rev ${revisions[0]?.metadata?.revisionNumber ?? 1}` : "Unsaved estimate · complete the inputs and save a draft"}</p></div><div className="no-print flex flex-wrap gap-2">{embedded&&<Button variant="outline" size="sm" onClick={() => setShowRates((value) => !value)}><LibraryBig className="size-4" /> Rate library</Button>}<Button variant="outline" size="sm" disabled={readOnly} onClick={applyLibraryRates}><RefreshCw className="size-3.5" /> Apply rates</Button><Button variant="outline" size="sm" onClick={exportEstimate}><Download className="size-3.5" /> Export data (JSON)</Button><Button variant="outline" size="sm" onClick={()=>void exportExcel()}>Export Excel</Button><Button variant="outline" size="sm" onClick={() => window.print()}><Printer className="size-3.5" /> Print quote</Button></div></div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="lg:col-span-2"><DivisionPicker value={selectedId ? estimates.find((e) => e.id === selectedId)?.businessUnitId : newDivision} disabled={busy} onChange={(id) => { if (!selectedId) { setNewDivision(id); return; } void changeDivision(id); }} /></div>
+              <div className="lg:col-span-2"><DivisionPicker value={selectedId ? estimates.find((e) => e.id === selectedId)?.businessUnitId : newDivision} disabled={busy || Boolean(selectedId && estimates.find((e) => e.id === selectedId)?.tenderId)} note={selectedId && estimates.find((e) => e.id === selectedId)?.tenderId ? "Follows its tender — change the division on the tender." : undefined} onChange={(id) => { if (!selectedId) { setNewDivision(id); return; } void changeDivision(id); }} /></div>
               <Field label="Estimate name" className="lg:col-span-2"><Input disabled={readOnly} value={form.name} onChange={(event) => setField("name", event.target.value)} placeholder="e.g. Kings Highway resurfacing" /></Field>
               {!embedded && <Field label="Quote outcome" hint="Approval is handled by the estimate workflow."><NativeSelect disabled={readOnly} value={outcome} onChange={(event) => { const v = event.target.value; if (v === "open") { if (outcome !== "open") setCurrentStatus("Draft"); } else setCurrentStatus(v as EstimateStatus); }} ><NativeSelectOption value="open">Open (not yet sent)</NativeSelectOption><NativeSelectOption value="Submitted">Submitted to client</NativeSelectOption><NativeSelectOption value="Lost">Lost</NativeSelectOption><NativeSelectOption value="Cancelled">Cancelled</NativeSelectOption>{currentStatus === "Awarded" && <NativeSelectOption value="Awarded">Awarded</NativeSelectOption>}</NativeSelect></Field>}
               <Field label="Rate library"><NativeSelect disabled={readOnly} value={activeLibrary.id ?? ""} onChange={(event) => { const next = rateLibraries.find((library) => library.id === event.target.value); if (next) setActiveLibrary(next); }}><NativeSelectOption value="">Select library</NativeSelectOption>{rateLibraries.map((library) => <NativeSelectOption key={library.id ?? library.name} value={library.id ?? ""}>{library.name}</NativeSelectOption>)}</NativeSelect></Field>

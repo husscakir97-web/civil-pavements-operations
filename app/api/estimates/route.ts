@@ -65,6 +65,7 @@ function rowToEstimate(row: GenericRow) {
     name: row.name,
     status,
     businessUnitId: ((row as Record<string, unknown>).business_unit_id as string | null) ?? null,
+    tenderId: ((row as Record<string, unknown>).tender_id as string | null) ?? null,
     createdAt: row.created_at,
     updatedAt: metadata.updatedAt ?? row.created_at,
     revisionNumber: Number(metadata.revisionNumber ?? 1),
@@ -160,7 +161,7 @@ async function getLookups(db: Database) {
 
 async function getEstimateRow(db: Database, id: string) {
   return db
-    .prepare("SELECT id, organisation_id, name, status, metadata, created_at, business_unit_id FROM estimates WHERE organisation_id = ? AND id = ? LIMIT 1")
+    .prepare("SELECT id, organisation_id, name, status, metadata, created_at, business_unit_id, tender_id FROM estimates WHERE organisation_id = ? AND id = ? LIMIT 1")
     .bind(currentOrganisationId(), id)
     .first<GenericRow>();
 }
@@ -190,7 +191,7 @@ async function handleGET(request: Request) {
       return Response.json({ estimate: rowToEstimate(row), revisions: await getRevisions(db, id), rateLibraries: libraries });
     }
     const result = await db
-      .prepare("SELECT id, organisation_id, name, status, metadata, created_at, business_unit_id FROM estimates WHERE organisation_id = ? ORDER BY created_at DESC")
+      .prepare("SELECT id, organisation_id, name, status, metadata, created_at, business_unit_id, tender_id FROM estimates WHERE organisation_id = ? ORDER BY created_at DESC")
       .bind(currentOrganisationId())
       .all<GenericRow>();
     return Response.json({
@@ -286,6 +287,8 @@ async function handlePUT(request: Request) {
     if (cleanText(body.action, 30) === "set-division") {
       // Division is filing metadata, not contractual content: no new revision is created.
       if (row.status === "Awarded") return jsonError("An awarded estimate can no longer change division.", 409);
+      // One rule: an estimate created from a tender follows that tender's division. Change it on the tender.
+      if ((row as Record<string, unknown>).tender_id) return jsonError("This estimate follows its tender's division. Change the division on the tender.", 409);
       const to = (await resolveDivisionChangeD1(db, currentOrganisationId(), body.businessUnitId, (row as Record<string, unknown>).business_unit_id as string | null)) ?? null;
       if (to !== (row as Record<string, unknown>).business_unit_id) {
         const at = nowIso();

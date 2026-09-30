@@ -28,9 +28,17 @@ try{
  await q("INSERT INTO tenders (id,organisation_id,opportunity_id,title,created_at,updated_at) VALUES ('tA1','orgA','oA1','t',?,?)",[now,now]);
  await q("INSERT INTO shifts (id,organisation_id,name,status,metadata,created_at,project_id) VALUES ('sA1','orgA','s','Planned','{}',?,'jA1'),('sA2','orgA','s','Planned','{}',?,NULL),('sB1','orgB','s','Planned','{}',?,'jB1')",[now,now,now]);
  // orgC already has a custom default division and a job deliberately placed in another division: neither may change.
- await q("INSERT INTO business_units (id,organisation_id,name,code,status,is_default,sort_order,revision,created_at,updated_at) VALUES ('c-main','orgC','Main works','MAIN','active',1,0,1,?,?),('c-asp','orgC','Asphalt','ASP','active',0,1,1,?,?)",[now,now,now,now]);
+ await q("INSERT INTO business_units (id,organisation_id,name,name_key,code,status,is_default,sort_order,revision,created_at,updated_at) VALUES ('c-main','orgC','Main works','main works','MAIN','active',1,0,1,?,?),('c-asp','orgC','Asphalt','asphalt','ASP','active',0,1,1,?,?)",[now,now,now,now]);
  await job('jC1','orgC');await q("UPDATE jobs SET business_unit_id='c-asp' WHERE id='jC1'");await job('jC2','orgC');
 
+ // orgE: the original General division is kept but ANOTHER division is now the default; legacy NULL records exist.
+ await q('INSERT INTO organisations (id,name,created_at) VALUES (?,?,?)',['orgE','orgE',now]);
+ await q("INSERT INTO business_units (id,organisation_id,name,name_key,code,status,is_default,sort_order,revision,created_at,updated_at) VALUES ('bu_default_orgE','orgE','General','general','GEN','active',0,0,1,?,?),('e-tc','orgE','Traffic Control','traffic control','TC','active',1,1,1,?,?)",[now,now,now,now]);
+ await job('jE-null','orgE');await job('jE-general','orgE');await q("UPDATE jobs SET business_unit_id='bu_default_orgE' WHERE id='jE-general'");await job('jE-tc','orgE');await q("UPDATE jobs SET business_unit_id='e-tc' WHERE id='jE-tc'");
+ await q("INSERT INTO estimates (id,organisation_id,name,status,metadata,created_at) VALUES ('eE-null','orgE','e','Draft','{}',?)",[now]);
+ await q("INSERT INTO opportunities (id,organisation_id,name,status,metadata,created_at) VALUES ('oE1','orgE','o','converted','{}',?)",[now]);
+ await q("INSERT INTO tenders (id,organisation_id,opportunity_id,title,created_at,updated_at) VALUES ('tE-null','orgE','oE1','t',?,?)",[now,now]);
+ await q("INSERT INTO shifts (id,organisation_id,name,status,metadata,created_at,project_id) VALUES ('sE-null','orgE','s','Planned','{}',?,'jE-null'),('sE-general','orgE','s','Planned','{}',?,'jE-general')",[now,now]);
  const first=await backfillBusinessUnits(db);
  const snapshot=async()=>({
   units:await q('SELECT id,organisation_id,name,code,is_default,status FROM business_units ORDER BY id'),
@@ -38,23 +46,30 @@ try{
   tenders:await q('SELECT id,business_unit_id FROM tenders ORDER BY id'),shifts:await q('SELECT id,business_unit_id FROM shifts ORDER BY id')});
  const s1=await snapshot();
  assert(first.some(n=>n>0),'the first run changed rows');
- const defaults=s1.units.filter(u=>u.is_default==1);assert.equal(defaults.length,3,'exactly one default per organisation');
- assert.deepEqual(defaults.map(d=>d.organisation_id).sort(),['orgA','orgB','orgC']);
+ const defaults=s1.units.filter(u=>u.is_default==1);assert.equal(defaults.length,4,'exactly one default per organisation');
+ assert.deepEqual(defaults.map(d=>d.organisation_id).sort(),['orgA','orgB','orgC','orgE']);
  assert.equal(defaults.find(d=>d.organisation_id==='orgA').id,'bu_default_orgA','deterministic default id');
  assert.equal(defaults.find(d=>d.organisation_id==='orgC').id,'c-main','an existing default is kept, not duplicated');
  assert.equal(s1.units.filter(u=>u.organisation_id==='orgC').length,2,'orgC gained no extra division');
  const bu=(rows,id)=>rows.find(r=>r.id===id).business_unit_id;
  assert.equal(bu(s1.jobs,'jA1'),'bu_default_orgA');assert.equal(bu(s1.jobs,'jB1'),'bu_default_orgB');
- assert.equal(bu(s1.jobs,'jC1'),'c-asp','an intentional assignment is never overwritten');assert.equal(bu(s1.jobs,'jC2'),null,'orgC has no bu_default_ id, so its unassigned job is left for the default resolver (NULL = default)');
+ assert.equal(bu(s1.jobs,'jC1'),'c-asp','an intentional assignment is never overwritten');assert.equal(bu(s1.jobs,'jC2'),'c-main','an unassigned job takes the organisation\'s ACTUAL current default, not the original bu_default_ id');
  assert.equal(bu(s1.estimates,'eA1'),'bu_default_orgA');assert.equal(bu(s1.tenders,'tA1'),'bu_default_orgA');
  assert.equal(bu(s1.shifts,'sA1'),'bu_default_orgA','a shift inherits its project\'s division');assert.equal(bu(s1.shifts,'sA2'),null,'a shift without a project stays unassigned');assert.equal(bu(s1.shifts,'sB1'),'bu_default_orgB');
  for(const r of [...s1.jobs,...s1.estimates,...s1.tenders,...s1.shifts])if(r.business_unit_id)assert.equal(s1.units.find(u=>u.id===r.business_unit_id)?.organisation_id,(await q('SELECT organisation_id FROM jobs WHERE id=? UNION SELECT organisation_id FROM estimates WHERE id=? UNION SELECT organisation_id FROM tenders WHERE id=? UNION SELECT organisation_id FROM shifts WHERE id=?',[r.id,r.id,r.id,r.id]))[0].organisation_id,'a record only ever points at its own organisation\'s division');
+ // orgE: effective assignments are preserved after the default moved.
+ assert.equal(s1.units.filter(u=>u.organisation_id==='orgE').length,2,'orgE gained no extra division (no second default, no re-created bu_default_ row)');
+ assert.equal(s1.units.filter(u=>u.organisation_id==='orgE'&&u.is_default==1).map(u=>u.id).join(),'e-tc','the current default is unchanged');
+ assert.equal(bu(s1.jobs,'jE-null'),'e-tc','a legacy NULL job resolves to the CURRENT default (its effective division), never to the retained original General');
+ assert.equal(bu(s1.jobs,'jE-general'),'bu_default_orgE','an explicit assignment to the retained General is preserved');assert.equal(bu(s1.jobs,'jE-tc'),'e-tc');
+ assert.equal(bu(s1.estimates,'eE-null'),'e-tc');assert.equal(bu(s1.tenders,'tE-null'),'e-tc');
+ assert.equal(bu(s1.shifts,'sE-null'),'e-tc','a shift follows its project\'s resolved division');assert.equal(bu(s1.shifts,'sE-general'),'bu_default_orgE','a shift of an explicitly General project stays General');
  // Idempotent: a second and third run change nothing and create nothing.
  for(let i=0;i<2;i++){const again=await backfillBusinessUnits(db);assert.deepEqual(again.filter(n=>n>0),[],'rerun '+(i+1)+' changed rows');}
  assert.deepEqual(await snapshot(),s1,'the data is identical after reruns');
  // A new organisation created afterwards is picked up by a later run without touching the others.
  await q('INSERT INTO organisations (id,name,created_at) VALUES (?,?,?)',['orgD','orgD',now]);
  await backfillBusinessUnits(db);
- assert.equal((await q("SELECT COUNT(*) n FROM business_units WHERE organisation_id='orgD'"))[0].n,1);assert.equal((await q('SELECT COUNT(*) n FROM business_units'))[0].n,defaults.length+1+1);
+ assert.equal((await q("SELECT COUNT(*) n FROM business_units WHERE organisation_id='orgD'"))[0].n,1);assert.equal((await q('SELECT COUNT(*) n FROM business_units'))[0].n,s1.units.length+1);
  console.log('PASS business-unit backfill: one deterministic default per organisation, existing rows assigned, shifts inherit, custom assignments/defaults preserved, tenant separation, reruns are no-ops');
 }finally{await db.end();await admin.query('DROP DATABASE IF EXISTS '+identifier(name));await admin.end();}

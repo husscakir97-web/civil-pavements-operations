@@ -11,6 +11,8 @@ import {query,one,exec,tx,nowIso,type Row,type Conn} from './sql';
 export const defaultDivisionId=(organisationId:string)=>`bu_default_${organisationId}`;
 const actor=()=>{const a=actorContext.getStore();if(!a)throw new Error('No actor context');return a;};
 export const normaliseCode=(v:unknown)=>String(v??'').trim().toUpperCase();
+/** Case- and whitespace-insensitive identity for a division name; the database enforces it with a unique key. */
+export const nameKey=(name:string)=>name.normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase();
 export const CODE=/^[A-Z0-9][A-Z0-9-]{0,19}$/;
 
 export type Division={id:string;name:string;code:string;description:string|null;status:'active'|'archived';isDefault:boolean;sortOrder:number;revision:number;archivedAt:string|null};
@@ -22,7 +24,7 @@ export async function ensureDefaultDivision(organisationId=actor().organisationI
  const existing=await one<{id:string}>('SELECT id FROM business_units WHERE organisation_id=? AND is_default=1',[organisationId],conn);
  if(existing)return existing.id;
  const now=nowIso();
- await exec("INSERT INTO business_units (id,organisation_id,name,code,description,status,is_default,sort_order,revision,created_at,updated_at) VALUES (?,?,'General','GEN','Default division. Rename it or add more divisions in Admin.','active',1,0,1,?,?) ON DUPLICATE KEY UPDATE id=id",[id,organisationId,now,now],conn);
+ await exec("INSERT INTO business_units (id,organisation_id,name,name_key,code,description,status,is_default,sort_order,revision,created_at,updated_at) VALUES (?,?,'General','general','GEN','Default division. Rename it or add more divisions in Admin.','active',1,0,1,?,?) ON DUPLICATE KEY UPDATE id=id",[id,organisationId,now,now],conn);
  return id;
 }
 
@@ -39,22 +41,31 @@ const cleanCode=(v:unknown)=>{const c=normaliseCode(v);if(!CODE.test(c))fail(400
 const cleanDesc=(v:unknown)=>{const d=String(v??'').trim();return d?d.slice(0,1000):null;};
 
 async function assertUnique(org:string,name:string,code:string,exceptId:string|null,conn:Conn){
- const rows=await query('SELECT id,name,code FROM business_units WHERE organisation_id=?',[org],conn);
- for(const r of rows){if(r.id===exceptId)continue;if(String(r.code).toUpperCase()===code)fail(409,`The code ${code} is already used by another division.`);if(String(r.name).toLowerCase()===name.toLowerCase())fail(409,'A division with this name already exists.');}
+ // Friendly pre-check. The database unique keys (organisation+code, organisation+name_key) are the real guard under concurrency.
+ const rows=await query('SELECT id,name_key,code FROM business_units WHERE organisation_id=?',[org],conn);
+ for(const r of rows){if(r.id===exceptId)continue;if(String(r.code).toUpperCase()===code)fail(409,`The code ${code} is already used by another division.`);if(r.name_key===nameKey(name))fail(409,'A division with this name already exists.');}
+}
+/** Maps a concurrent duplicate that slipped past the pre-check onto the same clear 409. */
+async function guardDuplicates<T>(work:()=>Promise<T>):Promise<T>{
+ try{return await work();}catch(e){
+  const err=e as {code?:string;errno?:number;sqlMessage?:string;message?:string};
+  if(err?.code==='ER_DUP_ENTRY'||err?.errno===1062){const m=String(err.sqlMessage||err.message||'');fail(409,/uq_business_units_name|name_key/.test(m)?'A division with this name already exists.':/uq_business_units_code|\.code/.test(m)?'That division code is already used by another division.':'A division with these details already exists.');}
+  throw e;
+ }
 }
 
 export async function createDivision(input:{name?:unknown;code?:unknown;description?:unknown}){
  needManage();const a=actor();
  const name=cleanName(input.name),code=cleanCode(input.code),description=cleanDesc(input.description);
- return tx(async conn=>{
+ return guardDuplicates(()=>tx(async conn=>{
   await ensureDefaultDivision(a.organisationId,conn);
   await assertUnique(a.organisationId,name,code,null,conn);
   const id=crypto.randomUUID(),now=nowIso();
   const next=await one<{n:number}>('SELECT COALESCE(MAX(sort_order),0)+1 AS n FROM business_units WHERE organisation_id=?',[a.organisationId],conn);
-  await exec("INSERT INTO business_units (id,organisation_id,name,code,description,status,is_default,sort_order,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,'active',0,?,1,?,?,?)",[id,a.organisationId,name,code,description,Number(next?.n||1),a.userId,now,now],conn);
+  await exec("INSERT INTO business_units (id,organisation_id,name,name_key,code,description,status,is_default,sort_order,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,'active',0,?,1,?,?,?)",[id,a.organisationId,name,nameKey(name),code,description,Number(next?.n||1),a.userId,now,now],conn);
   await audit({event:'business_unit.created',entityType:'business_unit',entityId:id,summary:`Division ${code} ${name} created`,after:{name,code}},conn);
   return {id};
- });
+ }));
 }
 
 async function loadForWrite(id:string,conn:Conn){
@@ -64,16 +75,16 @@ async function loadForWrite(id:string,conn:Conn){
 
 export async function updateDivision(id:string,input:{revision?:unknown;name?:unknown;code?:unknown;description?:unknown}){
  needManage();const a=actor();
- return tx(async conn=>{
+ return guardDuplicates(()=>tx(async conn=>{
   const r=await loadForWrite(id,conn);
   if(Number(r.revision)!==Number(input.revision))fail(409,'This division was changed by someone else. Refresh and try again.');
   const name='name' in input?cleanName(input.name):r.name,code='code' in input?cleanCode(input.code):r.code,description='description' in input?cleanDesc(input.description):r.description;
   await assertUnique(a.organisationId,name,code,r.id,conn);
   if(name===r.name&&code===r.code&&(description??null)===(r.description??null))return {id:r.id,revision:Number(r.revision),changed:false};
-  await exec('UPDATE business_units SET name=?,code=?,description=?,revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?',[name,code,description,nowIso(),a.organisationId,r.id],conn);
+  await exec('UPDATE business_units SET name=?,name_key=?,code=?,description=?,revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?',[name,nameKey(name),code,description,nowIso(),a.organisationId,r.id],conn);
   await audit({event:'business_unit.updated',entityType:'business_unit',entityId:r.id,summary:`Division ${code} ${name} updated`,before:{name:r.name,code:r.code},after:{name,code}},conn);
   return {id:r.id,revision:Number(r.revision)+1,changed:true};
- });
+ }));
 }
 
 /** Archive keeps the row: every historical record still points at it. The default division cannot be archived. */

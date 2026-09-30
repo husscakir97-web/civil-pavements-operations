@@ -18,7 +18,7 @@ export async function provisionOrganisation(user:{id:string;name:string;email:st
   // that drives onboarding. No customer values are copied from other tenants.
   await provisionTrial(org,db);
   // Every organisation starts with one default division so single-division companies never need to think about divisions.
-  await db.execute("INSERT INTO business_units (id,organisation_id,name,code,description,status,is_default,sort_order,revision,created_at,updated_at) VALUES (?,?,'General','GEN','Default division. Rename it or add more divisions in Admin.','active',1,0,1,?,?) ON DUPLICATE KEY UPDATE id=id",[`bu_default_${org}`,org,now,now]);
+  await db.execute("INSERT INTO business_units (id,organisation_id,name,name_key,code,description,status,is_default,sort_order,revision,created_at,updated_at) VALUES (?,?,'General','general','GEN','Default division. Rename it or add more divisions in Admin.','active',1,0,1,?,?) ON DUPLICATE KEY UPDATE id=id",[`bu_default_${org}`,org,now,now]);
   await db.execute('INSERT INTO organisation_profiles (organisation_id,onboarding_step,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?)',[org,0,1,user.id,now,now]);
   if(first&&process.env.SEED_DEMO_DATA==='true')await seedDemo(db,org,now);
   await db.commit();

@@ -23,6 +23,7 @@ const lifecycle=()=>({
 export const businessUnits=mysqlTable('business_units',{
  id:id(),organisationId:org(),
  name:varchar('name',{length:120}).notNull(),
+ nameKey:varchar('name_key',{length:120}).notNull(),
  code:varchar('code',{length:20}).notNull(),
  description:text('description'),
  status:varchar('status',{length:20}).notNull().default('active'),
@@ -30,7 +31,7 @@ export const businessUnits=mysqlTable('business_units',{
  sortOrder:int('sort_order').notNull().default(0),
  archivedAt:stamp('archived_at'),
  ...lifecycle(),
-},t=>[index('idx_business_units_org').on(t.organisationId,t.status),uniqueIndex('uq_business_units_code').on(t.organisationId,t.code)]);
+},t=>[index('idx_business_units_org').on(t.organisationId,t.status),uniqueIndex('uq_business_units_code').on(t.organisationId,t.code),uniqueIndex('uq_business_units_name').on(t.organisationId,t.nameKey)]);
 export const organisationEntitlements=mysqlTable('organisation_entitlements',{
  id:id(),organisationId:org(),
  module:varchar('module',{length:40}).notNull(),

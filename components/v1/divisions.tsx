@@ -18,12 +18,12 @@ export function useDivisions(){
 }
 
 /** Chooser for a record's division. Renders nothing for single-division organisations. Archived divisions can only be kept, not newly chosen. */
-export function DivisionPicker({value,onChange,label='Division',disabled}:{value:string|null|undefined;onChange:(id:string)=>void;label?:string;disabled?:boolean}){
+export function DivisionPicker({value,onChange,label='Division',disabled,note}:{value:string|null|undefined;onChange:(id:string)=>void;label?:string;disabled?:boolean;note?:string}){
  const d=useDivisions();
  if(!d.multi)return null;
  const current=value||d.defaultId||'';
  const options=d.divisions.filter(x=>x.status==='active'||x.id===current);
- return <Field label={label}><select className={field} disabled={disabled} value={current} onChange={e=>onChange(e.target.value)}>{options.map(x=><option key={x.id} value={x.id}>{x.name} ({x.code}){x.status==='archived'?' — archived':''}</option>)}</select></Field>;
+ return <Field label={label} hint={note}><select className={field} disabled={disabled} value={current} onChange={e=>onChange(e.target.value)}>{options.map(x=><option key={x.id} value={x.id}>{x.name} ({x.code}){x.status==='archived'?' — archived':''}</option>)}</select></Field>;
 }
 
 /** Narrows an already-permitted list. It filters what the user can see; it never widens access. */

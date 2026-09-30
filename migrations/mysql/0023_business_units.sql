@@ -2,6 +2,7 @@ CREATE TABLE `business_units` (
   `id` varchar(191) NOT NULL,
   `organisation_id` varchar(191) NOT NULL,
   `name` varchar(120) NOT NULL,
+  `name_key` varchar(120) NOT NULL,
   `code` varchar(20) NOT NULL,
   `description` text,
   `status` varchar(20) NOT NULL DEFAULT 'active',
@@ -13,7 +14,8 @@ CREATE TABLE `business_units` (
   `updated_at` varchar(40) NOT NULL,
   `archived_at` varchar(40),
   CONSTRAINT `business_units_id` PRIMARY KEY(`id`),
-  CONSTRAINT `uq_business_units_code` UNIQUE(`organisation_id`,`code`)
+  CONSTRAINT `uq_business_units_code` UNIQUE(`organisation_id`,`code`),
+  CONSTRAINT `uq_business_units_name` UNIQUE(`organisation_id`,`name_key`)
 );
 --> statement-breakpoint
 CREATE INDEX `idx_business_units_org` ON `business_units` (`organisation_id`,`status`);
@@ -34,15 +36,17 @@ CREATE INDEX `idx_tenders_business_unit` ON `tenders` (`organisation_id`,`busine
 --> statement-breakpoint
 CREATE INDEX `idx_shifts_business_unit` ON `shifts` (`organisation_id`,`business_unit_id`);
 --> statement-breakpoint
--- BACKFILL (deterministic and idempotent; scripts/backfill-business-units.mjs re-runs everything from here)
-INSERT INTO `business_units` (`id`,`organisation_id`,`name`,`code`,`description`,`status`,`is_default`,`sort_order`,`revision`,`created_at`,`updated_at`)
-SELECT CONCAT('bu_default_',o.`id`),o.`id`,'General','GEN','Default division. Rename it or add more divisions in Admin.','active',1,0,1,CONCAT(DATE_FORMAT(UTC_TIMESTAMP(3),'%Y-%m-%dT%H:%i:%s.'),LPAD(FLOOR(MICROSECOND(UTC_TIMESTAMP(3))/1000),3,'0'),'Z'),CONCAT(DATE_FORMAT(UTC_TIMESTAMP(3),'%Y-%m-%dT%H:%i:%s.'),LPAD(FLOOR(MICROSECOND(UTC_TIMESTAMP(3))/1000),3,'0'),'Z')
+-- BACKFILL (deterministic and idempotent; scripts/backfill-business-units.mjs re-runs everything from here).
+-- A NULL division already means "the organisation's CURRENT default", so assigning the current default preserves every
+-- effective assignment even after another division has been made the default; explicit assignments are never touched.
+INSERT INTO `business_units` (`id`,`organisation_id`,`name`,`name_key`,`code`,`description`,`status`,`is_default`,`sort_order`,`revision`,`created_at`,`updated_at`)
+SELECT CONCAT('bu_default_',o.`id`),o.`id`,'General','general','GEN','Default division. Rename it or add more divisions in Admin.','active',1,0,1,CONCAT(DATE_FORMAT(UTC_TIMESTAMP(3),'%Y-%m-%dT%H:%i:%s.'),LPAD(FLOOR(MICROSECOND(UTC_TIMESTAMP(3))/1000),3,'0'),'Z'),CONCAT(DATE_FORMAT(UTC_TIMESTAMP(3),'%Y-%m-%dT%H:%i:%s.'),LPAD(FLOOR(MICROSECOND(UTC_TIMESTAMP(3))/1000),3,'0'),'Z')
 FROM `organisations` o WHERE NOT EXISTS (SELECT 1 FROM `business_units` b WHERE b.`organisation_id`=o.`id` AND b.`is_default`=1);
 --> statement-breakpoint
-UPDATE `jobs` SET `business_unit_id`=CONCAT('bu_default_',`organisation_id`) WHERE `business_unit_id` IS NULL AND EXISTS (SELECT 1 FROM `business_units` b WHERE b.`id`=CONCAT('bu_default_',`jobs`.`organisation_id`));
+UPDATE `jobs` SET `business_unit_id`=(SELECT b.`id` FROM `business_units` b WHERE b.`organisation_id`=`jobs`.`organisation_id` AND b.`is_default`=1 LIMIT 1) WHERE `business_unit_id` IS NULL AND EXISTS (SELECT 1 FROM `business_units` b WHERE b.`organisation_id`=`jobs`.`organisation_id` AND b.`is_default`=1);
 --> statement-breakpoint
-UPDATE `estimates` SET `business_unit_id`=CONCAT('bu_default_',`organisation_id`) WHERE `business_unit_id` IS NULL AND EXISTS (SELECT 1 FROM `business_units` b WHERE b.`id`=CONCAT('bu_default_',`estimates`.`organisation_id`));
+UPDATE `estimates` SET `business_unit_id`=(SELECT b.`id` FROM `business_units` b WHERE b.`organisation_id`=`estimates`.`organisation_id` AND b.`is_default`=1 LIMIT 1) WHERE `business_unit_id` IS NULL AND EXISTS (SELECT 1 FROM `business_units` b WHERE b.`organisation_id`=`estimates`.`organisation_id` AND b.`is_default`=1);
 --> statement-breakpoint
-UPDATE `tenders` SET `business_unit_id`=CONCAT('bu_default_',`organisation_id`) WHERE `business_unit_id` IS NULL AND EXISTS (SELECT 1 FROM `business_units` b WHERE b.`id`=CONCAT('bu_default_',`tenders`.`organisation_id`));
+UPDATE `tenders` SET `business_unit_id`=(SELECT b.`id` FROM `business_units` b WHERE b.`organisation_id`=`tenders`.`organisation_id` AND b.`is_default`=1 LIMIT 1) WHERE `business_unit_id` IS NULL AND EXISTS (SELECT 1 FROM `business_units` b WHERE b.`organisation_id`=`tenders`.`organisation_id` AND b.`is_default`=1);
 --> statement-breakpoint
 UPDATE `shifts` SET `business_unit_id`=(SELECT j.`business_unit_id` FROM `jobs` j WHERE j.`organisation_id`=`shifts`.`organisation_id` AND j.`id`=`shifts`.`project_id`) WHERE `business_unit_id` IS NULL AND `project_id` IS NOT NULL;

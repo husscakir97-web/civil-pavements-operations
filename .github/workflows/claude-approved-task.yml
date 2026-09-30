@@ -111,6 +111,12 @@ jobs:
           Unpublished runner edits are not preserved. An existing task branch/draft is the only remote checkpoint.
           Do not include credentials in a handoff. No merge or deployment is authorized.
           NOTICE
-      - name: Require actual publication receipt
-        if: steps.claude.outputs.conclusion == 'success'
-        run: test -s /tmp/claude-approved/published.json
+      - name: Export validated credential-free audit receipt
+        if: ${{ always() && steps.gate.outcome == 'success' }}
+        run: /usr/bin/node /tmp/claude-approved/claude-approved-task.cjs audit-export
+      - name: Require successful conclusion and checked publication receipt
+        if: ${{ !cancelled() && steps.claude.outcome != 'skipped' }}
+        env:
+          CLAUDE_STEP_OUTCOME: ${{ steps.claude.outcome }}
+          CLAUDE_STEP_CONCLUSION: ${{ steps.claude.outputs.conclusion }}
+        run: /usr/bin/node /tmp/claude-approved/claude-approved-task.cjs verify-completion

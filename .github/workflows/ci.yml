@@ -26,6 +26,8 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - name: Dependency security audit (fails on high/critical production vulnerabilities or a scanner failure)
+        run: npm run security:audit
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test

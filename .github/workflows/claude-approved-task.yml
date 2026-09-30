@@ -1,0 +1,103 @@
+# Activation candidate: requires owner dispatch, protected environment approval,
+# and both repository enable/cost variables. No automatic event triggers.
+name: Claude approved task
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Owner-reviewed task issue number
+        required: true
+        type: string
+      task_sha256:
+        description: SHA-256 of the exact reviewed issue snapshot (see runbook)
+        required: true
+        type: string
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  id-token: write
+concurrency:
+  group: claude-approved-task
+  cancel-in-progress: false
+jobs:
+  implement:
+    if: ${{ vars.CLAUDE_TASKS_ENABLED == 'true' && vars.CLAUDE_NO_EXTRA_SPEND_CONFIRMED == 'true' && github.repository == 'husscakir97-web/civil-pavements-operations' && github.actor == 'husscakir97-web' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: claude-approved-tasks
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - name: Freeze helper and validate exact owner approval
+        id: gate
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const fs = require('node:fs');
+            fs.mkdirSync('/tmp/claude-approved', { recursive: false, mode: 0o700 });
+            fs.copyFileSync('.github/automation/claude-approved-task.cjs', '/tmp/claude-approved/claude-approved-task.cjs');
+            await require('/tmp/claude-approved/claude-approved-task.cjs').gate({ github, context, core });
+      - name: Prepare test dependencies before exposing OAuth or App credentials
+        run: |
+          set -euo pipefail
+          mkdir /tmp/claude-approved/image
+          cp package.json package-lock.json /tmp/claude-approved/image/
+          # Resolve the image before AI starts; subsequent checks use its immutable local ID.
+          docker pull node:22-bookworm
+          base_image="$(docker image inspect node:22-bookworm --format '{{index .RepoDigests 0}}')"
+          printf 'FROM %s\nWORKDIR /deps\nCOPY package.json package-lock.json ./\nRUN npm ci --ignore-scripts --no-audit --no-fund\n' "$base_image" > /tmp/claude-approved/image/Dockerfile
+          docker build --tag claude-approved-tests /tmp/claude-approved/image
+          docker image inspect claude-approved-tests --format '{{.Id}}' > /tmp/claude-approved/test-image.txt
+          chmod 400 /tmp/claude-approved/claude-approved-task.cjs /tmp/claude-approved/state.json /tmp/claude-approved/test-image.txt
+      - name: Claude scoped edit, isolated checks and draft publication
+        id: claude
+        uses: anthropics/claude-code-action@fd1c128679612beff4ca259c78021c506e8aa7a7 # v1.0.237
+        with:
+          # Omit github_token: use the official Claude App and publish INSIDE this action.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: ''
+          allowed_non_write_users: ''
+          show_full_output: 'false'
+          display_report: 'false'
+          classify_inline_comments: 'false'
+          prompt: |
+            Read CLAUDE.md. Implement this exact owner-approved task:
+            ${{ steps.gate.outputs.task }}
+            You may Read tracked public files and Edit/Write only the exact allowed_paths.
+            The runtime PreToolUse hook rejects all other tools and paths.
+            When ready, invoke exactly this Bash command in the foreground:
+            /usr/bin/node /tmp/claude-approved/claude-approved-task.cjs finish
+            Use a 600000 ms timeout. It runs lint, typecheck and npm test without credentials
+            or network, then rechecks approval and creates/reuses an isolated draft PR.
+            Do not run tests yourself, commit, push, merge, deploy or alter git state.
+            Report any guard failure; never attempt to bypass it.
+          claude_args: >-
+            --max-turns 12
+            --model sonnet
+            --permission-mode dontAsk
+            --tools Read,Edit,Write,Bash
+            --allowedTools "Read,Edit,Write,Bash(/usr/bin/node /tmp/claude-approved/claude-approved-task.cjs finish)"
+            --disallowedTools "Agent,Task,Skill,WebFetch,WebSearch,Glob,Grep,NotebookEdit,mcp__*"
+            --setting-sources user
+          settings: |
+            {
+              "hooks": {
+                "PreToolUse": [{
+                  "matcher": ".*",
+                  "hooks": [{
+                    "type": "command",
+                    "command": "/usr/bin/node /tmp/claude-approved/claude-approved-task.cjs hook",
+                    "timeout": 10
+                  }]
+                }]
+              }
+            }
+      - name: Require actual publication receipt
+        if: steps.claude.outputs.conclusion == 'success'
+        run: test -s /tmp/claude-approved/published.json

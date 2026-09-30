@@ -116,10 +116,13 @@ Discussions, Issues, Pull requests, Repository hooks and Workflows read/write;
 Members, Metadata and Statuses read. GitHub does not permit selecting a subset.
 This draft deliberately uses the custom App route; do not install both blindly.
 
-If the user chooses API billing instead, prepare a separately reviewed change that
-uses ONLY anthropic_api_key and ANTHROPIC_API_KEY, with a user-chosen dedicated
-Console workspace spend limit and --max-budget-usd (suggested pilot cap $2/run).
-Do not silently reuse the current API secret. Pricing/budget choice belongs to user.
+The user requires no extra spending. API billing, paid Claude extra usage and new
+paid subscriptions are not authorized. Keep this scaffold inactive until the user
+confirms Claude paid extra usage is OFF and GitHub spending is blocked outside
+included/free usage. Pause when Pro allowance is exhausted; do not retry using API
+billing or enable extra usage. The connector cannot verify those account settings.
+The 20-turn/30-minute/concurrency controls bound work, not money, and are not a
+guarantee of zero extra charges. No paid-job or credential action was performed.
 
 ## Limits and review coordination
 

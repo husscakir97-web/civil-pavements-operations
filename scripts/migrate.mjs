@@ -47,5 +47,7 @@ try{
  // Typed-column backfills run after the schema is ready, under the same lock.
  const {backfillResources}=await import('./backfill-resources.mjs');
  await backfillResources(db);
+ const {backfillDocuments}=await import('./backfill-documents.mjs');
+ await backfillDocuments(db);
  console.log('Database migrations ready');
 }finally{await db.execute('SELECT RELEASE_LOCK(?)',[lockName]).catch(()=>{});await db.end();}

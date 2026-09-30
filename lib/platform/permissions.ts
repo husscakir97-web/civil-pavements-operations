@@ -27,7 +27,9 @@ export const CAPABILITIES=[
  'estimate.edit','estimate.approve',
  'project.view','project.all.view','project.edit','programme.edit','project.baseline','project.close',
  'communication.view','communication.send','external.share',
- 'document.upload','document.approve',
+ // document.approve stays reserved for controlled release. Managed documents: edit identity metadata and links;
+ // manage_versions uploads new immutable revisions. Neither is implied by document.upload (field evidence).
+ 'document.upload','document.approve','document.edit','document.manage_versions',
  'hseq.view','hseq.edit','hseq.report','swms.approve','swms.acknowledge','itp.complete',
  // Independent verification of corrective actions and final NCR closure. Server rule on top:
  // the person who completed an action can never verify that completion.
@@ -54,12 +56,12 @@ const READ:Capability[]=['pipeline.view','project.view','project.all.view','hseq
 export const ROLE_CAPABILITIES:Record<Role,readonly Capability[]>={
  admin:CAPABILITIES,
  office:OFFICE,
- estimator:[...READ,'crm.create','pipeline.edit','estimate.edit','tender.submit','library.edit','document.upload','audit.view','variation.edit','communication.send'],
+ estimator:[...READ,'crm.create','pipeline.edit','estimate.edit','tender.submit','library.edit','document.upload','document.edit','document.manage_versions','audit.view','variation.edit','communication.send'],
  scheduler:['crm.create','workshop.view','project.view','project.all.view','schedule.view','schedule.edit','resources.edit','hseq.view','reports.view','knowledge.view','document.upload','communication.view','communication.send','external.share','forms.view','forms.submit','workshop.defect.report'],
- project_manager:[...READ,'crm.create','project.edit','programme.edit','project.baseline','project.close','schedule.edit','resources.edit','hseq.edit','hseq.report','swms.approve','document.approve','docket.approve','variation.edit','claim.edit','document.upload','itp.complete','audit.view','communication.send','external.share','hseq.verify','forms.submit','forms.manage','forms.publish','forms.amend','workshop.defect.report'],
+ project_manager:[...READ,'crm.create','project.edit','programme.edit','project.baseline','project.close','schedule.edit','resources.edit','hseq.edit','hseq.report','swms.approve','document.approve','docket.approve','variation.edit','claim.edit','document.upload','itp.complete','audit.view','communication.send','external.share','hseq.verify','forms.submit','forms.manage','forms.publish','forms.amend','workshop.defect.report','document.edit','document.manage_versions'],
  // No 'project.all.view': these roles work only in projects where they are an active project
  // member (lib/platform/project-access.ts), and never see money or approvals.
- project_engineer:[...FIELD,'project.view','project.edit','programme.edit','schedule.view','hseq.view','hseq.edit','hseq.verify','reports.view','knowledge.view','workshop.view','forms.amend'],
+ project_engineer:[...FIELD,'project.view','project.edit','programme.edit','schedule.view','hseq.view','hseq.edit','hseq.verify','reports.view','knowledge.view','workshop.view','forms.amend','document.edit','document.manage_versions'],
  site_engineer:[...FIELD,'project.view','programme.edit','schedule.view','hseq.view','hseq.edit','knowledge.view','forms.amend'],
  supervisor:[...FIELD,'project.view','project.all.view','schedule.view','hseq.view','hseq.edit','knowledge.view','forms.amend'],
  field:[...FIELD,'knowledge.view'],

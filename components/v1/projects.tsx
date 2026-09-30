@@ -1,4 +1,5 @@
 'use client';
+import {ManagedDocumentSheet} from './documents';
 import {useState,type ReactNode} from 'react';
 import {ArrowRight,CalendarDays,CheckCircle2,Plus,Upload} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
@@ -309,13 +310,24 @@ function Quality({projectId,closed,onChanged}:{projectId:string;closed:boolean;o
 }
 
 type Doc={id:string;title:string;fileName:string;category:string;version:number;visibility:string;createdAt:string;url:string;sizeBytes:number};
+type ManagedRow={id:string;title:string;documentNumber:string|null;documentType:string|null;updatedAt:string;current:{revisionLabel:string|null;versionNumber:number;fileName:string;visibility:string}|null};
+/** Project documents: new uploads become managed documents (revisions in the document's detail); older files stay listed as legacy attachments. */
 export function Documents({projectId,closed}:{projectId:string;closed:boolean}){
- const {can}=useSession();const {data,error,loading,refresh}=useApi<{documents:Doc[]}>(`/api/documents?projectId=${projectId}`);const {busy,error:upError,run}=useAction();
- const [category,setCategory]=useState('General'),[visibility,setVisibility]=useState('office');
- return <Section title="Project documents" description="Files are private: downloads go through authenticated, organisation-scoped links. Field-visible files are available to site staff." actions={!closed&&can('document.upload')&&<label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-lg bg-[#172633] px-3.5 text-sm font-medium text-white"><Upload aria-hidden className="size-4"/>{busy?'Uploading…':'Upload'}<input type="file" className="sr-only" disabled={busy} onChange={e=>{const file=e.target.files?.[0];if(!file)return;const f=new FormData();f.set('file',file);f.set('contextType','project');f.set('projectId',projectId);f.set('category',category);f.set('visibility',visibility);void run(()=>api('/api/documents',{method:'POST',body:f}),refresh);e.target.value='';}}/></label>}>
-  {!closed&&can('document.upload')&&<div className="mb-3 grid gap-3 sm:grid-cols-2"><Field label="Category for next upload"><select className={field} value={category} onChange={e=>setCategory(e.target.value)}>{['General','Contract','Drawings','Specification','Programme','HSEQ','Quality','As-built','Correspondence','Photos'].map(c=><option key={c}>{c}</option>)}</select></Field><Field label="Visibility"><select className={field} value={visibility} onChange={e=>setVisibility(e.target.value)}><option value="office">Office only</option><option value="field">Office and field</option></select></Field></div>}
-  <ErrorState error={error||upError} onRetry={refresh}/>
-  {loading&&!data?<Loading/>:!data?.documents.length?<EmptyState title="No documents have been uploaded for this project."/>:<ul className="divide-y text-sm">{data.documents.map(d=><li key={d.id} className="flex flex-wrap items-center justify-between gap-2 py-2"><a className="text-sky-700 underline" href={d.url}>{d.title}</a><span className="text-xs text-slate-500">{d.category} · v{d.version} · {d.visibility==='field'?'field visible':'office only'} · {dateText(d.createdAt)}</span></li>)}</ul>}
+ const {can}=useSession();
+ const managed=useApi<{documents:ManagedRow[]}>(`/api/managed-documents?contextType=project&contextId=${encodeURIComponent(projectId)}`);
+ const legacy=useApi<{documents:Doc[]}>(`/api/documents?projectId=${projectId}&unmanaged=1`);
+ const {busy,error:upError,run}=useAction();
+ const [category,setCategory]=useState('General'),[visibility,setVisibility]=useState('office'),[open,setOpen]=useState<string|null>(null);
+ const refresh=()=>{managed.refresh();legacy.refresh();};
+ const rows=managed.data?.documents||[],old=legacy.data?.documents||[];
+ return <Section title="Project documents" description="Files are private: downloads go through authenticated, organisation-scoped links. Open a document for its revisions and links. Field-visible files are available to site staff." actions={!closed&&can('document.upload')&&<label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-lg bg-[#172633] px-3.5 text-sm font-medium text-white"><Upload aria-hidden className="size-4"/>{busy?'Uploading…':'Upload'}<input type="file" className="sr-only" disabled={busy} onChange={e=>{const file=e.target.files?.[0];if(!file)return;const f=new FormData();f.set('file',file);f.set('contextType','project');f.set('contextId',projectId);f.set('documentType',category);f.set('visibility',visibility);void run(()=>api('/api/managed-documents',{method:'POST',body:f}),refresh);e.target.value='';}}/></label>}>
+  {!closed&&can('document.upload')&&<div className="mb-3 grid gap-3 sm:grid-cols-2"><Field label="Type for next upload"><select className={field} value={category} onChange={e=>setCategory(e.target.value)}>{['General','Contract','Drawings','Specification','Programme','HSEQ','Quality','As-built','Correspondence','Photos'].map(c=><option key={c}>{c}</option>)}</select></Field><Field label="Visibility"><select className={field} value={visibility} onChange={e=>setVisibility(e.target.value)}><option value="office">Office only</option><option value="field">Office and field</option></select></Field></div>}
+  <ErrorState error={managed.error||legacy.error||upError} onRetry={refresh}/>
+  {(managed.loading&&!managed.data)||(legacy.loading&&!legacy.data)?<Loading/>:!rows.length&&!old.length?<EmptyState title="No documents have been uploaded for this project."/>:<>
+   {rows.length>0&&<ul className="divide-y text-sm">{rows.map(d=><li key={d.id} className="flex flex-wrap items-center justify-between gap-2 py-2"><button type="button" className="text-left text-sky-700 underline" onClick={()=>setOpen(d.id)}>{d.documentNumber?`${d.documentNumber} — `:''}{d.title}</button><span className="text-xs text-slate-500">{d.documentType||'General'} · {d.current?.revisionLabel?`Rev ${d.current.revisionLabel} · `:''}v{d.current?.versionNumber} · {d.current?.visibility==='field'?'field visible':'office only'} · {dateText(d.updatedAt)}</span></li>)}</ul>}
+   {old.length>0&&<><p className="mt-3 text-xs font-medium uppercase tracking-wide text-slate-500">Legacy attachments</p><ul className="divide-y text-sm">{old.map(d=><li key={d.id} className="flex flex-wrap items-center justify-between gap-2 py-2"><a className="text-sky-700 underline" href={d.url}>{d.title}</a><span className="text-xs text-slate-500">{d.category} · v{d.version} · {d.visibility==='field'?'field visible':'office only'} · {dateText(d.createdAt)}</span></li>)}</ul></>}
+  </>}
+  <ManagedDocumentSheet id={open} onClose={()=>{setOpen(null);refresh();}}/>
  </Section>;
 }
 

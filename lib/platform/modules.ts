@@ -34,12 +34,12 @@ const contract=(key:ModuleKey,ownedEntities:string[],workspace:ModuleContract['w
 });
 /** Implemented modules only. Future products must not be provisioned or advertised as usable. */
 export const MODULE_REGISTRY:Record<ModuleKey,ModuleContract>={
- workshop:contract('workshop',['workshop_orders','workshop_entries'],{area:'Resource Work',sub:'Workshop'},['workshop.view','workshop.edit','workshop.verify'],{publishedEvents:['workshop.defect.created','workshop.repair.recorded','workshop.verified']}),
+ workshop:contract('workshop',['workshop_orders','workshop_entries'],{area:'Resource Work',sub:'Workshop'},['workshop.view','workshop.edit','workshop.verify'],{publishedEvents:['workshop.defect.created','workshop.defect.reported','workshop.repair.recorded','workshop.verified'],optionalSeams:['form.defect']}),
  core:contract('core',['organisations','users','documents','knowledge_packs','audit_log','domain_events','communication_threads','communication_messages','communication_receipts','notifications','notification_preferences','external_access_tokens','external_responses'],{area:'Home'},['org.admin','knowledge.view','communication.view','communication.send'],{kind:'core',coreDependencies:[]}),
  pipeline:contract('pipeline',['opportunities','tenders','tender_requirements'],{area:'Win Work',sub:'Tenders'},['pipeline.view','pipeline.edit','tender.award'],{optionalSeams:['award.project'],reporting:['pipeline']}),
  estimating:contract('estimating',['estimates','estimate_revisions'],{area:'Win Work',sub:'Estimates'},['estimate.edit','estimate.approve'],{optionalSeams:['award.project']}),
  projects:contract('projects',['jobs','project_baselines','project_checklist_items','cost_transactions'],{area:'Prepare Work',sub:'Projects'},['project.view','project.edit'],{publishedEvents:['project.awarded'],optionalSeams:['award.project','docket.cost','project.ims'],reporting:['projects']}),
- ims:contract('ims',['swms','itp_items','hseq_incidents','hseq_ncrs','hseq_actions'],{area:'Prepare Work',sub:'IMS & HSEQ'},['hseq.view','hseq.edit','hseq.report'],{optionalSeams:['project.ims'],reporting:['hseq'],fieldCapabilities:['swms.acknowledge','itp.complete','hseq.report']}),
+ ims:contract('ims',['swms','itp_items','hseq_incidents','hseq_ncrs','hseq_actions'],{area:'Prepare Work',sub:'IMS & HSEQ'},['hseq.view','hseq.edit','hseq.report'],{optionalSeams:['project.ims','form.defect'],reporting:['hseq'],fieldCapabilities:['swms.acknowledge','itp.complete','hseq.report']}),
  operations:contract('operations',['shifts','shift_assignments','workers','worker_competencies','plant'],{area:'Resource Work',sub:'Schedule'},['schedule.view','schedule.edit','resources.edit'],{reporting:['operations']}),
  field:contract('field',['field_records'],{area:'Field'},['field.capture'],{kind:'surface',fieldCapabilities:['field.capture','offline.sync']}),
  dockets:contract('dockets',['dockets'],{area:'Deliver Work',sub:'Dockets'},['docket.submit','docket.approve'],{publishedEvents:['docket.approved'],optionalSeams:['docket.cost'],reporting:['dockets'],fieldCapabilities:['docket.submit']}),
@@ -52,5 +52,7 @@ export const MODULE_SEAMS={
  'award.project':{modules:['estimating','projects'],capability:'tender.award'},
  'project.ims':{modules:['projects','ims'],capability:'tender.award'},
  'docket.cost':{modules:['dockets','projects'],capability:'docket.approve'},
+ // Prestart/inspection evidence raises a Workshop defect (critical → safety hold). Forms stay immutable.
+ 'form.defect':{modules:['ims','workshop'],capability:'forms.submit'},
 } as const satisfies Record<string,{modules:readonly ModuleKey[];capability:Capability}>;
 export type SeamKey=keyof typeof MODULE_SEAMS;

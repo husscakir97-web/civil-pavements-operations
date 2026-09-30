@@ -8,6 +8,8 @@ import type {ModuleKey} from './modules';
 
 export const DOMAIN_EVENTS={
  'workshop.defect.created':{module:'workshop',publish:'workshop.edit',read:'workshop.view',entity:'work_order'},
+ // A defect reported through the form → Workshop seam by someone who completes forms (e.g. a plant operator).
+ 'workshop.defect.reported':{module:'workshop',publish:'forms.submit',read:'workshop.view',entity:'work_order'},
  'workshop.repair.recorded':{module:'workshop',publish:'workshop.edit',read:'workshop.view',entity:'work_order'},
  'workshop.verified':{module:'workshop',publish:'workshop.verify',read:'workshop.view',entity:'work_order'},
  'project.awarded':{module:'projects',publish:'tender.award',read:'project.view',entity:'project'},

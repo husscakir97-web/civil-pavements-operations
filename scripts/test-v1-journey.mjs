@@ -1370,6 +1370,59 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const hRej=hAud.find(r=>r.event_type==='corrective_action.rejected');const hRejAfter=typeof hRej.after_state==='string'?JSON.parse(hRej.after_state):hRej.after_state;assert.equal(hRejAfter.completedBy,S.user.id);assert.equal(hRejAfter.reviewerUserId,A.user.id,'verification events name completer and verifier');
  console.log('PASS 8B HSEQ chain: field-reported incident → gated investigation (explicit root-cause conclusion, controlled reopen) → multiple owned actions with derived project → server-stamped completion → independent verification (self-verify and non-verifier refused) → rejection keeps history → closure gates for incidents (rationale when no chain) and NCRs (all actions verified, final verification), dedicated closure/verify actions, Alpha/Bravo scope, tenant and nonexistent sources refused, forms seam, legacy rows, My Work verification queue, audit; action evidence bound to the exact action (other action/project/org/Forms/tenant documents refused, snapshots kept) and a real owner on every new action');
 
+ // ---------------------------------------------------------------- Scenario 8C: prestart → defect → safety hold → repair → verification → return to service
+ step='8C form defects';
+ await as('project_engineer');
+ const dPost=(b,cookie=C.cookie)=>call('/api/forms/defects','POST',b,cookie);
+ const dList=(id,cookie=C.cookie)=>call('/api/forms/defects?submissionId='+encodeURIComponent(id),'GET',undefined,cookie);
+ const dPlant=await json(await workshop({action:'asset',name:'Prestart roller',number:'PR-08',category:'Roller',registration:'PR08'}),200,'workshop asset');
+ const dOther=await json(await workshop({action:'asset',name:'Unrelated truck',number:'TR-09',category:'Truck',registration:'TR09'}),200);
+ // The operator completes a prestart on their assigned shift, recording the roller.
+ const dSub=(await json(await fSubmit({plant_safe:false,describe_defect:'Reverse alarm not sounding',rig:dPlant.id,tyres_ok:true,signed:{name:'Casey Field',confirmed:true}},C.cookie,'shift',shiftA),201,'field prestart on the assigned shift')).id;
+ const [[dSubBefore]]=await db.execute('SELECT responses_json FROM form_submissions WHERE organisation_id=? AND id=?',[memberA.organisation_id,dSub]);
+ let dView=await json(await dList(dSub),200);assert.deepEqual(dView.defects,[]);assert(dView.assets.some(a=>a.id===dPlant.id),'plant recorded on the form is offered');
+ // Validation: severity, answer and plant must be real and on this evidence.
+ await json(await dPost({submissionId:dSub,assetId:dPlant.id,fieldId:'plant_safe',title:'Reverse alarm',note:'No alarm'}),400,'severity required');
+ await json(await dPost({submissionId:dSub,assetId:dPlant.id,fieldId:'nope',title:'Reverse alarm',severity:'critical',note:'No alarm'}),400,'answer must be on the form');
+ await json(await dPost({submissionId:dSub,assetId:dOther.id,fieldId:'plant_safe',title:'Wrong plant',severity:'critical',note:'x'}),400,'plant not on the form refused');
+ await json(await dPost({submissionId:dSub,assetId:fPlantB,fieldId:'plant_safe',title:'Other org plant',severity:'critical',note:'x'}),400,'other-tenant plant refused');
+ // Critical defect → Workshop work order + immediate safety hold.
+ const dDef=await json(await dPost({submissionId:dSub,assetId:dPlant.id,fieldId:'plant_safe',title:'Reverse alarm not sounding',severity:'critical',note:'Found at prestart; roller parked'}),201,'operator raises a critical defect from the prestart');
+ assert.equal(dDef.safetyHold,true);
+ const [[dPlantRow]]=await db.execute('SELECT status,safety_hold FROM plant WHERE organisation_id=? AND id=?',[memberA.organisation_id,dPlant.id]);assert.equal(Number(dPlantRow.safety_hold),1);assert.equal(dPlantRow.status,'Out of service','critical defect takes the plant out of service');
+ const [[dOrder]]=await db.execute('SELECT status,severity,source_type,source_id,source_field,created_by FROM workshop_orders WHERE organisation_id=? AND id=?',[memberA.organisation_id,dDef.id]);
+ assert.deepEqual({...dOrder},{status:'open',severity:'critical',source_type:'form_submission',source_id:dSub,source_field:'plant_safe',created_by:C.user.id},'work order linked to the form answer');
+ await json(await dPost({submissionId:dSub,assetId:dPlant.id,fieldId:'plant_safe',title:'Again',severity:'major',note:'dup'}),409,'one defect per answer');
+ const dHeld=await json(await call('/api/delivery','POST',{kind:'shifts',check:true,record:{id:'',name:'Hold check',status:'Planned',metadata:{date:'2026-12-01',start:'07:00',finish:'17:00',assignments:[{category:'plant',resourceId:dPlant.id}]}},candidates:[]},A.cookie),200);
+ assert(dHeld.conflicts.some(c=>c.code==='RESOURCE_UNAVAILABLE'),'held plant cannot be scheduled');
+ // Scope: the submission's own access rules govern the seam.
+ assert((await json(await dList(dSub,R.cookie),200)).defects.some(d=>d.id===dDef.id),'engineer on the project sees shift defects');
+ await json(await dPost({submissionId:fSubA,assetId:fPlantA,fieldId:'plant_safe',title:'x',severity:'minor',note:'x'}),404,'field worker cannot raise from project-level evidence');
+ await json(await dList(fSubA),404,'field worker cannot read project-level evidence defects');
+ await json(await dPost({submissionId:dSub,assetId:dPlant.id,fieldId:'tyres_ok',title:'x',severity:'minor',note:'x'},B.cookie),404,'other tenant refused');
+ await json(await call('/api/platform/entitlements','PUT',{module:'workshop',status:'disabled'},A.cookie),200);
+ await json(await dPost({submissionId:dSub,assetId:dPlant.id,fieldId:'tyres_ok',title:'Tyre wear',severity:'minor',note:'x'}),409,'without Workshop the seam does not fire');
+ assert.equal((await json(await fGet('op=submission&id='+dSub,C.cookie),200)).submission.id,dSub,'the prestart is still stored without Workshop');
+ await json(await call('/api/platform/entitlements','PUT',{module:'workshop',status:'active'},A.cookie),200);
+ await json(await workshop({action:'defect',assetId:dPlant.id,title:'x',severity:'minor',note:'x'},C.cookie),403,'field workers still cannot use Workshop directly');
+ // Repair → independent verification → return to service.
+ await json(await workshop({action:'repair',id:dDef.id,revision:1,note:'Replaced reverse alarm',labourHours:1,parts:'Reverse alarm'}),200,'workshop records the repair');
+ await json(await workshop({action:'verify',id:dDef.id,revision:2,note:'Self check',accepted:true}),403,'repairer cannot verify');
+ await json(await workshop({action:'verify',id:dDef.id,revision:2,note:'Alarm audible at 10 m',accepted:false},W.cookie),200,'verifier rejects');
+ await json(await workshop({action:'repair',id:dDef.id,revision:3,note:'Rewired alarm',labourHours:1,parts:''}),200);
+ assert.equal(Number((await db.execute('SELECT safety_hold FROM plant WHERE organisation_id=? AND id=?',[memberA.organisation_id,dPlant.id]))[0][0].safety_hold),1,'hold stays until verified');
+ await json(await workshop({action:'verify',id:dDef.id,revision:4,note:'Alarm verified; returned to service',accepted:true},W.cookie),200,'independent verification');
+ const [[dBack]]=await db.execute('SELECT status,safety_hold FROM plant WHERE organisation_id=? AND id=?',[memberA.organisation_id,dPlant.id]);assert.equal(Number(dBack.safety_hold),0);assert.equal(dBack.status,'Available','returned to service');
+ dView=await json(await dList(dSub),200);assert.equal(dView.defects[0].status,'closed');assert.equal(dView.defects[0].safetyHold,false);
+ // A minor defect raises no hold; the form evidence is never modified.
+ const dMinor=await json(await dPost({submissionId:dSub,assetId:dPlant.id,fieldId:'tyres_ok',title:'Tyre wear',severity:'minor',note:'Monitor'}),201);assert.equal(dMinor.safetyHold,false);
+ assert.equal(Number((await db.execute('SELECT safety_hold FROM plant WHERE organisation_id=? AND id=?',[memberA.organisation_id,dPlant.id]))[0][0].safety_hold),0,'minor defect keeps plant available');
+ const [[dSubAfter]]=await db.execute('SELECT responses_json FROM form_submissions WHERE organisation_id=? AND id=?',[memberA.organisation_id,dSub]);assert.equal(dSubAfter.responses_json,dSubBefore.responses_json,'prestart evidence untouched');
+ const [dAud]=await db.execute('SELECT event_type FROM audit_log WHERE organisation_id=? AND entity_id IN (?,?)',[memberA.organisation_id,dSub,dDef.id]);const dEv=new Set(dAud.map(r=>r.event_type));
+ for(const e of ['form_defect.raised','workshop.defect','workshop.repair','workshop.verify'])assert(dEv.has(e),'audit: '+e);
+ const [[dEvent]]=await db.execute("SELECT COUNT(*) AS n FROM domain_events WHERE organisation_id=? AND entity_id=? AND event_type='workshop.defect.reported'",[memberA.organisation_id,dDef.id]);assert(Number(dEvent.n)>=1,'domain event published');
+ console.log('PASS 8C form defects: field prestart on assigned shift → critical defect linked to the answer → safety hold blocks scheduling → repair → self-verify refused → rejection → independent verification → returned to service; one defect per answer, only plant on the form, submission scope, tenant isolation, Workshop entitlement seam, minor defects keep plant available, evidence untouched, audit and domain event');
+
  step='H ABN';
  let reg1=await json(await call('/api/platform/abn?abn=51824753556&lookup=1','GET',undefined,A.cookie),200);assert.equal(reg1.registry.status,'found');assert.equal(reg1.registry.record.entityName,'ALPHA CIVIL PTY LTD');
  const nf=await json(await call('/api/platform/abn','POST',{abn:'53004085616'},A.cookie),404);assert.equal(nf.code,'ABN_NOT_FOUND');

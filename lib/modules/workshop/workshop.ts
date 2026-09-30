@@ -52,9 +52,7 @@ export async function mutate(input:z.infer<typeof workshopAction>){
   if(!asset)fail(404,'Asset or work order not found.');
   let id:string;
   if(input.action==='defect'){
-   id=uuid();
-   await exec("INSERT INTO workshop_orders (id,organisation_id,asset_id,title,severity,status,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,'open',1,?,?,?)",[id,org,assetId,input.title,input.severity,a.userId,now,now],conn);
-   if(input.severity==='critical')await exec("UPDATE plant SET status='Out of service',safety_hold=1,revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?",[now,org,assetId],conn);
+   id=await insertDefect(conn,{org,actorId:a.userId,assetId:assetId!,title:input.title,severity:input.severity,now});
   }else{
    id=input.id;
    const order=await one('SELECT * FROM workshop_orders WHERE organisation_id=? AND id=? FOR UPDATE',[org,id],conn);
@@ -79,6 +77,34 @@ export async function mutate(input:z.infer<typeof workshopAction>){
   await (await domainEventStatement(event,id,input.action==='defect'?'1':String(input.revision+1))).execute(conn);
   return {id};
  });
+}
+
+/**
+ * Opens a defect work order on a locked asset. A critical defect places the asset on safety hold
+ * (Out of service) until every critical defect is repaired and independently verified.
+ * Callers lock the asset row first and write the entry, audit and domain event.
+ */
+async function insertDefect(conn:Conn,d:{org:string;actorId:string;assetId:string;title:string;severity:'minor'|'major'|'critical';now:string;source?:{type:string;id:string;field:string}}){
+ const id=uuid();
+ await exec("INSERT INTO workshop_orders (id,organisation_id,asset_id,title,severity,status,source_type,source_id,source_field,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,'open',?,?,?,1,?,?,?)",[id,d.org,d.assetId,d.title,d.severity,d.source?.type??null,d.source?.id??null,d.source?.field??null,d.actorId,d.now,d.now],conn);
+ if(d.severity==='critical')await exec("UPDATE plant SET status='Out of service',safety_hold=1,revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?",[d.now,d.org,d.assetId],conn);
+ return id;
+}
+/**
+ * Seam entry (lib/seams/form-defects.ts): raise a defect from source evidence the caller has already
+ * authorised. Same rules as a Workshop-raised defect; the source link is recorded on the order.
+ */
+export async function raiseSourcedDefect(conn:Conn,d:{org:string;actorId:string;assetId:string;title:string;severity:'minor'|'major'|'critical';note:string;source:{type:string;id:string;field:string}}){
+ const now=nowIso();
+ const asset=await one('SELECT id FROM plant WHERE organisation_id=? AND id=? FOR UPDATE',[d.org,d.assetId],conn);
+ if(!asset)fail(404,'Asset not found.');
+ const existing=await one('SELECT id,status FROM workshop_orders WHERE organisation_id=? AND source_type=? AND source_id=? AND source_field=?',[d.org,d.source.type,d.source.id,d.source.field],conn);
+ if(existing)fail(409,'A defect has already been raised for this answer.');
+ const id=await insertDefect(conn,{...d,now});
+ await exec('INSERT INTO workshop_entries (id,organisation_id,order_id,kind,note,labour_hours,parts,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)',[uuid(),d.org,id,'defect',d.note,null,null,d.actorId,now],conn);
+ await audit({event:'workshop.defect',entityType:'work_order',entityId:id,summary:`Defect raised from ${d.source.type.replace('_',' ')}`,after:{assetId:d.assetId,severity:d.severity,source:d.source}},conn);
+ await (await domainEventStatement('workshop.defect.reported',id,'1')).execute(conn);
+ return id;
 }
 
 async function hasSafetyHold(org:string,assetId:string,conn:Conn){

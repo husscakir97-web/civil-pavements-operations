@@ -6,7 +6,8 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { REPO, FINISH, issueHash, validateTask, approval, gate, checkTool, collectChanges,
-  dockerArgs, runChecks, publish, finish } = require('./claude-approved-task.cjs');
+  dockerArgs, runChecks, publish, finish, EXPECTED_ASSERTION, appendAudit, readAudit,
+  auditReport, verifyCompletion } = require('./claude-approved-task.cjs');
 const task = { summary: 'Scoped correction', request: 'Fix the message', acceptance: 'Regressions pass',
   allowed_paths: ['components/example.tsx', 'scripts/test-example.cjs'] };
 const body = '\x60\x60\x60json\n' + JSON.stringify(task) + '\n\x60\x60\x60';
@@ -118,7 +119,7 @@ test('runtime path guard rejects hardlinks', () => {
 test('test failure stops publication before ANY branch/PR write', async () => {
   const s = fixture(), m = mock();
   try {
-    await assert.rejects(finish(m.api, s, () => { throw new Error('regression failed'); }), /regression failed/);
+    await assert.rejects(finish(m.api, s, () => { throw new Error('regression failed'); }), /Isolated checks failed/);
     assert.equal(m.calls.filter(c => c.method === 'POST').length, 0);
   } finally { fs.rmSync(s.root, { recursive: true, force: true }); }
 });
@@ -259,5 +260,95 @@ test('Linux CI: actual isolated runner executes lint, typecheck and the regressi
     const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
     // No GITHUB_ACTIONS is forwarded, so the nested suite skips Docker tests.
     runChecks({ root, tracked, task: { allowed_paths: [] } }, execFileSync, fs.readFileSync(imageFile, 'utf8').trim());
+    const probeRoot = path.join(directory, 'negative-probe');
+    fs.mkdirSync(path.join(probeRoot, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(probeRoot, 'package.json'), JSON.stringify({ scripts: {
+      lint: 'node -e ""', typecheck: 'node -e ""', test: 'node scripts/test-planning.cjs' } }));
+    fs.writeFileSync(path.join(probeRoot, 'scripts/test-planning.cjs'), EXPECTED_ASSERTION);
+    assert.throws(() => runChecks({ root: probeRoot, tracked: ['package.json', 'scripts/test-planning.cjs'],
+      task: { allowed_paths: [] } }, execFileSync, fs.readFileSync(imageFile, 'utf8').trim()), error => error.expectedAssertion === true);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('audit exports only fixed events, hashes and validated public identity; rejects injected fields', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-audit-'));
+  try {
+    appendAudit(dir, 'scope_denied_probe');
+    appendAudit(dir, 'checks_failed_expected_assertion', 'b'.repeat(64));
+    const report = auditReport(dir, { ...state, secret: 'DO_NOT_EXPORT', task: { request: 'PRIVATE_PROMPT' } });
+    assert.doesNotMatch(JSON.stringify(report), /DO_NOT_EXPORT|PRIVATE_PROMPT|request|secret/);
+    assert.deepEqual(report.events.map(x => x.event), ['scope_denied_probe', 'checks_failed_expected_assertion']);
+    assert.throws(() => appendAudit(dir, 'secret=DO_NOT_EXPORT'));
+    assert.throws(() => appendAudit(dir, 'checks_failed', 'DO_NOT_EXPORT'));
+    fs.appendFileSync(path.join(dir, 'audit.jsonl'), JSON.stringify({ event: 'checks_failed', digest: null, stdout: 'DO_NOT_EXPORT' }) + '\n');
+    assert.throws(() => auditReport(dir, state), /Invalid audit/);
+    fs.writeFileSync(path.join(dir, 'audit.jsonl'), 'not JSON');
+    assert.throws(() => readAudit(dir));
+    fs.writeFileSync(path.join(dir, 'audit.jsonl'), 'x'.repeat(16385));
+    assert.throws(() => readAudit(dir), /Invalid audit/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('real hook denial produces exportable safe probe receipt without echoing tool input', () => {
+  const s = fixture();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-audit-hook-'));
+  try {
+    const helper = path.join(dir, 'claude-approved-task.cjs');
+    fs.copyFileSync(path.join(__dirname, 'claude-approved-task.cjs'), helper);
+    fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(s));
+    const input = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: {
+      file_path: 'scripts/test-claude-denial-probe.cjs', content: 'DO_NOT_EXPORT' } });
+    assert.throws(() => execFileSync(process.execPath, [helper, 'hook'], { input, stdio: 'pipe' }), error => error.status === 2);
+    assert.ok(!fs.existsSync(path.join(s.root, 'scripts/test-claude-denial-probe.cjs')));
+    const output = execFileSync(process.execPath, [helper, 'audit-export'], { encoding: 'utf8', env: { ...process.env, GITHUB_STEP_SUMMARY: '' } });
+    assert.match(output, /CLAUDE_APPROVED_AUDIT=/);
+    assert.match(output, /scope_denied_probe/);
+    assert.doesNotMatch(output, /DO_NOT_EXPORT|file_path|tool_input/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(s.root, { recursive: true, force: true }); }
+});
+
+test('failed checks audit their digest, redact errors and never publish; success records checked publication', async () => {
+  const s = fixture();
+  try {
+    const m = mock(); const events = [];
+    await assert.rejects(finish(m.api, s, () => { throw Object.assign(new Error('DO_NOT_EXPORT'), { expectedAssertion: true }); },
+      (event, digest) => events.push({ event, digest })), /Isolated checks failed/);
+    assert.deepEqual(events.map(x => x.event), ['checks_started', 'checks_failed_expected_assertion']);
+    assert.equal(events[0].digest, events[1].digest);
+    assert.match(events[0].digest, /^[a-f0-9]{64}$/);
+    assert.ok(!m.calls.some(x => x.method === 'POST'));
+    assert.doesNotMatch(JSON.stringify(events), /DO_NOT_EXPORT/);
+    events.length = 0;
+    await finish(m.api, s, () => {}, (event, digest) => events.push({ event, digest }));
+    assert.deepEqual(events.map(x => x.event), ['checks_started', 'checks_passed', 'published']);
+  } finally { fs.rmSync(s.root, { recursive: true, force: true }); }
+});
+
+test('test marker requires actual failing status, npm-test stage, assertion error and matching source', () => {
+  const s = fixture();
+  s.tracked = ['scripts/test-planning.cjs']; s.task = { allowed_paths: [] };
+  const file = path.join(s.root, 'scripts/test-planning.cjs');
+  const stderr = '\nAssertionError [ERR_ASSERTION]: CLAUDE_ACCEPTANCE_EXPECTED_FAILURE\nCLAUDE_CHECK_STAGE_FAILED=npm-test\nDO_NOT_EXPORT\n';
+  try {
+    fs.writeFileSync(file, EXPECTED_ASSERTION);
+    for (const [status, output, expected] of [[1, stderr, true], [2, stderr, false], [1, 'DO_NOT_EXPORT', false],
+      [1, stderr.replace('CLAUDE_CHECK_STAGE_FAILED=npm-test', ''), false]]) {
+      assert.throws(() => runChecks(s, () => { throw Object.assign(new Error('DO_NOT_EXPORT'), { status, stderr: output }); }, 'sha256:' + 'a'.repeat(64)),
+        error => error.expectedAssertion === expected && !error.message.includes('DO_NOT_EXPORT'));
+    }
+    fs.writeFileSync(file, '// no failure');
+    assert.throws(() => runChecks(s, () => { throw Object.assign(new Error('private'), { status: 1, stderr }); }, 'sha256:' + 'a'.repeat(64)), error => error.expectedAssertion === false);
+  } finally { fs.rmSync(s.root, { recursive: true, force: true }); }
+});
+
+test('completion rejects empty/skipped conclusions, missing receipts, failed outcomes and unmatched audit', () => {
+  const receipt = { url: 'https://github.com/' + REPO + '/pull/7', sha: 'c'.repeat(40) };
+  const digest = require('node:crypto').createHash('sha256').update(JSON.stringify(receipt)).digest('hex');
+  const report = { publication: receipt, events: [{ event: 'checks_passed', digest: 'b'.repeat(64) }, { event: 'published', digest }] };
+  verifyCompletion('success', 'success', report);
+  for (const conclusion of ['', undefined, 'skipped', 'failure']) assert.throws(() => verifyCompletion('success', conclusion, report));
+  assert.throws(() => verifyCompletion('failure', 'success', report));
+  assert.throws(() => verifyCompletion('success', 'success', { ...report, publication: null }));
+  assert.throws(() => verifyCompletion('success', 'success', { ...report, events: [] }));
+  assert.throws(() => verifyCompletion('success', 'success', { ...report, publication: { ...receipt, secret: 'private' } }));
 });

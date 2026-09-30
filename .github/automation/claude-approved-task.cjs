@@ -10,6 +10,43 @@ const PREFIX = '[claude-task]';
 const HELPER = '/tmp/claude-approved/claude-approved-task.cjs';
 const FINISH = '/usr/bin/node ' + HELPER + ' finish';
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+const EXPECTED_ASSERTION = "require('node:assert/strict').fail('CLAUDE_ACCEPTANCE_EXPECTED_FAILURE');\n";
+const AUDIT_EVENTS = new Set(['scope_denied', 'scope_denied_probe', 'checks_started',
+  'checks_failed', 'checks_failed_expected_assertion', 'checks_passed', 'published']);
+function readAudit(directory) {
+  const file = path.join(directory, 'audit.jsonl');
+  if (!fs.existsSync(file)) return [];
+  if (fs.statSync(file).size > 16384) throw new Error('Invalid audit');
+  const rows = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(s => JSON.parse(s));
+  if (rows.length > 64 || rows.some(row => Object.keys(row).sort().join(',') !== 'digest,event' ||
+      !AUDIT_EVENTS.has(row.event) || !(row.digest === null || /^[a-f0-9]{64}$/.test(row.digest)))) throw new Error('Invalid audit');
+  return rows;
+}
+function appendAudit(directory, event, digest = null) {
+  const rows = readAudit(directory);
+  if (rows.length >= 64 || !AUDIT_EVENTS.has(event) || !(digest === null || /^[a-f0-9]{64}$/.test(digest))) throw new Error('Invalid audit');
+  fs.appendFileSync(path.join(directory, 'audit.jsonl'), JSON.stringify({ event, digest }) + '\n', { mode: 0o600 });
+}
+function publicationReceipt(receipt) {
+  if (!receipt || Object.keys(receipt).sort().join(',') !== 'sha,url' ||
+      typeof receipt.sha !== 'string' || !/^[a-f0-9]{40}$/.test(receipt.sha) ||
+      typeof receipt.url !== 'string' || !new RegExp('^https://github\\.com/' + REPO + '/pull/[1-9][0-9]*$').test(receipt.url)) throw new Error('Invalid publication receipt');
+  return receipt;
+}
+function auditReport(directory, state) {
+  if (!Number.isSafeInteger(state.number) || state.number < 1 || !/^[a-f0-9]{64}$/.test(state.approvedHash) ||
+      !/^[a-f0-9]{40}$/.test(state.base)) throw new Error('Invalid audit identity');
+  const file = path.join(directory, 'published.json');
+  return { schema: 1, issue_number: state.number, approval_hash: state.approvedHash, base_sha: state.base,
+    events: readAudit(directory), publication: fs.existsSync(file) ? publicationReceipt(JSON.parse(fs.readFileSync(file, 'utf8'))) : null };
+}
+function verifyCompletion(outcome, conclusion, report) {
+  if (outcome !== 'success' || conclusion !== 'success') throw new Error('Claude did not conclude successfully');
+  const receipt = publicationReceipt(report.publication);
+  const last = report.events.slice(-2);
+  if (last.length !== 2 || last[0].event !== 'checks_passed' || last[1].event !== 'published' ||
+      last[1].digest !== hash(JSON.stringify(receipt))) throw new Error('Missing checked publication evidence');
+}
 function issueHash(issue) {
   return hash(JSON.stringify({ repository: REPO, number: issue.number, title: issue.title,
     body: issue.body || '', updated_at: issue.updated_at }));
@@ -95,7 +132,7 @@ function checkTool(input, state, finished = false) {
   if (args.file_path.includes('..') || /[\r\n\0]/.test(args.file_path)) throw new Error('Unsafe path');
   const reading = tool === 'Read';
   if (reading ? !state.tracked.includes(relative) && !state.task.allowed_paths.includes(relative) :
-      finished || !state.task.allowed_paths.includes(relative)) throw new Error('Path outside approved scope or publication complete');
+      finished || !state.task.allowed_paths.includes(relative)) throw Object.assign(new Error('Path outside approved scope or publication complete'), { code: 'SCOPE_DENIED' });
   if (reading && relative.split('/').some(p => p.startsWith('.') || /\.(pem|key)$/i.test(p))) throw new Error('Private/configuration path forbidden');
   safeFile(state.root, relative, !reading);
 }
@@ -121,7 +158,7 @@ function dockerArgs(snapshot, image) {
     '--user=1000:1000', '--tmpfs=/tmp:rw,nosuid,nodev,size=2g,mode=1777',
     '--mount', 'type=bind,source=' + snapshot + ',target=/source,readonly',
     '--env=HOME=/tmp', '--env=CI=true', image, '/bin/sh', '-ec',
-    'mkdir /tmp/project; cp -R /source/. /tmp/project/; cd /tmp/project; ln -s /deps/node_modules node_modules; npm run lint; npm run typecheck; npm test'];
+    'mkdir /tmp/project; cp -R /source/. /tmp/project/; cd /tmp/project; ln -s /deps/node_modules node_modules; npm run lint; npm run typecheck; npm test || { code=$?; printf "\\nCLAUDE_CHECK_STAGE_FAILED=npm-test\\n" >&2; exit "$code"; }'];
 }
 function runChecks(state, run = execFileSync, image = fs.readFileSync(path.join(__dirname, 'test-image.txt'), 'utf8').trim()) {
   const snapshot = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-checks-'));
@@ -141,6 +178,14 @@ function runChecks(state, run = execFileSync, image = fs.readFileSync(path.join(
       timeout: 600000, maxBuffer: 8 * 1024 * 1024, encoding: 'utf8',
       env: { PATH: '/usr/bin:/bin', HOME: '/tmp' }
     });
+  } catch (error) {
+    const probe = path.join(snapshot, 'scripts/test-planning.cjs');
+    const stderr = String(error.stderr || '');
+    const expectedAssertion = error.status === 1 && fs.existsSync(probe) &&
+      fs.readFileSync(probe, 'utf8').startsWith(EXPECTED_ASSERTION) &&
+      /(?:^|\n)AssertionError \[ERR_ASSERTION\]: CLAUDE_ACCEPTANCE_EXPECTED_FAILURE\r?\n/.test(stderr) &&
+      /(?:^|\n)CLAUDE_CHECK_STAGE_FAILED=npm-test\r?\n/.test(stderr);
+    throw Object.assign(new Error('Isolated checks failed'), { expectedAssertion });
   } finally { fs.rmSync(snapshot, { recursive: true, force: true }); }
 }
 async function maybe(api, suffix) {
@@ -194,13 +239,21 @@ async function publish(api, state, changes) {
   }
   return pr;
 }
-async function finish(api, state, checks = runChecks) {
+async function finish(api, state, checks = runChecks, audit = () => {}) {
   await approval(api, state.number, state.approvedHash, state.actor);
   const changes = collectChanges(state);
-  checks(state); // No branch/PR writes if any real regression fails.
+  const digest = hash(JSON.stringify(changes));
+  audit('checks_started', digest);
+  try { checks(state); } catch (error) {
+    audit(error.expectedAssertion === true ? 'checks_failed_expected_assertion' : 'checks_failed', digest);
+    throw new Error('Isolated checks failed');
+  } // No branch/PR writes if any real regression fails.
   const after = collectChanges(state);
   if (JSON.stringify(changes) !== JSON.stringify(after)) throw new Error('Source changed during checks');
-  return publish(api, state, changes);
+  audit('checks_passed', digest);
+  const pr = await publish(api, state, changes);
+  audit('published', hash(JSON.stringify({ url: pr.html_url, sha: pr.head.sha })));
+  return pr;
 }
 function githubApi(token) {
   if (!token) throw new Error('Official App token unavailable inside action; no fallback');
@@ -224,12 +277,26 @@ async function main() {
   }
   const state = JSON.parse(fs.readFileSync(path.join(__dirname, 'state.json'), 'utf8'));
   if (mode === 'hook') {
-    checkTool(JSON.parse(fs.readFileSync(0, 'utf8')), state, fs.existsSync(path.join(__dirname, 'published.json')));
+    const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+    try { checkTool(input, state, fs.existsSync(path.join(__dirname, 'published.json'))); }
+    catch (error) {
+      if (error.code === 'SCOPE_DENIED') {
+        const probe = input.tool_name === 'Write' && path.resolve(state.root, input.tool_input.file_path) === path.join(state.root, 'scripts/test-claude-denial-probe.cjs');
+        appendAudit(__dirname, probe ? 'scope_denied_probe' : 'scope_denied');
+      }
+      throw error;
+    }
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } }));
   } else if (mode === 'finish') {
-    const pr = await finish(githubApi(process.env.GH_TOKEN), state);
+    const pr = await finish(githubApi(process.env.GH_TOKEN), state, runChecks, (event, digest) => appendAudit(__dirname, event, digest));
     fs.writeFileSync(path.join(__dirname, 'published.json'), JSON.stringify({ url: pr.html_url, sha: pr.head.sha }));
     console.log('Draft PR: ' + pr.html_url);
+  } else if (mode === 'audit-export') {
+    const report = JSON.stringify(auditReport(__dirname, state));
+    console.log('CLAUDE_APPROVED_AUDIT=' + report);
+    if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '\n```json\n' + report + '\n```\n');
+  } else if (mode === 'verify-completion') {
+    verifyCompletion(process.env.CLAUDE_STEP_OUTCOME, process.env.CLAUDE_STEP_CONCLUSION, auditReport(__dirname, state));
   } else throw new Error('Unknown helper mode');
 }
 if (require.main === module) main().catch(() => {
@@ -238,4 +305,5 @@ if (require.main === module) main().catch(() => {
   process.exitCode = process.argv[2] === 'hook' ? 2 : 1;
 });
 module.exports = { REPO, FINISH, issueHash, validateTask, safeFile, gate, approval, checkTool,
-  collectChanges, dockerArgs, runChecks, publish, finish };
+  collectChanges, dockerArgs, runChecks, publish, finish, EXPECTED_ASSERTION,
+  readAudit, appendAudit, auditReport, publicationReceipt, verifyCompletion };

@@ -1,6 +1,7 @@
 import {z} from 'zod';
 const nullableId=z.string().max(191).nullable().optional().or(z.literal('').transform(()=>null));
 export const tenderInput=z.object({
+ businessUnitId:z.string().max(191).nullable().optional(),
  opportunityId:z.string().max(191).nullable().optional(),
  title:z.string().trim().max(255).optional(),
  clientName:z.string().trim().max(255).nullable().optional(),

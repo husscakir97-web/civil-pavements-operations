@@ -22,7 +22,7 @@
     "test:mysql": "node --env-file-if-exists=.env scripts/test-mysql.mjs",
     "test:fresh": "node --env-file-if-exists=.env scripts/test-fresh-start.mjs",
     "test:v1": "node --env-file-if-exists=.env scripts/test-v1-journey.mjs",
-    "test:backfill": "node --env-file-if-exists=.env scripts/test-resource-backfill.mjs && node --env-file-if-exists=.env scripts/test-document-backfill.mjs",
+    "test:backfill": "node --env-file-if-exists=.env scripts/test-resource-backfill.mjs && node --env-file-if-exists=.env scripts/test-document-backfill.mjs && node --env-file-if-exists=.env scripts/test-business-unit-backfill.mjs",
     "knowledge:import-platform": "node --env-file-if-exists=.env scripts/import-platform-knowledge.mjs"
   },
   "dependencies": {

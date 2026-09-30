@@ -12,6 +12,7 @@ import {readinessPercent} from '@/lib/platform/finance';
 import {imsBlockers} from '@/lib/ims-readiness';
 import {safeJson} from '@/lib/estimates-db';
 import {resolveClientContext} from '@/lib/platform/clients';
+import {resolveDivisionInput,resolveDivisionChange,ensureDefaultDivision} from '@/lib/platform/business-units';
 import {assertProjectAccess,projectFilter} from '@/lib/platform/project-access';
 import {saveLocation,loadLocations,locationInput} from '@/lib/platform/locations';
 import type {LocationInput} from '@/lib/v1/location';
@@ -42,7 +43,7 @@ export function projectMoney(p:Row){
 
 export function presentProject(p:Row,extra:Row={}){
  const meta=safeJson<Row>(p.metadata,{}),money=can(actor().role,'commercial.view');
- const out:Row={id:p.id,name:p.name,projectNumber:p.project_number,clientName:p.client_name??meta.client??null,clientId:p.client_id??null,siteId:p.site_id??null,contactId:p.contact_id??null,stage:stageOf(p),stageLabel:stateLabel('project',stageOf(p)),legacyStatus:p.status,projectManagerUserId:p.project_manager_user_id,projectManagerName:p.project_manager_name??meta.projectManager??null,startDate:p.start_date??meta.startDate??null,practicalCompletionDate:p.practical_completion_date,finishDate:p.finish_date,siteAddress:p.site_address??meta.site??null,contractNumber:p.contract_number,contractType:p.contract_type,retentionPct:p.retention_pct,retentionEnabled:Boolean(Number(p.retention_enabled)),retentionCapAmount:p.retention_cap_amount==null?null:Number(p.retention_cap_amount),paymentTermsDays:p.payment_terms_days,defectsMonths:p.defects_months,scope:p.scope??meta.scope??null,assumptions:p.assumptions,exclusions:p.exclusions,clientRequirements:p.client_requirements,mobilisationNotes:p.mobilisation_notes,sourceTenderId:p.source_tender_id,sourceEstimateId:p.source_estimate_id??meta.sourceEstimateId??null,sourceEstimateRevisionId:p.source_estimate_revision_id??meta.sourceRevisionId??null,closedAt:p.closed_at,revision:Number(p.revision||1),createdAt:p.created_at,updatedAt:p.updated_at,...extra};
+ const out:Row={id:p.id,name:p.name,projectNumber:p.project_number,clientName:p.client_name??meta.client??null,clientId:p.client_id??null,businessUnitId:p.business_unit_id??null,siteId:p.site_id??null,contactId:p.contact_id??null,stage:stageOf(p),stageLabel:stateLabel('project',stageOf(p)),legacyStatus:p.status,projectManagerUserId:p.project_manager_user_id,projectManagerName:p.project_manager_name??meta.projectManager??null,startDate:p.start_date??meta.startDate??null,practicalCompletionDate:p.practical_completion_date,finishDate:p.finish_date,siteAddress:p.site_address??meta.site??null,contractNumber:p.contract_number,contractType:p.contract_type,retentionPct:p.retention_pct,retentionEnabled:Boolean(Number(p.retention_enabled)),retentionCapAmount:p.retention_cap_amount==null?null:Number(p.retention_cap_amount),paymentTermsDays:p.payment_terms_days,defectsMonths:p.defects_months,scope:p.scope??meta.scope??null,assumptions:p.assumptions,exclusions:p.exclusions,clientRequirements:p.client_requirements,mobilisationNotes:p.mobilisation_notes,sourceTenderId:p.source_tender_id,sourceEstimateId:p.source_estimate_id??meta.sourceEstimateId??null,sourceEstimateRevisionId:p.source_estimate_revision_id??meta.sourceRevisionId??null,closedAt:p.closed_at,revision:Number(p.revision||1),createdAt:p.created_at,updatedAt:p.updated_at,...extra};
  if(money)Object.assign(out,projectMoney(p));
  return out;
 }
@@ -161,7 +162,7 @@ export async function updateProject(id:string,revision:number,input:Row){
 }
 
 /** Manual project (Projects-only or IMS-only customers, no tender/estimate). Baseline recorded separately. */
-export async function createProject(input:{name:string;clientName?:string|null;clientId?:string|null;siteId?:string|null;contactId?:string|null;startDate?:string|null;siteAddress?:string|null}){
+export async function createProject(input:{businessUnitId?:string|null;name:string;clientName?:string|null;clientId?:string|null;siteId?:string|null;contactId?:string|null;startDate?:string|null;siteAddress?:string|null}){
  // Project-scoped roles work inside projects they are assigned to; creating new ones is organisation-level.
  const a=actor();if(!can(a.role,'project.edit')||!can(a.role,'project.all.view'))fail(403,'You are not authorised to create projects.');
  if(!input.name?.trim())fail(400,'A project name is required.');
@@ -169,10 +170,12 @@ export async function createProject(input:{name:string;clientName?:string|null;c
  await tx(async conn=>{
   // A chosen client/site wins over typed text; the text is kept as the project's snapshot.
   const ctx=await resolveClientContext(input.clientId,input.siteId,conn,input.contactId);
+  // A chosen active division wins; otherwise the organisation's default division (single-division companies never choose).
+  const businessUnitId=(await resolveDivisionInput(input.businessUnitId,conn))??await ensureDefaultDivision(a.organisationId,conn);
   input={...input,clientName:ctx.clientName??input.clientName??null,siteAddress:input.siteAddress||ctx.siteLabel||null};
   const now=nowIso(),n=await one<{n:number}>('SELECT COUNT(*) AS n FROM jobs WHERE organisation_id=? AND project_number IS NOT NULL',[a.organisationId],conn);
   const number=`PRJ-${String(Number(n?.n||0)+1).padStart(4,'0')}`;
-  await exec('INSERT INTO jobs (id,organisation_id,name,status,metadata,created_at,project_number,client_name,stage,start_date,site_address,client_id,site_id,contact_id,revision,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,a.organisationId,input.name.trim(),'Planning',JSON.stringify({client:input.clientName||'',site:input.siteAddress||'',startDate:input.startDate||''}),now,number,input.clientName||null,'setup',input.startDate||null,input.siteAddress||null,ctx.clientId,ctx.siteId,ctx.contactId,1,now],conn);
+  await exec('INSERT INTO jobs (id,organisation_id,name,status,metadata,created_at,project_number,client_name,stage,start_date,site_address,client_id,site_id,contact_id,revision,updated_at,business_unit_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,a.organisationId,input.name.trim(),'Planning',JSON.stringify({client:input.clientName||'',site:input.siteAddress||'',startDate:input.startDate||''}),now,number,input.clientName||null,'setup',input.startDate||null,input.siteAddress||null,ctx.clientId,ctx.siteId,ctx.contactId,1,now,businessUnitId],conn);
   await ensureDefaultChecklist(conn,id,'readiness');
   await audit({event:'project.created',entityType:'project',entityId:id,projectId:id,summary:`${number} ${input.name} created manually (no estimate baseline)`,after:input},conn);
  });
@@ -186,6 +189,22 @@ const DEFAULTS:Record<'readiness'|'closeout',Array<[string,string]>>={
 export async function ensureDefaultChecklist(conn:PoolConnection,projectId:string,phase:'readiness'|'closeout'){
  const a=actor(),now=nowIso();
  for(const [category,title] of DEFAULTS[phase])await exec("INSERT INTO project_checklist_items (id,organisation_id,project_id,phase,category,title,mandatory,status,source,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,1,'open','system',1,?,?,?) ON DUPLICATE KEY UPDATE id=id",[uuid(),a.organisationId,projectId,phase,category,title,a.userId,now,now],conn);
+}
+
+/** Moves a project (and, so they keep following it, its shifts) to another active division. History stays in the audit trail. */
+export async function setProjectDivision(id:string,businessUnitId:unknown){
+ const a=actor();if(!can(a.role,'project.edit'))fail(403,'You are not authorised to edit projects.');
+ return tx(async conn=>{
+  const p=await loadProject(id,conn,true);
+  if(stageOf(p)==='closed')fail(409,'This project is closed. Reopen it before making changes.');
+  const to=(await resolveDivisionChange(businessUnitId,p.business_unit_id,conn))??await ensureDefaultDivision(a.organisationId,conn);
+  if(to===p.business_unit_id)return {id,businessUnitId:to,changed:false};
+  const now=nowIso();
+  await exec('UPDATE jobs SET business_unit_id=?,revision=COALESCE(revision,1)+1,updated_at=? WHERE organisation_id=? AND id=?',[to,now,a.organisationId,id],conn);
+  await exec('UPDATE shifts SET business_unit_id=? WHERE organisation_id=? AND project_id=?',[to,a.organisationId,id],conn);
+  await audit({event:'project.division_changed',entityType:'project',entityId:id,projectId:id,summary:'Project division changed',before:{businessUnitId:p.business_unit_id??null},after:{businessUnitId:to}},conn);
+  return {id,businessUnitId:to,changed:true};
+ });
 }
 
 export async function recordManualBaseline(id:string,input:{contractValue:number;labour:number;plant:number;material:number;subcontract:number;other:number;indirect:number;reason:string}){

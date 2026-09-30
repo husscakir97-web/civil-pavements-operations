@@ -144,7 +144,9 @@ export const estimates=mysqlTable('estimates',{
  approvedRevisionId:varchar('approved_revision_id',{length:191}),
  tenderId:varchar('tender_id',{length:191}),
  updatedAt:varchar('updated_at',{length:40}),
-},t=>[index('idx_estimates_org').on(t.organisationId),index('idx_estimates_org_tender').on(t.organisationId,t.tenderId)]);
+ // 0023: owning division; inherited from the tender, NULL reads as the default division.
+ businessUnitId:varchar('business_unit_id',{length:191}),
+},t=>[index('idx_estimates_business_unit').on(t.organisationId,t.businessUnitId),index('idx_estimates_org').on(t.organisationId),index('idx_estimates_org_tender').on(t.organisationId,t.tenderId)]);
 
 export const extractionProfiles=mysqlTable('extraction_profiles',{
  id:varchar('id',{length:191}).primaryKey(),
@@ -252,6 +254,8 @@ export const jobs=mysqlTable('jobs',{
  finishDate:varchar('finish_date',{length:10}),
  siteAddress:text('site_address'),
  // 0017: project-specific location override (otherwise the project uses its client site's location).
+ // 0023: owning division (NULL reads as the organisation's default division).
+ businessUnitId:varchar('business_unit_id',{length:191}),
  locationId:varchar('location_id',{length:191}),
  contractNumber:varchar('contract_number',{length:80}),
  contractType:varchar('contract_type',{length:80}),
@@ -276,7 +280,7 @@ export const jobs=mysqlTable('jobs',{
  clientId:varchar('client_id',{length:191}),
  siteId:varchar('site_id',{length:191}),
  contactId:varchar('contact_id',{length:191}),
-},t=>[index('idx_jobs_org_client').on(t.organisationId,t.clientId),index('idx_jobs_org').on(t.organisationId),index('idx_jobs_org_stage').on(t.organisationId,t.stage),uniqueIndex('idx_jobs_source_tender').on(t.organisationId,t.sourceTenderId),uniqueIndex('idx_jobs_source_estimate').on(t.organisationId,t.sourceEstimateId)]);
+},t=>[index('idx_jobs_business_unit').on(t.organisationId,t.businessUnitId),index('idx_jobs_org_client').on(t.organisationId,t.clientId),index('idx_jobs_org').on(t.organisationId),index('idx_jobs_org_stage').on(t.organisationId,t.stage),uniqueIndex('idx_jobs_source_tender').on(t.organisationId,t.sourceTenderId),uniqueIndex('idx_jobs_source_estimate').on(t.organisationId,t.sourceEstimateId)]);
 
 export const opportunities=mysqlTable('opportunities',{
  id:varchar('id',{length:191}).primaryKey(),
@@ -394,6 +398,8 @@ export const shifts=mysqlTable('shifts',{
  createdAt:longtext('created_at').notNull(),
 
  // V1 typed columns (0004). Assignments live in shift_assignments.
+ // 0023: inherited from the project when the shift is synced.
+ businessUnitId:varchar('business_unit_id',{length:191}),
  projectId:varchar('project_id',{length:191}),
  shiftDate:varchar('shift_date',{length:10}),
  startTime:varchar('start_time',{length:5}),
@@ -411,7 +417,7 @@ export const shifts=mysqlTable('shifts',{
  updatedAt:varchar('updated_at',{length:40}),
  // Set when the typed columns were last derived from legacy metadata (backfill/dual-write).
  legacySyncedAt:varchar('legacy_synced_at',{length:40}),
-},t=>[index('idx_shifts_org').on(t.organisationId),index('idx_shifts_org_date').on(t.organisationId,t.shiftDate),index('idx_shifts_org_project').on(t.organisationId,t.projectId)]);
+},t=>[index('idx_shifts_business_unit').on(t.organisationId,t.businessUnitId),index('idx_shifts_org').on(t.organisationId),index('idx_shifts_org_date').on(t.organisationId,t.shiftDate),index('idx_shifts_org_project').on(t.organisationId,t.projectId)]);
 
 export const subcontractors=mysqlTable('subcontractors',{
  id:varchar('id',{length:191}).primaryKey(),

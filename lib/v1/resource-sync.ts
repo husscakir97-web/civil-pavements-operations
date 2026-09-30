@@ -53,6 +53,8 @@ export function shiftStatements(org:string,row:LegacyRow,known:{jobIds:Set<strin
  const m=mapShift(row,known);
  const statements:Stmt[]=[
   {sql:`UPDATE shifts SET ${set(m.columns)},legacy_synced_at=?,updated_at=? WHERE organisation_id=? AND id=?`,params:[...Object.values(m.columns),now,now,org,row.id]},
+  // A shift inherits its project's division (NULL when it has no project). Shifts have no override of their own.
+  {sql:'UPDATE shifts SET business_unit_id=(SELECT j.business_unit_id FROM jobs j WHERE j.organisation_id=? AND j.id=?) WHERE organisation_id=? AND id=?',params:[org,m.columns.project_id??null,org,row.id]},
   {sql:"DELETE FROM shift_assignments WHERE organisation_id=? AND shift_id=? AND source='planner'",params:[org,row.id]},
   ...m.assignments.map(a=>({sql:"INSERT INTO shift_assignments (id,organisation_id,shift_id,resource_type,resource_id,role,source,created_by,created_at) VALUES (?,?,?,?,?,?,'planner',?,?)",params:[newId(),org,row.id,a.resourceType,a.resourceId,a.role,userId,now]})),
   resolveIssues(org,'shift',row.id,m.issues,now),

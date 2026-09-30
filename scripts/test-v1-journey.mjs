@@ -186,6 +186,10 @@ try{
  const tenderClient=(await json(await call('/api/tenders/workspace?id='+tenderId,'GET',undefined,A.cookie),200)).tender;
  assert.equal(tenderClient.clientId,riverside.id,'tender inherits client');assert.equal(tenderClient.contactId,maxSite.id,'tender inherits the contact');assert.equal(tenderClient.siteId,riversideSite.id,'tender inherits site');assert.equal(tenderClient.clientName,'Riverside Council');
  await json(await call('/api/tenders/register','POST',{opportunityId:opp.id},A.cookie),409,'one tender per opportunity');
+ // Divisions: the tender takes a non-default division; it must flow tender -> estimate -> project -> shift below.
+ const divDrainage=(await json(await call('/api/business-units','POST',{name:'Drainage',code:'drn'},A.cookie),201,'create division')).id;
+ await json(await call('/api/tenders/workspace','PATCH',{id:tenderId,revision:tenderClient.revision,businessUnitId:divDrainage},A.cookie),200,'tender division');
+ assert.equal((await json(await call('/api/tenders/workspace?id='+tenderId,'GET',undefined,A.cookie),200)).tender.businessUnitId,divDrainage);
  const tf=new FormData();tf.set('opportunityId',opp.id);tf.set('file',new File(['Tender scope: drainage'],'tender-scope.txt',{type:'text/plain'}));await json(await call('/api/tenders','POST',tf,A.cookie),201,'tender document upload');
  const reqs=reg('requirements',A.cookie),rets=reg('returnables',A.cookie);
  const req1=(await json(await reqs.create(tenderId,{title:'Provide ISO 45001 aligned WHS management plan',category:'HSEQ',mandatory:true,source_document:'tender-scope.txt',source_page:'s4.2'}),201)).record;
@@ -200,6 +204,7 @@ try{
  await json(await call('/api/tenders/workspace','POST',{action:'bid-decision',id:tenderId,decision:'bid',reason:'Strategic client'},A.cookie),200);
  const {estimateId}=await json(await call('/api/tenders/workspace','POST',{action:'create-estimate',id:tenderId,mode:'general'},A.cookie),200);
  let est=(await json(await call('/api/estimates?id='+estimateId,'GET',undefined,A.cookie),200)).estimate;
+ assert.equal(est.businessUnitId,divDrainage,'the estimate created from a tender inherits the tender division');
  assert.equal(est.data.includePaving,false,'general estimates are discipline-neutral');
  const items=[{section:'Drainage',costCode:'100',category:'labour',description:'Pipe laying crew',quantity:120,unit:'m',productivity:10,rateBasis:'hour',rate:95},{section:'Drainage',costCode:'300',category:'material',description:'375mm RCP',quantity:120,unit:'m',productivity:0,rateBasis:'unit',rate:180},{section:'Drainage',costCode:'200',category:'plant',description:'20t excavator',quantity:12,unit:'h',productivity:0,rateBasis:'unit',rate:210}];
  est=(await json(await call('/api/estimates','PUT',{id:estimateId,data:{...est.data,clientName:'Riverside Council',projectName:'Riverside drainage upgrade',workType:'Drainage',items,marginValue:15,overheadsPct:8,contingencyPct:3}},A.cookie),200)).estimate;
@@ -226,6 +231,7 @@ try{
  await json(await reg('clarifications',A.cookie).move(clar.id,'responded'),200);
  const award=await json(await call('/api/tenders/workspace','POST',{action:'award',id:tenderId},A.cookie),200);
  assert.equal(award.projectCreated,true);const projectId=award.jobId;
+ {const [[pj]]=await db.execute('SELECT business_unit_id FROM jobs WHERE id=?',[projectId]);assert.equal(pj.business_unit_id,divDrainage,'the awarded project inherits the estimate/tender division');}
  const activity={projectId,name:'Excavation',startDate:'2026-10-01',durationDays:3,predecessorId:null,responsible:'QA lead',workPackage:'Drainage',resourceRequirement:'Excavator',plannedQuantity:120,quantityUnit:'m',productionPerDay:40,status:'planned'};
  const pa=await json(await call('/api/projects/program','POST',activity,A.cookie),200);
  const pb=await json(await call('/api/projects/program','POST',{...activity,name:'Pipework',predecessorId:pa.id},A.cookie),200);
@@ -343,6 +349,7 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  console.log('PASS D import: XLSX template, CSV preview, partial valid import, employee/plant safe reruns, blank preservation, tenant isolation and role denial');
  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Australia/Sydney',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
  const shift=(await json(await call('/api/delivery','POST',{kind:'shifts',record:{id:'',name:'Pipe laying day 1',status:'Planned',metadata:{jobId:projectId,date:today,start:'07:00',finish:'15:30',scope:'Lay 40m of 375 RCP',instructions:'Shoring inspected before entry',assignments:[{resourceId:workerId,category:'workers',name:'Casey Field',role:'Pipe layer',hours:8,rate:88,payload:0,trips:0,userId:C.user.id}]}}},A.cookie),201)).record;
+ {const [[sh]]=await db.execute('SELECT business_unit_id FROM shifts WHERE id=?',[shift.id]);assert.equal(sh.business_unit_id,divDrainage,'a shift inherits its project division');}
  // Planner availability check: read-only, same engine, tenant-scoped, write roles only.
  const [[shiftCountBefore]]=await db.execute('SELECT COUNT(*) AS n FROM shifts WHERE organisation_id=?',[memberA.organisation_id]);
  const check=await json(await call('/api/delivery','POST',{kind:'shifts',check:true,candidates:[{category:'workers',resourceId:workerId}],record:{id:'',name:'Trial',status:'Planned',metadata:{jobId:projectId,date:today,start:'08:00',finish:'12:00',assignments:[]}}},A.cookie),200,'availability check');
@@ -1729,6 +1736,104 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  assert.equal(svc.CONTEXT_WRITE_CAPABILITY.claim,'claim.edit');
  assert.equal((await json(await mdGet(gen.id),200)).versions.length,2,'generated artifact is visible through the normal API');
  console.log('PASS 9A managed documents: standalone create, immutable revisions with exact-version download and hashes, revision labels, metadata, one search result per document, legacy attachments, project scope (PE/SE), links that never widen access, tenant isolation, field visibility, commercial/tender contexts, archive, audit, and server-side generated artifact seam');
+ }
+
+ { // Business unit / division core
+ step='BU divisions';
+ const org=memberA.organisation_id;
+ const list=async(cookie=A.cookie)=>json(await call('/api/business-units','GET',undefined,cookie),200,'list divisions');
+ // Existing/single-division behaviour: a default division exists, projects carry it, nothing is asked.
+ const bB0=await list(B.cookie);assert.equal(bB0.activeCount,1,'a company that never adds a division has exactly one');assert.equal(bB0.divisions[0].isDefault,true);assert.equal(bB0.divisions[0].name,'General');
+ const bProj=(await json(await call('/api/projects','POST',{name:'Single-division project'},B.cookie),201)).projectId;
+ assert.equal((await json(await call('/api/projects','GET',undefined,B.cookie),200)).projects.find(x=>x.id===bProj).businessUnitId,bB0.defaultId,'a project created without choosing lands in the default division');
+ const a0=await list();const defA=a0.defaultId;assert(defA.startsWith('bu_default_'));assert.equal(a0.canManage,true);
+ // Management is admin-only; listing is for every signed-in role (pickers/filters).
+ for(const role of ['estimator','project_manager','accounts','office','project_engineer']){await as(role);
+  assert.equal((await call('/api/business-units','GET',undefined,R.cookie)).status,200,role+' can list divisions');
+  assert.equal((await call('/api/business-units','POST',{name:'Sneaky',code:'SNK'},R.cookie)).status,403,role+' cannot create a division');
+  assert.equal((await call('/api/business-units','PATCH',{action:'archive',id:defA,revision:1},R.cookie)).status,403,role+' cannot archive');}
+ assert.equal((await call('/api/business-units','GET',undefined,C.cookie)).status,200,'field role can read divisions');assert.equal((await call('/api/business-units','POST',{name:'F',code:'F'},C.cookie)).status,403);
+ // Create / validate / edit.
+ const asp=(await json(await call('/api/business-units','POST',{name:'Asphalt',code:'asp',description:'Paving and profiling'},A.cookie),201)).id;
+ await json(await call('/api/business-units','POST',{name:'Other',code:'ASP'},A.cookie),409,'duplicate code');
+ await json(await call('/api/business-units','POST',{name:'asphalt',code:'AS2'},A.cookie),409,'duplicate name (case-insensitive)');
+ await json(await call('/api/business-units','POST',{name:'Bad',code:'a b'},A.cookie),400,'invalid code');
+ await json(await call('/api/business-units','POST',{name:'  ',code:'X1'},A.cookie),400,'name required');
+ let l1=await list();assert.equal(l1.activeCount,3,'Drainage (main chain), Asphalt and the default');const aspRow=l1.divisions.find(x=>x.id===asp);assert.equal(aspRow.code,'ASP','codes are normalised');
+ await json(await call('/api/business-units','PATCH',{action:'update',id:asp,revision:aspRow.revision+5,name:'Asphalt & Profiling'},A.cookie),409,'stale revision');
+ await json(await call('/api/business-units','PATCH',{action:'update',id:asp,revision:aspRow.revision,name:'Asphalt & Profiling'},A.cookie),200);
+ // Projects: choose a division, inherit the default, reject foreign/archived, change later.
+ await as('admin');
+ const pAsp=(await json(await call('/api/projects','POST',{name:'Asphalt overlay',businessUnitId:asp},A.cookie),201)).projectId;
+ const pDef=(await json(await call('/api/projects','POST',{name:'Unassigned project'},A.cookie),201)).projectId;
+ const proj=async id=>(await json(await call('/api/projects/workspace?id='+id,'GET',undefined,A.cookie),200)).project;
+ assert.equal((await proj(pAsp)).businessUnitId,asp);assert.equal((await proj(pDef)).businessUnitId,defA,'no choice = default division');
+ await json(await call('/api/projects','POST',{name:'Foreign division',businessUnitId:bB0.defaultId},A.cookie),404,"another organisation's division is 'not found'");
+ // Shared resources: divisions do not duplicate clients, people or plant.
+ for(const t of ['workers','plant','clients','client_sites','client_contacts'])assert.equal((await db.execute("SELECT COUNT(*) n FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name='business_unit_id'",[t]))[0][0].n,0,t+' stays organisation-level (no division column)');
+ // Filtering never grants access: a project engineer sees only assigned projects whatever the division.
+ await as('project_engineer');
+ await db.execute('INSERT INTO project_members (id,organisation_id,project_id,user_id,project_role,active,revision,created_at,updated_at) VALUES (?,?,?,?,?,1,1,?,?)',[crypto.randomUUID(),org,pAsp,R.user.id,'project_engineer',new Date().toISOString(),new Date().toISOString()]);
+ const peList=(await json(await call('/api/projects','GET',undefined,R.cookie),200)).projects.map(x=>x.id);
+ assert(peList.includes(pAsp),'assigned Asphalt project visible');assert(!peList.includes(pDef),'an unassigned project in the SAME organisation stays hidden');
+ await json(await call('/api/projects/workspace?id='+pDef,'GET',undefined,R.cookie),404,'PE cannot open an unassigned project');
+ await json(await call('/api/projects/workspace','POST',{action:'set-division',id:pDef,businessUnitId:asp},R.cookie),404,'PE cannot change the division of a project they cannot see');
+ await json(await call('/api/projects/workspace','POST',{action:'set-division',id:pAsp,businessUnitId:defA},R.cookie),200,'PE with project.edit may move an assigned project');
+ await json(await call('/api/projects/workspace','POST',{action:'set-division',id:pAsp,businessUnitId:asp},R.cookie),200);
+ await as('accounts');await json(await call('/api/projects/workspace','POST',{action:'set-division',id:pAsp,businessUnitId:defA},R.cookie),403,'accounts cannot re-file a project');
+ await as('estimator');await json(await call('/api/projects/workspace','POST',{action:'set-division',id:pAsp,businessUnitId:defA},R.cookie),403,'estimator lacks project.edit');
+ await json(await call('/api/projects','POST',{name:'Estimator project'},R.cookie),403);
+ // Tenders and estimates: default when unspecified, explicit choice, estimate follows tender, foreign ids rejected.
+ const tDef=(await json(await call('/api/tenders/register','POST',{title:'Default division tender'},A.cookie),201)).tenderId;
+ assert.equal((await json(await call('/api/tenders/workspace?id='+tDef,'GET',undefined,A.cookie),200)).tender.businessUnitId,defA);
+ const tAsp=(await json(await call('/api/tenders/register','POST',{title:'Asphalt tender',businessUnitId:asp},A.cookie),201)).tenderId;
+ await json(await call('/api/tenders/register','POST',{title:'Foreign',businessUnitId:bB0.defaultId},A.cookie),404,'tender: foreign division rejected');
+ const {estimateId:eAsp}=await json(await call('/api/tenders/workspace','POST',{action:'create-estimate',id:tAsp,mode:'general'},A.cookie),200);
+ assert.equal((await json(await call('/api/estimates?id='+eAsp,'GET',undefined,A.cookie),200)).estimate.businessUnitId,asp);
+ const tAspRev=(await json(await call('/api/tenders/workspace?id='+tAsp,'GET',undefined,A.cookie),200)).tender.revision;
+ await json(await call('/api/tenders/workspace','PATCH',{id:tAsp,revision:tAspRev,businessUnitId:divDrainage},A.cookie),200);
+ assert.equal((await json(await call('/api/estimates?id='+eAsp,'GET',undefined,A.cookie),200)).estimate.businessUnitId,divDrainage,'the estimate follows its tender when the tender changes division');
+ // A standalone estimate: division chosen at creation, changed without creating a revision, default otherwise.
+ const eNew=(await json(await call('/api/estimates','POST',{data:{name:'Standalone'},businessUnitId:asp},A.cookie),201)).estimate;assert.equal(eNew.businessUnitId,asp);
+ const eNone=(await json(await call('/api/estimates','POST',{data:{name:'Standalone default'}},A.cookie),201)).estimate;assert.equal(eNone.businessUnitId,defA);
+ const revs=async id=>Number((await db.execute("SELECT COUNT(*) n FROM quote_revisions WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.estimateId'))=?",[org,id]))[0][0].n);
+ const revBefore=await revs(eNew.id);
+ await json(await call('/api/estimates','PUT',{id:eNew.id,action:'set-division',businessUnitId:divDrainage},A.cookie),200);
+ assert.equal((await json(await call('/api/estimates?id='+eNew.id,'GET',undefined,A.cookie),200)).estimate.businessUnitId,divDrainage);assert.equal(await revs(eNew.id),revBefore,'changing division creates no estimate revision');
+ await json(await call('/api/estimates','PUT',{id:eNew.id,action:'set-division',businessUnitId:bB0.defaultId},A.cookie),404,'estimate: foreign division rejected');
+ // Archive: history is preserved, new choices are refused, the default cannot be archived, restore works.
+ const aspNow=(await list()).divisions.find(x=>x.id===asp);
+ await json(await call('/api/business-units','PATCH',{action:'archive',id:defA,revision:(await list()).divisions.find(x=>x.id===defA).revision},A.cookie),409,'the default division cannot be archived');
+ await json(await call('/api/business-units','PATCH',{action:'archive',id:asp,revision:aspNow.revision},A.cookie),200,'archive');
+ const l2=await list();assert.equal(l2.divisions.find(x=>x.id===asp).status,'archived','archived divisions stay in the list');assert.equal(l2.activeCount,2);
+ assert.equal((await proj(pAsp)).businessUnitId,asp,'a project keeps its archived division');
+ assert.equal((await json(await call('/api/estimates?id='+eAsp,'GET',undefined,A.cookie),200)).estimate.businessUnitId,divDrainage);
+ await json(await call('/api/projects','POST',{name:'Into archived',businessUnitId:asp},A.cookie),422,'cannot choose an archived division for a new project');
+ await json(await call('/api/tenders/register','POST',{title:'Into archived',businessUnitId:asp},A.cookie),422);
+ await json(await call('/api/projects/workspace','POST',{action:'set-division',id:pDef,businessUnitId:asp},A.cookie),422,'cannot move a record into an archived division');
+ await json(await call('/api/projects/workspace','POST',{action:'set-division',id:pAsp,businessUnitId:asp},A.cookie),200,'keeping the archived division on its own record is allowed (no change)');
+ const aspArch=(await list()).divisions.find(x=>x.id===asp);
+ await json(await call('/api/business-units','PATCH',{action:'restore',id:asp,revision:aspArch.revision},A.cookie),200,'restore');
+ await json(await call('/api/projects','POST',{name:'After restore',businessUnitId:asp},A.cookie),201);
+ // Change of default; NULL-safe reads follow it.
+ const d2=(await list());const drn=d2.divisions.find(x=>x.id===divDrainage);
+ await json(await call('/api/business-units','PATCH',{action:'make-default',id:divDrainage,revision:drn.revision},A.cookie),200);
+ assert.equal((await list()).defaultId,divDrainage);assert.equal((await list()).divisions.filter(x=>x.isDefault).length,1,'exactly one default');
+ const pNewDef=(await json(await call('/api/projects','POST',{name:'After default change'},A.cookie),201)).projectId;assert.equal((await proj(pNewDef)).businessUnitId,divDrainage);assert.equal((await proj(pDef)).businessUnitId,defA,'existing records keep their division when the default moves');
+ // Tenant isolation.
+ await json(await call('/api/business-units','PATCH',{action:'archive',id:asp,revision:1},B.cookie),404,"another organisation's division cannot be changed");
+ assert(!(await list(B.cookie)).divisions.some(x=>[asp,divDrainage,defA].includes(x.id)),"another organisation's divisions are never listed");
+ await json(await call('/api/projects/workspace','POST',{action:'set-division',id:pAsp,businessUnitId:bB0.defaultId},A.cookie),404);
+ await json(await call('/api/projects/workspace','POST',{action:'set-division',id:bProj,businessUnitId:asp},A.cookie),404,'cannot re-file another organisation\'s project');
+ // Modules stay independent: with Pipeline and Estimating off, divisions and projects still work; module routes still 404.
+ await json(await call('/api/platform/entitlements','PUT',{module:'pipeline',status:'disabled'},A.cookie),200);await json(await call('/api/platform/entitlements','PUT',{module:'estimating',status:'disabled'},A.cookie),200);
+ await list();await json(await call('/api/projects','POST',{name:'Core still works',businessUnitId:asp},A.cookie),201);
+ assert.equal((await call('/api/tenders/register','POST',{title:'Off',businessUnitId:asp},A.cookie)).status,404,'a disabled module is still a 404');
+ await json(await call('/api/platform/entitlements','PUT',{module:'pipeline',status:'active'},A.cookie),200);await json(await call('/api/platform/entitlements','PUT',{module:'estimating',status:'active'},A.cookie),200);
+ // Audit trail.
+ const evs=(await db.execute("SELECT DISTINCT event_type FROM audit_log WHERE organisation_id=? AND event_type LIKE 'business_unit.%' OR event_type IN ('project.division_changed','estimate.division_changed')",[org]))[0].map(r=>r.event_type);
+ for(const e of ['business_unit.created','business_unit.updated','business_unit.archived','business_unit.restored','business_unit.default_changed','project.division_changed'])assert(evs.includes(e),'audit '+e);
+ console.log('PASS BU: default division for existing/single-division companies, admin-only management, unique codes, project/tender/estimate association, inheritance tender→estimate→project→shift, archive keeps history, shared resources, PE scope unaffected, tenant isolation, disabled modules');
  }
 
  step='H ABN';

@@ -10,6 +10,7 @@ import {fail} from '@/lib/platform/http';
 import {query,one,exec,tx,nowIso,uuid,round2,type Row} from '@/lib/platform/sql';
 import {safeJson} from '@/lib/estimates-db';
 import {resolveClientContext} from '@/lib/platform/clients';
+import {resolveDivisionInput,resolveDivisionChange,ensureDefaultDivision} from '@/lib/platform/business-units';
 import {calculateEstimate,validateEstimate,makeGeneralEstimate,makeDefaultEstimate,DEFAULT_RATE_LIBRARY,type RateLibrary} from '@/lib/estimate-calculations';
 import {legacyOpportunityStage} from '@/lib/v1/register-server';
 import {awardEstimate} from '@/lib/seams/award-to-project';
@@ -82,7 +83,7 @@ function completion(t:Row,s:Stats){
 
 function present(t:Row,s:Stats,owner?:string|null){
  const money=can(actor().role,'commercial.view');
- const out:Row={id:t.id,opportunityId:t.opportunity_id,reference:t.reference,title:t.title,clientName:t.client_name,clientId:t.client_id??null,siteId:t.site_id??null,contactId:t.contact_id??null,ownerUserId:t.owner_user_id,ownerName:owner??null,stage:t.stage,stageLabel:stateLabel('tender',t.stage),dueDate:t.due_date,location:t.location,scopeSummary:t.scope_summary,estimateId:t.estimate_id,approvalStatus:t.approval_status,approvedBy:t.approved_by,approvedAt:t.approved_at,approvalNotes:t.approval_notes,submittedAt:t.submitted_at,submissionMethod:t.submission_method,submissionVersion:t.submission_version,submissionNotes:t.submission_notes,submissionDocumentId:t.submission_document_id,submissionOverrideReason:t.submission_override_reason,outcomeAt:t.outcome_at,outcomeReason:t.outcome_reason,projectId:t.project_id,revision:t.revision,createdAt:t.created_at,updatedAt:t.updated_at,
+ const out:Row={id:t.id,opportunityId:t.opportunity_id,reference:t.reference,title:t.title,clientName:t.client_name,clientId:t.client_id??null,businessUnitId:t.business_unit_id??null,siteId:t.site_id??null,contactId:t.contact_id??null,ownerUserId:t.owner_user_id,ownerName:owner??null,stage:t.stage,stageLabel:stateLabel('tender',t.stage),dueDate:t.due_date,location:t.location,scopeSummary:t.scope_summary,estimateId:t.estimate_id,approvalStatus:t.approval_status,approvedBy:t.approved_by,approvedAt:t.approved_at,approvalNotes:t.approval_notes,submittedAt:t.submitted_at,submissionMethod:t.submission_method,submissionVersion:t.submission_version,submissionNotes:t.submission_notes,submissionDocumentId:t.submission_document_id,submissionOverrideReason:t.submission_override_reason,outcomeAt:t.outcome_at,outcomeReason:t.outcome_reason,projectId:t.project_id,revision:t.revision,createdAt:t.created_at,updatedAt:t.updated_at,
   stats:{documents:s.documents,requirements:s.requirements,suggested:s.suggested,mandatoryOpen:s.mandatoryOpen,returnables:s.returnables,returnablesMandatoryOpen:s.returnablesMandatoryOpen,clarificationsOpen:s.clarificationsOpen,nextClarificationDue:s.nextClarificationDue,estimateState:s.estimateState,bidDecision:s.bidDecision,approvedRevisionNumber:s.approvedRevision?Number(s.approvedRevision.revision_number):null},
   completion:completion(t,s),nextAction:nextAction(t,s),checks:submissionChecks(t,s)};
  if(money){out.estimatedValue=t.estimated_value==null?null:Number(t.estimated_value);out.approvedSellPrice=s.approvedRevision?Number(s.approvedRevision.sell_price):null;out.approvedMarginPct=s.approvedRevision?Number(s.approvedRevision.gross_margin_pct):null;}
@@ -112,7 +113,7 @@ export async function getTender(id:string){
  return {tender:{...present(t,s,owner?.name),awardBlockers:await awardBlockers(t)} as Row,bidReview:bid};
 }
 
-export type TenderInput={title?:string;clientName?:string|null;clientId?:string|null;siteId?:string|null;contactId?:string|null;reference?:string|null;dueDate?:string|null;estimatedValue?:number|null;ownerUserId?:string|null;location?:string|null;scopeSummary?:string|null};
+export type TenderInput={businessUnitId?:string|null;title?:string;clientName?:string|null;clientId?:string|null;siteId?:string|null;contactId?:string|null;reference?:string|null;dueDate?:string|null;estimatedValue?:number|null;ownerUserId?:string|null;location?:string|null;scopeSummary?:string|null};
 async function checkOwner(ownerUserId:string|null|undefined,conn:PoolConnection){if(ownerUserId&&!await one('SELECT id FROM users WHERE organisation_id=? AND id=?',[actor().organisationId,ownerUserId],conn))fail(400,'Choose an owner from your organisation.');}
 
 /** Converting an opportunity preserves lineage (opportunity.tender_id ↔ tender.opportunity_id). A tender created directly gets its own opportunity record. */
@@ -141,7 +142,8 @@ export async function createTender(input:TenderInput&{opportunityId?:string|null
   }
   const meta=safeJson<Row>(opp?.metadata,{});
   const title=(input.title||opp?.name||'').trim()||'Untitled tender';
-  const row={id,organisation_id:a.organisationId,opportunity_id:opportunityId,reference:input.reference||null,title,client_name:input.clientName??opp?.client_name??meta.client??null,owner_user_id:input.ownerUserId??opp?.owner_user_id??null,stage:'draft',due_date:input.dueDate??opp?.closing_date??meta.tenderCloseDate??null,estimated_value:input.estimatedValue??opp?.estimated_value??(Number(meta.estimatedValue)||null),location:input.location??opp?.location??null,client_id:ctx.clientId??opp?.client_id??null,site_id:ctx.siteId??opp?.site_id??null,contact_id:ctx.contactId??(ctx.clientId&&ctx.clientId!==opp?.client_id?null:opp?.contact_id??null),scope_summary:input.scopeSummary??null,approval_status:'not_requested',revision:1,created_by:a.userId,created_at:now,updated_at:now};
+  const businessUnitId=(await resolveDivisionInput(input.businessUnitId,conn))??await ensureDefaultDivision(a.organisationId,conn);
+  const row={id,organisation_id:a.organisationId,business_unit_id:businessUnitId,opportunity_id:opportunityId,reference:input.reference||null,title,client_name:input.clientName??opp?.client_name??meta.client??null,owner_user_id:input.ownerUserId??opp?.owner_user_id??null,stage:'draft',due_date:input.dueDate??opp?.closing_date??meta.tenderCloseDate??null,estimated_value:input.estimatedValue??opp?.estimated_value??(Number(meta.estimatedValue)||null),location:input.location??opp?.location??null,client_id:ctx.clientId??opp?.client_id??null,site_id:ctx.siteId??opp?.site_id??null,contact_id:ctx.contactId??(ctx.clientId&&ctx.clientId!==opp?.client_id?null:opp?.contact_id??null),scope_summary:input.scopeSummary??null,approval_status:'not_requested',revision:1,created_by:a.userId,created_at:now,updated_at:now};
   const cols=Object.keys(row);
   await exec(`INSERT INTO tenders (${cols.join(',')}) VALUES (${cols.map(()=>'?').join(',')})`,Object.values(row),conn);
   await audit({event:'tender.created',entityType:'tender',entityId:id,summary:`Tender created: ${title}`,after:{opportunityId,title}},conn);
@@ -166,10 +168,13 @@ export async function updateTender(id:string,revision:number,input:TenderInput){
    if('contactId' in input||clientChanged)set.contact_id=ctx.contactId;
    if('siteId' in input){set.site_id=ctx.siteId;if(ctx.siteLabel&&!('location' in input))set.location=ctx.siteLabel;}
   }
+  if('businessUnitId' in input){set.business_unit_id=(await resolveDivisionChange(input.businessUnitId,t.business_unit_id,conn))??await ensureDefaultDivision(a.organisationId,conn);}
   if('estimatedValue' in input&&!can(a.role,'commercial.view'))delete set.estimated_value;
   if(set.title==='')fail(400,'A tender title is required.');
   const cols=Object.keys(set);if(!cols.length)return getTender(id);
   await exec(`UPDATE tenders SET ${cols.map(c=>`${c}=?`).join(',')},revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?`,[...cols.map(c=>set[c]),nowIso(),a.organisationId,id],conn);
+  // The estimate follows its tender's division so both stay in the same place until award.
+  if(set.business_unit_id&&t.estimate_id)await exec('UPDATE estimates SET business_unit_id=?,updated_at=? WHERE organisation_id=? AND id=?',[set.business_unit_id,nowIso(),a.organisationId,t.estimate_id],conn);
   await audit({event:'tender.updated',entityType:'tender',entityId:id,summary:'Tender details updated',before:Object.fromEntries(cols.map(c=>[c,t[c]])),after:set},conn);
  }).then(()=>getTender(id));
 }
@@ -227,7 +232,7 @@ export async function createTenderEstimate(id:string,mode:'general'|'paving'){
   const base=mode==='paving'?makeDefaultEstimate(library):makeGeneralEstimate(library);
   const data={...base,name:t.title,clientName:t.client_name||'',clientId:t.client_id||'',projectName:t.title,site:t.location||'',opportunityId:t.opportunity_id,opportunityName:t.title,specification:t.scope_summary||base.specification};
   const totals=calculateEstimate(data),validation=validateEstimate(data,totals),now=nowIso(),estimateId=uuid(),revisionId=uuid();
-  await exec('INSERT INTO estimates (id,organisation_id,name,status,metadata,created_at,workflow_state,tender_id,updated_at) VALUES (?,?,?,?,?,?,?,?,?)',[estimateId,a.organisationId,t.title,'Draft',JSON.stringify({status:'Draft',revisionNumber:1,currentRevisionId:revisionId,data,totals,validation,sourceOpportunityId:t.opportunity_id,sourceTenderId:t.id,createdAt:now,updatedAt:now}),now,'draft',t.id,now],conn);
+  await exec('INSERT INTO estimates (id,organisation_id,name,status,metadata,created_at,workflow_state,tender_id,updated_at,business_unit_id) VALUES (?,?,?,?,?,?,?,?,?,?)',[estimateId,a.organisationId,t.title,'Draft',JSON.stringify({status:'Draft',revisionNumber:1,currentRevisionId:revisionId,data,totals,validation,sourceOpportunityId:t.opportunity_id,sourceTenderId:t.id,createdAt:now,updatedAt:now}),now,'draft',t.id,now,t.business_unit_id??await ensureDefaultDivision(a.organisationId,conn)],conn);
   await exec('INSERT INTO quote_revisions (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)',[revisionId,a.organisationId,`${t.title} · Rev 1`,'Draft',JSON.stringify({estimateId,revisionNumber:1,data,totals,validation,reason:'Created from tender'}),now],conn);
   await exec('UPDATE tenders SET estimate_id=?,revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?',[estimateId,now,a.organisationId,id],conn);
   await audit({event:'tender.estimate.created',entityType:'tender',entityId:id,summary:`Estimate created (${mode})`,after:{estimateId}},conn);

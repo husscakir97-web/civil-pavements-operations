@@ -59,7 +59,7 @@ for(const r of ['estimator','project_engineer','site_engineer','supervisor','fie
 // Admin navigation is capability-driven: no role sees administration it cannot use.
 const navDef=load('lib/v1/navigation.ts');
 // Intended change (navigation tranche): People/Plant moved to Resources, Company Library to Documents.
-assert.deepEqual(navDef.adminSubsFor('admin'),['Company','Rates','Civil Knowledge','Team & Permissions','Integrations','Settings']);
+assert.deepEqual(navDef.adminSubsFor('admin'),['Company','Divisions','Rates','Civil Knowledge','Team & Permissions','Integrations','Settings']);
 assert.deepEqual(navDef.adminSubsFor('estimator'),['Rates'],'estimator: rates (read), no organisation/security/entitlements');
 assert.deepEqual(navDef.adminSubsFor('scheduler'),[],'operations: no admin area (people and plant live under Resources)');
 assert.deepEqual(navDef.adminSubsFor('project_manager'),[]);
@@ -107,7 +107,7 @@ assert.deepEqual(areas('admin',['operations']),['Home','CRM','Schedule','Resourc
 assert.deepEqual(subs('admin','Resources',['operations']),['People','Plant & Equipment','Crews','Suppliers & Subcontractors','Depots']);
 assert.deepEqual(areas('admin',['pipeline','estimating']),['Home','CRM','Pipeline','Documents','Reports','Admin']);
 assert.deepEqual(subs('admin','Pipeline',['estimating']),['Estimates']);
-assert.deepEqual(subs('admin','Admin',['ims']),['Company','Civil Knowledge','Team & Permissions','Integrations','Settings'],'rates hidden without estimating');
+assert.deepEqual(subs('admin','Admin',['ims']),['Company','Divisions','Civil Knowledge','Team & Permissions','Integrations','Settings'],'rates hidden without estimating');
 assert.equal(appNav.canOpen(access('site_engineer'),'Commercial'),false);assert.equal(appNav.canOpen(access('admin',['ims']),'Schedule'),false);
 // Legacy routes and bookmarks translate to the new areas, keeping record id and tab.
 const R=appNav.resolveRoute;
@@ -177,6 +177,11 @@ for(const st of ['active','practical_completion','closeout','closed'])assert(!ke
 assert.deepEqual(['project-plan-work','project-add-document','project-review-hseq'].filter(k=>!keysAt('project_engineer','active').includes(k)),[],'active: programme, document and HSEQ actions');
 for(const k of ['project-plan-work','project-add-document','project-raise-variation','project-report-issue','project-schedule-work','project-setup','project-close-out'])assert(!keysAt('project_manager','closed').includes(k),'closed project hides editing task '+k);
 assert.deepEqual(pt('project_manager','delivery').map(t=>t.key).filter(k=>/schedule|close-out|setup|plan|document|variation|issue/.test(k)),[],'an unknown stage offers no stage-gated task');
+// Divisions: pure rules (codes, default id) and the Admin entry only for org admins.
+{const bu=load('lib/platform/business-units.ts');
+ assert.equal(bu.normaliseCode(' asp '),'ASP');for(const ok of ['CIV','A1','TRAFFIC-CTRL'])assert(bu.CODE.test(ok),ok);for(const bad of ['','-X','A B','A_B','X'.repeat(21)])assert(!bu.CODE.test(bad),'rejects '+JSON.stringify(bad));
+ assert.equal(bu.defaultDivisionId('org-1'),'bu_default_org-1');
+ assert(subs('admin','Admin').includes('Divisions'));for(const r of ['office','estimator','project_manager','accounts','scheduler'])assert(!areas(r).includes('Admin')||!subs(r,'Admin').includes('Divisions'),r+' cannot manage divisions');}
 // Commercial → Work Records: user-facing label changes, the 'Dockets' route key and bookmarks do not.
 assert.deepEqual(appNav.navFor(access('admin')).find(a=>a.key==='Commercial').subs.map(s=>[s.key,s.label]),[['Commercial','Overview'],['Dockets','Work Records']]);
 assert.deepEqual(R({area:'Deliver Work',sub:'Dockets'}),{area:'Commercial',sub:'Dockets',id:undefined,tab:undefined},'old Dockets bookmark still resolves');

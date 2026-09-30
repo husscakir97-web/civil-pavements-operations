@@ -15,6 +15,7 @@ import {resolveClientContext,visibleClientIds} from '@/lib/platform/clients';
 import {canAccessProject,projectFilter} from '@/lib/platform/project-access';
 import {saveLocation,loadLocations,locationInput} from '@/lib/platform/locations';
 import {linkActionSource} from '@/lib/modules/hseq/corrective';
+import {resolveAuthorisedDocument} from '@/lib/platform/documents';
 import type {LocationInput} from '@/lib/v1/location';
 const getPoolConn=()=>getPool();
 
@@ -175,7 +176,13 @@ export async function createRecord(key:string,parentId:string|null,input:Record<
   const pendingLocations=takeLocations(def,values);
   await validateRefs(def,values,conn);
   await derive(def,values,null,conn);
-  if(def.key==='actions'){const pid=await linkActionSource(values,null,(parent.project_id as string)??null,conn);if(pid!==undefined)values.project_id=pid;}
+  if(def.key==='actions'){
+   // Every new corrective action has a real owner (validated in-organisation above; name snapshot in derive).
+   if(!values.owner_user_id)fail(400,'Choose the person who owns this action.');
+   // Evidence is bound to an existing action, so it is attached after the action exists.
+   if(values.completion_document_id)fail(400,'Attach completion evidence after the action is created.');
+   const pid=await linkActionSource(values,null,(parent.project_id as string)??null,conn);if(pid!==undefined)values.project_id=pid;
+  }
   if(def.key==='clients'&&await one('SELECT id FROM clients WHERE organisation_id=? AND LOWER(TRIM(name))=LOWER(?) LIMIT 1',[a.organisationId,values.name],conn))fail(409,'A client with this name already exists. Search for it instead.');
   const id=uuid(),now=nowIso();
   const row:Row={id,organisation_id:a.organisationId,...values,...(def.fixed||{}),created_by:a.userId,created_at:now,updated_at:now,revision:1};
@@ -231,6 +238,8 @@ export async function updateRecord(key:string,id:string,revision:number,input:Re
   await validateRefs(def,values,conn);
   await derive(def,values,row,conn);
   if(def.key==='actions'&&('source_type' in values||'source_id' in values))await linkActionSource(values,row,null,conn);
+  if(def.key==='actions'&&'owner_user_id' in values&&!values.owner_user_id&&row.owner_user_id)fail(400,'A corrective action must keep a real owner. Choose a different person instead of clearing it.');
+  if(def.key==='actions'&&values.completion_document_id&&values.completion_document_id!==row.completion_document_id)await resolveAuthorisedDocument(String(values.completion_document_id),{contextType:'action',contextId:id,projectId:row.project_id??null},conn);
   if(def.key==='actions'&&['verified','complete'].includes(row.status)&&['action','owner_user_id','due_date','completion_notes','completion_document_id','source_type','source_id'].some(k=>k in values))fail(409,row.status==='verified'?'A verified action is closed. Raise a new action instead.':'This action is awaiting verification. It can be rejected for rework, not edited.');
   if(!Object.keys(values).length)return {record:project(def,row,a.role)};
   if(def.key==='library'&&row.status==='current')values.version=Number(row.version||1)+1;

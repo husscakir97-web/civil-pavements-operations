@@ -12,6 +12,7 @@ import {query,one,exec,tx,uuid,nowIso,type Conn,type Row} from '@/lib/platform/s
 import {canAccessProject} from '@/lib/platform/project-access';
 import {resolveContext} from '@/lib/platform/forms';
 import type {FormContext} from '@/lib/v1/forms';
+import {resolveAuthorisedDocument} from '@/lib/platform/documents';
 
 const actor=()=>actorContext.getStore()!;
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Australia/Sydney',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
@@ -197,7 +198,8 @@ export async function reviewAction(id:string,input:{outcome?:unknown;note?:unkno
   if(!r.completed_by)fail(409,'This action has no recorded completion to verify.');
   if(r.completed_by===a.userId)fail(403,'The person who completed an action cannot verify it. Ask another authorised person.');
   let documentId:string|null=null;
-  if(input.documentId){const d=await one('SELECT id,project_id FROM documents WHERE organisation_id=? AND id=?',[a.organisationId,String(input.documentId)],conn);if(!d||(d.project_id&&d.project_id!==r.project_id))fail(400,'Verification evidence not found.');documentId=String(d!.id);}
+  // Verification evidence must be current evidence uploaded for this exact action and usable by the verifier.
+  if(input.documentId)documentId=String((await resolveAuthorisedDocument(String(input.documentId),{contextType:'action',contextId:id,projectId:r.project_id??null},conn)).id);
   const now=nowIso(),reviewId=uuid();
   await exec('INSERT INTO hseq_action_reviews (id,organisation_id,action_id,outcome,note,document_id,reviewer_user_id,completed_by,completed_at,completion_notes,completion_document_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',[reviewId,a.organisationId,id,outcome,note,documentId,a.userId,r.completed_by,r.completed_at,r.completion_notes??null,r.completion_document_id??null,now],conn);
   if(outcome==='accepted')await exec("UPDATE hseq_actions SET status='verified',verified_by=?,verified_at=?,verification_note=?,verification_document_id=?,revision=revision+1,updated_at=? WHERE organisation_id=? AND id=?",[a.userId,now,note,documentId,now,a.organisationId,id],conn);

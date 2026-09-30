@@ -63,6 +63,38 @@ Closure is a dedicated action and needs `hseq.verify`. The NCR must meet all of 
 
 An action is overdue when its due date is before today (Australia/Sydney) and its status is not `verified`. It is derived at read time, never stored.
 
+## Evidence and ownership integrity
+
+### Evidence
+
+Completion and verification evidence are ordinary Documents in the `action` context, stored in the existing table and R2 bucket.
+
+When evidence is uploaded, it must be bound to a real corrective action that is in scope for the uploader. The document's project is taken from the action. An upload claiming another project is refused.
+
+Before completion evidence (`completion_document_id`, when newly set or changed) or verification evidence (`reviewAction`) is accepted, `resolveAuthorisedDocument()` in `lib/platform/documents.ts` must pass. This is a server-only helper that authorises a document without streaming it. It requires all of the following:
+- the same organisation;
+- a `current` document;
+- context `action` with `context_id` equal to that exact action;
+- the action's project;
+- the generic open rules for the actor.
+
+It refuses:
+- another action's evidence;
+- another project's evidence;
+- organisation, tender, commercial or project documents;
+- controlled Forms evidence;
+- other-tenant files.
+
+Completion evidence cannot be set on create, because the action must exist before evidence can be bound to it. Verification never rewrites completion evidence. Reviews snapshot the completion evidence they judged.
+
+Existing legacy references are left as they are and still read.
+
+### Owner
+
+Every new `hseq_actions` row needs a real organisation user (`owner_user_id`), on both the register and chain paths. `owner_name` is its snapshot. An owned action's owner cannot be cleared.
+
+Legacy ownerless rows still read, and can be given an owner later.
+
 ## `hseq.verify`
 
 Granted to Admin, Office, Project Manager and Project Engineer. It is not granted to Site Engineer, Supervisor, Field Worker, Scheduler, Accounts, Estimator or Read only.

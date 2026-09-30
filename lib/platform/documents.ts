@@ -8,7 +8,7 @@ import {fail} from './http';
 import {can,type Capability} from './permissions';
 import {getEntitlements} from './entitlements';
 import {usable,writable,type Entitlements,type ModuleKey} from './modules';
-import {query,one,exec,tx,nowIso,uuid,type Row} from './sql';
+import {query,one,exec,tx,nowIso,uuid,type Row,type Conn} from './sql';
 import {canAccessProject,projectFilter} from './project-access';
 // The project a document belongs to: its project_id, or the project it is attached to directly.
 const documentProject=(r:Row)=>r.project_id||(r.context_type==='project'?r.context_id:null)||null;
@@ -121,9 +121,9 @@ export async function listDocuments(filter:{contextType?:string|null;contextId?:
  const projectName=new Map(projects.map(p=>[p.id,p.name])),tenderName=new Map(tenders.map(t=>[t.id,t.title])),userName=new Map(users.map(u=>[u.id,u.name||u.email]));
  return rows.map(r=>publicDocument({...r,context_name:(r.project_id||r.context_type==='project')?projectName.get(r.project_id||r.context_id)||null:r.context_type==='tender'?tenderName.get(r.context_id)||null:null,uploaded_by_name:userName.get(r.uploaded_by)||null}));
 }
-export async function openDocument(id:string){
+/** The generic open rules for one document row (never for controlled contexts). Throws when not allowed. */
+async function authoriseRow(row:Row|null,conn?:Conn){
  const actor=actorContext.getStore()!,entitlements=await getEntitlements(actor.organisationId);
- const row=await one('SELECT * FROM documents WHERE organisation_id=? AND id=?',[actor.organisationId,id]);
  if(!row)fail(404,'Document not found.');
  if(CONTROLLED_CONTEXTS.includes(row!.context_type))fail(404,'Document not found.');
  if(actor.role==='field'&&row!.visibility!=='field')fail(403,'This file is available to office staff only.');
@@ -131,8 +131,28 @@ export async function openDocument(id:string){
  if(actor.role==='field'&&!fieldDocumentContextsForAccess(entitlements).includes(context))fail(404,'Document not found.');
  if(!moduleKey||!usable(entitlements,moduleKey))fail(404,'Document not found.');
  if(actor.role!=='field'&&!can(actor.role,CONTEXT_CAPABILITY[context]??'org.admin'))fail(403,'You are not authorised to open this document.');
- if(!await canAccessProject(documentProject(row!)))fail(404,'Document not found.');
- return streamDocument(row!);
+ if(!await canAccessProject(documentProject(row!),undefined,conn))fail(404,'Document not found.');
+ return row!;
+}
+export async function openDocument(id:string){
+ const actor=actorContext.getStore()!;
+ const row=await one('SELECT * FROM documents WHERE organisation_id=? AND id=?',[actor.organisationId,id]);
+ return streamDocument(await authoriseRow(row));
+}
+/**
+ * Server-only: authorises a document as evidence attached to one exact record, without streaming it.
+ * The document must be in the actor's organisation, current, in the expected (non-controlled) context
+ * and bound to that record's id, carry the record's project, and pass the generic open rules for the
+ * actor. Anything else — another record's evidence, another project's, a tender/commercial or
+ * organisation document, controlled Forms evidence or another tenant's file — is refused.
+ */
+export async function resolveAuthorisedDocument(id:string,expected:{contextType:DocumentContext;contextId:string;projectId:string|null},conn?:Conn){
+ const actor=actorContext.getStore()!;
+ const row=await one('SELECT * FROM documents WHERE organisation_id=? AND id=?',[actor.organisationId,id],conn);
+ const bad=()=>fail(400,'Attach evidence uploaded for this record.');
+ if(!row||CONTROLLED_CONTEXTS.includes(row.context_type))bad();
+ if(row!.status!=='current'||row!.context_type!==expected.contextType||row!.context_id!==expected.contextId||(row!.project_id||null)!==(expected.projectId||null))bad();
+ try{return await authoriseRow(row,conn);}catch{return bad();}
 }
 /** Streams an already-authorised document from storage (private, never cached). */
 export async function streamDocument(row:Row){

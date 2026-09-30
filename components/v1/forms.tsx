@@ -15,8 +15,9 @@ type TemplateList={canManage:boolean;canPublish:boolean;canSubmit:boolean;templa
 type TemplateDetail={template:Template;versions:Version[];current:Version|null;draft:Version|null;canManage:boolean;canPublish:boolean};
 type SubmissionRow={id:string;templateName:string;versionNumber:number;contextType:string;contextId:string;projectName:string|null;submittedByName:string|null;submittedAt:string;amendments:number};
 type Labels={people:Record<string,string>;assets:Record<string,string>;documents:Record<string,{title:string;contentType:string;url:string}>;locations:Record<string,LocationView>};
-type SubmissionDetail={submission:{id:string;templateName:string;versionNumber:number;contextType:string;contextLabel:string;projectId:string|null;submittedByName:string|null;submittedAt:string};schema:FormSchema;original:Answers;effective:Answers;amendments:Array<{id:string;sequence:number;reason:string;amendedByName:string|null;amendedAt:string;changedFields:string[];responses:Answers}>;labels:Labels;canAmend:boolean};
+type SubmissionDetail={submission:{id:string;templateName:string;versionNumber:number;contextType:string;contextId:string;contextLabel:string;projectId:string|null;submittedByName:string|null;submittedAt:string};schema:FormSchema;original:Answers;effective:Answers;amendments:Array<{id:string;sequence:number;reason:string;amendedByName:string|null;amendedAt:string;changedFields:string[];responses:Answers}>;labels:Labels;canAmend:boolean};
 export type FormsContext={type:FormContext;id:string;label:string;projectId?:string|null};
+type EvidenceContext={type:string;id:string};
 const CONTEXT_LABEL:Record<string,string>={organisation:'Company',project:'Project',shift:'Shift',asset:'Plant'};
 
 // ---------------------------------------------------------------- IMS area
@@ -67,7 +68,7 @@ function FormFill({templateId,context,onDone}:{templateId:string;context:FormsCo
  if(loading&&!data)return <div className="p-5"><Loading/></div>;
  if(!version?.schema)return <div className="p-5"><ErrorState error={error}/></div>;
  return <form className="grid gap-4 p-5" onSubmit={e=>{e.preventDefault();void run(()=>api<{id:string}>('/api/forms',{method:'POST',body:{action:'submit',templateId,versionId:version.id,contextType:context.type,contextId:context.id,responses:values,clientSubmittedAt:new Date().toISOString()}}),r=>onDone(r.id));}}>
-  <FormRenderer schema={version.schema} values={values} onChange={setValues} projectId={context.projectId??null}/>
+  <FormRenderer schema={version.schema} values={values} onChange={setValues} evidence={{type:context.type,id:context.id}}/>
   <ErrorState error={saveError}/>
   <div className="sticky bottom-0 -mx-5 border-t bg-white px-5 py-3"><Btn type="submit" busy={busy} className="min-h-12 w-full sm:w-auto">Submit form</Btn><p className="mt-1 text-xs text-slate-500">Submitted forms are kept as evidence. Mistakes are fixed with a recorded correction.</p></div>
  </form>;
@@ -81,7 +82,7 @@ function useFormOptions(needed:boolean){
  useEffect(()=>{if(!needed)return;optionsCache??=api<Options>('/api/forms?op=options').catch(()=>{optionsCache=null;return {people:[],assets:[]};});let live=true;void optionsCache.then(x=>{if(live)setO(x);});return()=>{live=false;};},[needed]);
  return o;
 }
-export function FormRenderer({schema,values,onChange,projectId,readOnly,labels}:{schema:FormSchema;values:Answers;onChange?:(v:Answers)=>void;projectId:string|null;readOnly?:boolean;labels?:Labels}){
+export function FormRenderer({schema,values,onChange,evidence,readOnly,labels}:{schema:FormSchema;values:Answers;onChange?:(v:Answers)=>void;evidence:EvidenceContext|null;readOnly?:boolean;labels?:Labels}){
  const visible=useMemo(()=>visibleFields(schema,values),[schema,values]);
  const needsOptions=!readOnly&&allFields(schema).some(f=>f.type==='person'||f.type==='asset');
  const options=useFormOptions(needsOptions);
@@ -89,11 +90,11 @@ export function FormRenderer({schema,values,onChange,projectId,readOnly,labels}:
  return <div className="grid gap-5">{schema.sections.map(s=>{
   const fields=s.fields.filter(f=>visible.has(f.id));if(!fields.length)return null;
   return <fieldset key={s.id} className="grid gap-4 rounded-lg border p-3 sm:p-4"><legend className="px-1 text-sm font-semibold">{s.title}</legend>
-   {fields.map(f=><FieldInput key={f.id} f={f} value={values[f.id]} onChange={v=>set(f.id,v)} options={options} projectId={projectId} readOnly={readOnly} labels={labels}/>)}
+   {fields.map(f=><FieldInput key={f.id} f={f} value={values[f.id]} onChange={v=>set(f.id,v)} options={options} evidence={evidence} readOnly={readOnly} labels={labels}/>)}
   </fieldset>;})}</div>;
 }
 
-function FieldInput({f,value,onChange,options,projectId,readOnly,labels}:{f:FormField;value:unknown;onChange:(v:unknown)=>void;options:Options;projectId:string|null;readOnly?:boolean;labels?:Labels}){
+function FieldInput({f,value,onChange,options,evidence,readOnly,labels}:{f:FormField;value:unknown;onChange:(v:unknown)=>void;options:Options;evidence:EvidenceContext|null;readOnly?:boolean;labels?:Labels}){
  if(readOnly)return <div className="grid gap-1 text-sm"><span className="font-medium text-slate-700">{f.label}</span><div className="text-slate-900">{isAnswered(value)?<ReadValue f={f} value={value} labels={labels}/>:<span className="text-slate-400">Not answered</span>}</div></div>;
  const str=value==null?'':String(value);
  switch(f.type){
@@ -109,8 +110,8 @@ function FieldInput({f,value,onChange,options,projectId,readOnly,labels}:{f:Form
   case 'person':return <Field label={f.label} hint={f.help||undefined} required={f.required}><select className={field} value={str} onChange={e=>onChange(e.target.value||null)}><option value="">Choose a person…</option>{options.people.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>;
   case 'asset':return <Field label={f.label} hint={f.help||undefined} required={f.required}><select className={field} value={str} onChange={e=>onChange(e.target.value||null)}><option value="">Choose plant…</option>{options.assets.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>;
   case 'location':{const v=value as (LocationInput&{locationId?:string})|null;return v?.locationId?<div className="grid gap-1 text-sm"><span className="font-medium text-slate-700">{f.label}</span><LocationSummary location={labels?.locations[v.locationId]??null}/><Btn type="button" variant="ghost" className="justify-self-start" onClick={()=>onChange(null)}>Change location</Btn></div>:<AddressLocationPicker label={f.label} mode="compact" value={v??null} onChange={l=>onChange(l)} hint={f.help||undefined}/>;}
-  case 'photo':case 'file':return <UploadField f={f} value={Array.isArray(value)?value as string[]:[]} onChange={onChange} projectId={projectId} labels={labels}/>;
-  case 'signature':return <SignatureField f={f} value={value as SignatureValue|null} onChange={onChange} projectId={projectId}/>;
+  case 'photo':case 'file':return <UploadField f={f} value={Array.isArray(value)?value as string[]:[]} onChange={onChange} evidence={evidence} labels={labels}/>;
+  case 'signature':return <SignatureField f={f} value={value as SignatureValue|null} onChange={onChange} evidence={evidence}/>;
  }
 }
 
@@ -129,20 +130,22 @@ function ReadValue({f,value,labels}:{f:FormField;value:unknown;labels?:Labels}){
  }
 }
 
-async function uploadFile(file:File|Blob,name:string,projectId:string|null){
- const form=new FormData();form.set('file',file instanceof File?file:new File([file],name,{type:'image/png'}));form.set('contextType','field');form.set('visibility','field');form.set('category','Form evidence');form.set('title',name);if(projectId)form.set('projectId',projectId);
- return (await api<{document:{id:string;title:string}}>('/api/documents',{method:'POST',body:form})).document;
+/** Forms evidence goes to the controlled Forms document context for this exact form context (IMS, not Field). */
+async function uploadFile(file:File|Blob,name:string,evidence:EvidenceContext|null){
+ if(!evidence)throw new Error('Files can be attached when completing or correcting a form.');
+ const form=new FormData();form.set('file',file instanceof File?file:new File([file],name,{type:'image/png'}));form.set('contextType',evidence.type);form.set('contextId',evidence.id);
+ return (await api<{document:{id:string;title:string}}>('/api/forms/evidence',{method:'POST',body:form})).document;
 }
-function UploadField({f,value,onChange,projectId,labels}:{f:FormField;value:string[];onChange:(v:unknown)=>void;projectId:string|null;labels?:Labels}){
+function UploadField({f,value,onChange,evidence,labels}:{f:FormField;value:string[];onChange:(v:unknown)=>void;evidence:EvidenceContext|null;labels?:Labels}){
  const [names,setNames]=useState<Record<string,string>>({});const {busy,error,run}=useAction();
  return <div className="grid gap-2 text-sm"><span className="font-medium text-slate-700">{f.label}{f.required&&<span aria-hidden className="text-red-600"> *</span>}</span>{f.help&&<span className="text-xs text-slate-500">{f.help}</span>}
   {value.length>0&&<ul className="grid gap-1">{value.map(d=><li key={d} className="flex items-center gap-2 rounded border bg-white px-2 py-1"><span className="min-w-0 flex-1 truncate">{names[d]||labels?.documents[d]?.title||'Uploaded file'}</span><button type="button" aria-label="Remove file" className="rounded p-2 hover:bg-slate-100" onClick={()=>onChange(value.filter(x=>x!==d))}><Trash2 aria-hidden className="size-4"/></button></li>)}</ul>}
-  <label className="inline-flex min-h-12 cursor-pointer items-center gap-2 justify-self-start rounded-lg border bg-white px-4 font-medium hover:bg-slate-50"><Upload aria-hidden className="size-4"/>{busy?'Uploading…':f.type==='photo'?'Take or add photo':'Attach file'}<input type="file" className="sr-only" accept={f.type==='photo'?'image/*':undefined} capture={f.type==='photo'?'environment':undefined} disabled={busy} onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(file)void run(()=>uploadFile(file,file.name,projectId),doc=>{setNames(n=>({...n,[doc.id]:doc.title}));onChange([...value,doc.id]);});}}/></label>
+  <label className="inline-flex min-h-12 cursor-pointer items-center gap-2 justify-self-start rounded-lg border bg-white px-4 font-medium hover:bg-slate-50"><Upload aria-hidden className="size-4"/>{busy?'Uploading…':f.type==='photo'?'Take or add photo':'Attach file'}<input type="file" className="sr-only" accept={f.type==='photo'?'image/*':undefined} capture={f.type==='photo'?'environment':undefined} disabled={busy} onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(file)void run(()=>uploadFile(file,file.name,evidence),doc=>{setNames(n=>({...n,[doc.id]:doc.title}));onChange([...value,doc.id]);});}}/></label>
   <ErrorState error={error}/>
  </div>;
 }
 
-function SignatureField({f,value,onChange,projectId}:{f:FormField;value:SignatureValue|null;onChange:(v:unknown)=>void;projectId:string|null}){
+function SignatureField({f,value,onChange,evidence}:{f:FormField;value:SignatureValue|null;onChange:(v:unknown)=>void;evidence:EvidenceContext|null}){
  const canvas=useRef<HTMLCanvasElement>(null),drawing=useRef(false),[drawn,setDrawn]=useState(false);const {busy,error,run}=useAction();
  const name=value?.name||'',confirmed=value?.confirmed===true;
  const update=(patch:{name?:string;confirmed?:boolean;documentId?:string|null})=>{const next={name,confirmed,documentId:value?.documentId??null,...patch};onChange(next.name||next.confirmed||next.documentId?next:null);};
@@ -153,7 +156,7 @@ function SignatureField({f,value,onChange,projectId}:{f:FormField;value:Signatur
    onPointerDown={e=>{drawing.current=true;e.currentTarget.setPointerCapture(e.pointerId);const c=e.currentTarget.getContext('2d')!;const [x,y]=point(e);c.lineWidth=3;c.lineCap='round';c.beginPath();c.moveTo(x,y);}}
    onPointerMove={e=>{if(!drawing.current)return;const c=e.currentTarget.getContext('2d')!;const [x,y]=point(e);c.lineTo(x,y);c.stroke();setDrawn(true);}}
    onPointerUp={()=>{drawing.current=false;}}/>
-   <span className="mt-1 flex flex-wrap gap-2">{drawn&&!value?.documentId&&<Btn type="button" variant="secondary" busy={busy} onClick={()=>void run(async()=>{const blob=await new Promise<Blob|null>(r=>canvas.current!.toBlob(r,'image/png'));if(!blob)throw new Error('Could not capture the drawing.');return uploadFile(blob,`Signature — ${name||'signer'}.png`,projectId);},doc=>update({documentId:doc.id}))}>Attach drawing</Btn>}{(drawn||value?.documentId)&&<Btn type="button" variant="ghost" onClick={()=>{canvas.current?.getContext('2d')?.clearRect(0,0,600,160);setDrawn(false);update({documentId:null});}}>Clear drawing</Btn>}{value?.documentId&&<Pill tone="success">Drawing attached</Pill>}</span></div>
+   <span className="mt-1 flex flex-wrap gap-2">{drawn&&!value?.documentId&&<Btn type="button" variant="secondary" busy={busy} onClick={()=>void run(async()=>{const blob=await new Promise<Blob|null>(r=>canvas.current!.toBlob(r,'image/png'));if(!blob)throw new Error('Could not capture the drawing.');return uploadFile(blob,`Signature — ${name||'signer'}.png`,evidence);},doc=>update({documentId:doc.id}))}>Attach drawing</Btn>}{(drawn||value?.documentId)&&<Btn type="button" variant="ghost" onClick={()=>{canvas.current?.getContext('2d')?.clearRect(0,0,600,160);setDrawn(false);update({documentId:null});}}>Clear drawing</Btn>}{value?.documentId&&<Pill tone="success">Drawing attached</Pill>}</span></div>
   <label className="flex min-h-11 items-center gap-2"><input type="checkbox" className="size-5" checked={confirmed} onChange={e=>update({confirmed:e.target.checked})}/>I confirm this record is accurate.</label>
   <p className="text-xs text-slate-500">Your account and the time are recorded with this signature. This is an operational sign-off, not a certified digital signature.</p>
   <ErrorState error={error}/>
@@ -189,7 +192,7 @@ function SubmissionView({id}:{id:string}){
   </div>}
   <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{view==='original'?'Original submission — unchanged evidence':view==='effective'?(data.amendments.length?'Current corrected record':'Submitted record'):`As corrected in correction ${view}`}</p>
   {amending?<AmendForm data={data} onDone={()=>{setAmending(false);setView('effective');refresh();}} onCancel={()=>setAmending(false)}/>:<>
-   <FormRenderer schema={data.schema} values={shown} projectId={s.projectId} readOnly labels={data.labels}/>
+   <FormRenderer schema={data.schema} values={shown} evidence={null} readOnly labels={data.labels}/>
    {changed.size>0&&view!=='original'&&<p className="text-xs text-amber-800">Corrected fields: {allFields(data.schema).filter(f=>changed.has(f.id)).map(f=>f.label).join(', ')}</p>}
    {data.canAmend&&<Btn variant="secondary" className="justify-self-start" onClick={()=>setAmending(true)}><PenLine aria-hidden className="size-4"/>Correct this record</Btn>}
   </>}
@@ -199,7 +202,7 @@ function AmendForm({data,onDone,onCancel}:{data:SubmissionDetail;onDone:()=>void
  const [values,setValues]=useState<Answers>(data.effective),[reason,setReason]=useState('');const {busy,error,run}=useAction();
  return <form className="grid gap-4" onSubmit={e=>{e.preventDefault();void run(()=>api('/api/forms',{method:'POST',body:{action:'amend',id:data.submission.id,responses:values,reason}}),onDone);}}>
   <p className="rounded-lg bg-slate-50 p-3 text-sm">The original submission is kept unchanged. Your correction is added to the record&apos;s history with your name, the time and the reason.</p>
-  <FormRenderer schema={data.schema} values={values} onChange={setValues} projectId={data.submission.projectId} labels={data.labels}/>
+  <FormRenderer schema={data.schema} values={values} onChange={setValues} evidence={{type:data.submission.contextType,id:data.submission.contextId}} labels={data.labels}/>
   <Field label="Reason for correction" required><textarea className={`${field} min-h-20`} required minLength={3} maxLength={1000} value={reason} onChange={e=>setReason(e.target.value)}/></Field>
   <ErrorState error={error}/>
   <div className="flex flex-wrap gap-2"><Btn type="submit" busy={busy} disabled={reason.trim().length<3}>Save correction</Btn><Btn type="button" variant="ghost" onClick={onCancel}>Cancel</Btn></div>
@@ -257,7 +260,7 @@ function TemplateEditor({id,onChanged}:{id:string;onChanged:()=>void}){
 function VersionPreview({id}:{id:string}){
  const {data,error}=useApi<{version:Version}>(`/api/forms?op=version&id=${encodeURIComponent(id)}`);
  if(!data?.version.schema)return <ErrorState error={error}/>;
- return <div className="mt-3 rounded-lg border bg-slate-50 p-3"><p className="mb-2 text-xs text-slate-500">v{data.version.versionNumber} is locked. This is exactly what was published.</p><FormRenderer schema={data.version.schema} values={{}} projectId={null} readOnly/></div>;
+ return <div className="mt-3 rounded-lg border bg-slate-50 p-3"><p className="mb-2 text-xs text-slate-500">v{data.version.versionNumber} is locked. This is exactly what was published.</p><FormRenderer schema={data.version.schema} values={{}} evidence={null} readOnly/></div>;
 }
 
 function FormBuilder({templateId,template,draft,canPublish,onSaved}:{templateId:string;template:Template;draft:Version;canPublish:boolean;onSaved:()=>void}){
@@ -297,7 +300,7 @@ function FormBuilder({templateId,template,draft,canPublish,onSaved}:{templateId:
    {canPublish&&<Btn variant="secondary" busy={busy} disabled={dirty||problems.length>0||!allFields(schema).length} onClick={()=>void run(()=>api('/api/forms',{method:'POST',body:{action:'publish',id:templateId,versionId:draft.id,changeReason:reason}}),onSaved)}>Publish v{draft.versionNumber}</Btn>}
   </div>
   {dirty&&<p className="mt-1 text-xs text-slate-500">Save the draft before publishing.</p>}
-  {showPreview&&<div className="mt-4 rounded-lg border bg-slate-50 p-3"><p className="mb-2 text-xs text-slate-500">Preview — answers here are not saved. Conditional fields appear as you answer.</p><FormRenderer schema={schema} values={previewValues} onChange={setPreviewValues} projectId={null}/></div>}
+  {showPreview&&<div className="mt-4 rounded-lg border bg-slate-50 p-3"><p className="mb-2 text-xs text-slate-500">Preview — answers here are not saved. Conditional fields appear as you answer.</p><FormRenderer schema={schema} values={previewValues} onChange={setPreviewValues} evidence={null}/></div>}
  </Section>;
 }
 function IconBtn({label,onClick,children}:{label:string;onClick:()=>void;children:React.ReactNode}){return <button type="button" aria-label={label} title={label} onClick={onClick} className="grid size-11 place-items-center rounded-lg border bg-white hover:bg-slate-50">{children}</button>;}

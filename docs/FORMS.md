@@ -39,7 +39,7 @@ Field types:
 - Person: organisation users or workers
 - Asset: the `plant` master
 - Location: a Core `locations` row owned by the submission
-- Photo and file: document ids from the existing Documents store (never inline binary)
+- Photo and file: ids of Forms evidence documents (see below), never inline binary
 - Signature: typed name plus confirmation, and optionally a drawn signature stored as a document. The server stamps the signer account and the time. This is an operational sign-off, not a certified digital signature.
 
 ### Conditions
@@ -51,6 +51,20 @@ The server evaluates visibility too:
 - Hidden fields are never required, and their values are dropped rather than stored.
 - A required field that is visible is enforced.
 
+## Evidence files (photos, files, drawn signatures)
+
+Evidence uses the central Documents store, the same `documents` table and R2 bucket, in a dedicated **controlled context `form`**:
+- The context's module is `ims`, not `field`, so IMS forms work when the Field module is absent or disabled.
+- `context_id` is the resolved form context (`project:<id>`, `shift:<id>`, `asset:<id>`, `organisation:<id>`).
+- `project_id` is derived from that record, never supplied by the client.
+
+How evidence is written and read:
+- **Upload:** `POST /api/forms/evidence` with the file, `contextType` and `contextId`. It needs `forms.submit` or `forms.amend`. The server resolves the context with the same rules as a submission (project membership, shift audience, asset policy, `hseq.view` for the organisation) before storing anything.
+- **Open:** `GET /api/forms/evidence?id=`. Every open re-resolves the document's own form context, so a guessed id never bypasses shift or project scope. A field worker only reaches evidence for shifts they are assigned to or supervise.
+- **Generic routes:** Documents treats `form` as controlled. Only the Forms service can create it (`storeDocument(..., {controlled:true})`). Generic upload refuses it. `/api/documents?id=`, listings, search and external job packs never return it.
+
+Ordinary `field` documents are unchanged and still need the Field module.
+
 ## Server-side validation
 
 The server rejects:
@@ -59,7 +73,7 @@ The server rejects:
 - missing required visible fields
 - an unconfirmed signature
 - a person or asset from another organisation
-- a document from another organisation or another project, or one uploaded by someone else (unless the file is already on the record being corrected)
+- any document that is not Forms evidence for this exact resolved context, not current, or not uploaded by the person submitting. The only exception is a file already on the record being corrected. Same organisation is not enough.
 - invalid location data
 - submissions against drafts, archived forms or superseded versions
 - inaccessible contexts

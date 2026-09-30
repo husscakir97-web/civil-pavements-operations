@@ -16,6 +16,7 @@ import {query,one,exec,tx,uuid,nowIso,type Conn,type Row} from './sql';
 import {canAccessProject,projectFilter} from './project-access';
 import {shiftAudience,shiftVisible} from './shift-scope';
 import {saveLocation,loadLocations,locationInput} from './locations';
+import {storeDocument,streamDocument} from './documents';
 import type {LocationInput} from '@/lib/v1/location';
 import {checkSchema,validateShape,changedFields,allFields,emptySchema,isFormContext,FORM_CATEGORIES,type Answers,type FormContext,type FormSchema,type SignatureValue} from '@/lib/v1/forms';
 
@@ -55,6 +56,31 @@ export async function resolveContext(type:FormContext,id:string,conn?:Conn):Prom
   return {type,id,projectId:null,label:[p!.plant_number,p!.name].filter(Boolean).join(' · ')};
  }
  return notFound();
+}
+
+// ---------------------------------------------------------------- evidence files
+// Photos, files and drawn signatures are private Documents records in the controlled 'form' context
+// (module: ims). The document's context id is the resolved form context, so every open re-derives
+// authority from that record — a guessed document id never bypasses project or shift scope.
+const evidenceKey=(ctx:ResolvedContext)=>`${ctx.type}:${ctx.id}`;
+const FORM_EVIDENCE=/\.(pdf|png|jpe?g|gif|webp|heic|txt|csv|docx?|xlsx?)$/i;
+export async function uploadFormEvidence(file:File,contextType:string,contextId:string){
+ const a=actor();if(!can(a.role,'forms.submit')&&!can(a.role,'forms.amend'))fail(403,'You are not authorised to add form evidence.');
+ if(!isFormContext(contextType))fail(400,'Choose where this form applies.');
+ const ctx=await resolveContext(contextType,contextId);
+ if(!FORM_EVIDENCE.test(file.name))fail(415,'Attach a photo, PDF, Office or text file.');
+ const doc=await storeDocument(file,{contextType:'form',contextId:evidenceKey(ctx),projectId:ctx.projectId,category:'Form evidence',title:file.name,visibility:'field',source:'form',controlled:true});
+ return {document:{id:doc.id,title:doc.title,contentType:doc.contentType,url:`/api/forms/evidence?id=${encodeURIComponent(String(doc.id))}`}};
+}
+export async function openFormEvidence(id:string){
+ need('forms.view','You are not authorised to view forms.');
+ const row=await one("SELECT * FROM documents WHERE organisation_id=? AND id=? AND context_type='form'",[actor().organisationId,id]);
+ if(!row)fail(404,'Document not found.');
+ const [type,...rest]=String(row!.context_id||'').split(':'),contextId=rest.join(':');
+ if(!isFormContext(type)||!contextId)fail(404,'Document not found.');
+ const ctx=await resolveContext(type,contextId);
+ if((row!.project_id||null)!==ctx.projectId)fail(404,'Document not found.');
+ return streamDocument(row!);
 }
 
 // ---------------------------------------------------------------- templates
@@ -208,10 +234,12 @@ async function validateResponses(schema:FormSchema,raw:unknown,ctx:ResolvedConte
  }
  if(shape.refs.documents.length){
   const already=new Set<string>();for(const v of Object.values(carried)){if(Array.isArray(v))v.forEach(x=>already.add(String(x)));else if(v&&typeof v==='object'&&(v as SignatureValue).documentId)already.add(String((v as SignatureValue).documentId));}
-  const ids=[...new Set(shape.refs.documents)],rows=await query('SELECT id,project_id,uploaded_by FROM documents WHERE organisation_id=? AND id IN (?)',[org,ids],conn),byId=new Map(rows.map(r=>[String(r.id),r]));
-  // A file may be attached when it is already on this evidence, or it belongs to this context's project
-  // (or no project) and was uploaded by the person submitting — never another project's or tenant's file.
-  const ok=(d:string)=>{if(already.has(d))return true;const r=byId.get(d);if(!r)return false;const p=r.project_id||null;return (p===null||p===ctx.projectId)&&r.uploaded_by===a.userId;};
+  const ids=[...new Set(shape.refs.documents)],rows=await query('SELECT id,context_type,context_id,project_id,uploaded_by,status FROM documents WHERE organisation_id=? AND id IN (?)',[org,ids],conn),byId=new Map(rows.map(r=>[String(r.id),r]));
+  // A file may be attached when it is already on this evidence (carried through a correction), or it is
+  // Forms evidence uploaded by this person for this exact resolved context. Same organisation is not
+  // enough: another project's, shift's, asset's or tenant's file is refused, as is any non-Forms document.
+  const key=evidenceKey(ctx);
+  const ok=(d:string)=>{if(already.has(d))return true;const r=byId.get(d);return Boolean(r&&r.context_type==='form'&&r.context_id===key&&(r.project_id||null)===ctx.projectId&&r.status==='current'&&r.uploaded_by===a.userId);};
   for(const d of ids)if(!ok(d)){const f=[...fields.values()].find(x=>{const v=shape.values[x.id];return Array.isArray(v)?v.includes(d):(v as SignatureValue|undefined)?.documentId===d;});refFail(f?.id||'',`${f?.label||'File'}: attach a file you uploaded for this form.`);}
  }
  const pendingLocations:Record<string,LocationInput>={};
@@ -314,7 +342,7 @@ async function referenceLabels(snapshots:Answers[],schema:FormSchema){
  return {
   people:Object.fromEntries([...w,...p].map(r=>[r.id,String(r.name)])),
   assets:Object.fromEntries(as.map(r=>[r.id,[r.plant_number,r.name].filter(Boolean).join(' · ')])),
-  documents:Object.fromEntries(ds.map(r=>[r.id,{title:r.title||r.file_name,contentType:r.content_type,url:`/api/documents?id=${encodeURIComponent(String(r.id))}`}])),
+  documents:Object.fromEntries(ds.map(r=>[r.id,{title:r.title||r.file_name,contentType:r.content_type,url:`/api/forms/evidence?id=${encodeURIComponent(String(r.id))}`}])),
   locations:Object.fromEntries([...locations.entries()]),
  };
 }

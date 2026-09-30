@@ -144,7 +144,9 @@ function AttentionList({items,empty}:{items:Attention[];empty:string}){
 /** Which division owns the project. Hidden for single-division organisations; changing it moves the project's shifts with it. */
 function ProjectDivision({projectId,value,editable}:{projectId:string;value?:string|null;editable:boolean}){
  const d=useDivisions();const {busy,error,run}=useAction();const [current,setCurrent]=useState(value??null);
- if(!d.multi)return null;
+ // Single-division companies see nothing, unless the record still carries a non-default (e.g. archived) division: history stays visible.
+ if(!d.multi&&(!value||value===d.defaultId))return null;
+ if(!d.multi)return <p className="text-sm text-slate-600">Division: {d.label(value)}</p>;
  return <Section title="Division" description="Organises this project's reporting. Clients, people and plant are shared across divisions.">
   <ErrorState error={error}/>
   {editable?<DivisionPicker label="Owning division" disabled={busy} value={current} onChange={id=>void run(()=>api('/api/projects/workspace',{method:'POST',body:{action:'set-division',id:projectId,businessUnitId:id}}),()=>setCurrent(id))}/>:<p className="text-sm">{d.label(current)}</p>}

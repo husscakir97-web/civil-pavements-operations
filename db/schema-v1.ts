@@ -860,3 +860,25 @@ export const assetMeterReadings=mysqlTable('asset_meter_readings',{
  reading:decimal('reading',{precision:15,scale:2}).notNull(),nextService:decimal('next_service',{precision:15,scale:2}).notNull(),
  note:text('note').notNull(),actorId:ref('actor_id').notNull(),createdAt:stamp('created_at').notNull(),
 },t=>[index('asset_meter_readings_org_idx').on(t.organisationId),index('asset_meter_readings_asset_idx').on(t.organisationId,t.assetId)]);
+
+// ---------------------------------------------------------------- forms engine (migration 0019)
+// Published versions and submissions are immutable; corrections are linked amendments.
+export const formTemplates=mysqlTable('form_templates',{
+ id:id(),organisationId:org(),module:varchar('module',{length:40}).notNull().default('ims'),name:varchar('name',{length:180}).notNull(),
+ description:text('description'),category:varchar('category',{length:60}).notNull().default('General'),status:varchar('status',{length:20}).notNull().default('active'),
+ currentVersionId:ref('current_version_id'),...lifecycle(),
+},t=>[index('idx_form_templates_org').on(t.organisationId,t.module,t.status)]);
+export const formTemplateVersions=mysqlTable('form_template_versions',{
+ id:id(),organisationId:org(),templateId:ref('template_id').notNull(),versionNumber:int('version_number').notNull(),
+ status:varchar('status',{length:20}).notNull().default('draft'),schemaJson:longtext('schema_json').notNull(),changeReason:varchar('change_reason',{length:500}),
+ publishedBy:ref('published_by'),publishedAt:stamp('published_at'),...lifecycle(),
+},t=>[uniqueIndex('idx_form_template_versions_number').on(t.organisationId,t.templateId,t.versionNumber),index('idx_form_template_versions_org').on(t.organisationId,t.templateId,t.status)]);
+export const formSubmissions=mysqlTable('form_submissions',{
+ id:id(),organisationId:org(),templateId:ref('template_id').notNull(),templateVersionId:ref('template_version_id').notNull(),
+ contextType:varchar('context_type',{length:40}).notNull(),contextId:ref('context_id').notNull(),projectId:ref('project_id'),
+ responsesJson:longtext('responses_json').notNull(),provenanceJson:longtext('provenance_json'),submittedBy:ref('submitted_by').notNull(),submittedAt:stamp('submitted_at').notNull(),createdAt:stamp('created_at').notNull(),
+},t=>[index('idx_form_submissions_org').on(t.organisationId,t.submittedAt),index('idx_form_submissions_context').on(t.organisationId,t.contextType,t.contextId),index('idx_form_submissions_project').on(t.organisationId,t.projectId),index('idx_form_submissions_template').on(t.organisationId,t.templateId)]);
+export const formSubmissionAmendments=mysqlTable('form_submission_amendments',{
+ id:id(),organisationId:org(),submissionId:ref('submission_id').notNull(),sequence:int('sequence').notNull(),responsesJson:longtext('responses_json').notNull(),
+ changedFields:text('changed_fields'),reason:varchar('reason',{length:1000}).notNull(),amendedBy:ref('amended_by').notNull(),amendedAt:stamp('amended_at').notNull(),createdAt:stamp('created_at').notNull(),
+},t=>[uniqueIndex('idx_form_submission_amendments_seq').on(t.organisationId,t.submissionId,t.sequence),index('idx_form_submission_amendments_org').on(t.organisationId)]);

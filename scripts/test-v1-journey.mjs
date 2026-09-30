@@ -1039,6 +1039,165 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  console.log('PASS L locations: fake provider autocomplete/place/reverse, offline + reverse failure, no invented addresses, site location with exact pin (geocoded kept), tenant isolation, no global endpoint, legacy + manual entry, project inheritance/override without rewriting CRM, shift work point, Field Today directions, depots, company address, incident location');
 
  // ---------------------------------------------------------------- Scenario H: ABN register, AI orchestration, billing
+ // ---------------------------------------------------------------- Scenario F8: forms engine — versions, evidence, corrections, scope
+ step='F8 forms engine';
+ await as('project_engineer');
+ const fPost=(body,cookie=A.cookie)=>call('/api/forms','POST',body,cookie);
+ const fGet=(q,cookie=A.cookie)=>call('/api/forms?'+q,'GET',undefined,cookie);
+ const fSchema={sections:[{id:'checks',title:'Checks',fields:[
+  {id:'plant_safe',type:'boolean',label:'Plant safe to operate?',required:true},
+  {id:'describe_defect',type:'textarea',label:'Describe the defect',required:true,showIf:{field:'plant_safe',op:'eq',value:'false'}},
+  {id:'hazard',type:'select',label:'Main hazard',options:[{value:'traffic',label:'Traffic'},{value:'dust',label:'Dust'}]},
+  {id:'operator',type:'person',label:'Operator'},
+  {id:'rig',type:'asset',label:'Plant item'},
+  {id:'work_point',type:'location',label:'Work point'},
+  {id:'photos',type:'photo',label:'Photos'},
+  {id:'signed',type:'signature',label:'Sign-off',required:true},
+ ]}]};
+ await json(await fPost({action:'create',name:'Field form',schema:fSchema},C.cookie),403,'field workers cannot create templates');
+ await json(await fPost({action:'create',name:'Engineer form',schema:fSchema},R.cookie),403,'engineers cannot manage templates');
+ await json(await fPost({action:'create',name:'Bad form',schema:{sections:[{id:'s',title:'S',fields:[{id:'a',type:'text',label:'A',showIf:{field:'zzz',op:'answered'}}]}]}}),400,'conditions must reference earlier fields');
+ const fTpl=await json(await fPost({action:'create',name:'Plant prestart',category:'Prestart',schema:fSchema}),201,'create template draft v1');
+ const fV1=fTpl.versionId;
+ let fDetail=await json(await fGet('op=template&id='+fTpl.id),200);assert.equal(fDetail.draft.versionNumber,1);assert.equal(fDetail.current,null);
+ assert(!(await json(await fGet('op=templates',C.cookie),200)).templates.some(t=>t.id===fTpl.id),'unpublished forms are hidden from field users');
+ await json(await fGet('op=version&id='+fV1,C.cookie),404,'draft versions hidden from field users');
+ await json(await fPost({action:'submit',templateId:fTpl.id,contextType:'project',contextId:pA,responses:{}},R.cookie),404,'no submissions against an unpublished form');
+ await json(await fPost({action:'publish',id:fTpl.id,versionId:fV1},R.cookie),403,'engineers cannot publish');
+ await json(await fPost({action:'publish',id:fTpl.id,versionId:fV1,changeReason:'First issue'}),200,'publish v1');
+ await json(await fPost({action:'saveDraft',id:fTpl.id,versionId:fV1,schema:{sections:[]}}),409,'a published version cannot be edited');
+ await json(await fPost({action:'publish',id:fTpl.id,versionId:fV1}),409,'a published version cannot be republished');
+ // References for validation.
+ const fPlantA=crypto.randomUUID(),fPlantB=crypto.randomUUID(),fNow=new Date().toISOString();
+ await db.execute('INSERT INTO plant (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)',[fPlantA,memberA.organisation_id,'Form roller','active','{}',fNow]);
+ await db.execute('INSERT INTO plant (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)',[fPlantB,memberB.organisation_id,'Other org roller','active','{}',fNow]);
+ // Forms evidence belongs to IMS, not the Field module: everything below runs with Field disabled.
+ const fUpload=(cookie,contextType,contextId,name='photo.png',content='\x89PNG fixture')=>{const f=new FormData();f.set('contextType',contextType);f.set('contextId',contextId);f.set('file',new File([content],name,{type:'image/png'}));return call('/api/forms/evidence','POST',f,cookie);};
+ await json(await call('/api/platform/entitlements','PUT',{module:'field',status:'disabled'},A.cookie),200,'disable Field');
+ await json(await upload(C.cookie,{contextType:'field',projectId:pA,title:'Ordinary field doc'}),403,'ordinary Field documents still need the Field module');
+ const fPhotoR=(await json(await fUpload(R.cookie,'project',pA),201,'IMS active + Field disabled: engineer uploads form evidence')).document;
+ const fSigR=(await json(await fUpload(R.cookie,'project',pA,'signature.png'),201,'IMS active + Field disabled: drawn signature stored')).document;
+ const fPhotoOtherProject=(await json(await fUpload(A.cookie,'project',pB),201)).document;
+ const fPhotoByAdmin=(await json(await fUpload(A.cookie,'project',pA),201)).document;
+ const fAdminShiftDoc=(await json(await fUpload(A.cookie,'shift',shiftA),201)).document;
+ const fPhotoOtherOrg=(await json(await fUpload(B.cookie,'organisation','current'),201)).document;
+ const fShiftBDoc=(await json(await fUpload(A.cookie,'shift',shiftB),201)).document;
+ await json(await fUpload(R.cookie,'project',pB),404,'engineer cannot upload evidence to an unassigned project');
+ await json(await fUpload(C.cookie,'shift',shiftB),404,'field worker cannot upload evidence to an unassigned shift');
+ await json(await fUpload(C.cookie,'project',pA),404,'field worker cannot upload project-level evidence');
+ await json(await fUpload(R.cookie,'project',pA,'run.exe'),415,'evidence file types are controlled');
+ // Controlled context: generic document routes never create, list, search or open Forms evidence.
+ await json(await upload(A.cookie,{contextType:'form',contextId:'project:'+pA,projectId:pA,title:'Forged'}),400,'generic upload cannot write the Forms context');
+ assert.equal((await call('/api/documents?id='+fPhotoR.id,'GET',undefined,A.cookie)).status,404,'generic open never serves Forms evidence');
+ assert(!(await json(await call('/api/documents?projectId='+pA,'GET',undefined,A.cookie),200)).documents.some(d=>d.id===fPhotoR.id),'generic listing excludes Forms evidence');
+ // Direct evidence access re-derives the form context.
+ assert.equal((await call('/api/forms/evidence?id='+fPhotoR.id,'GET',undefined,R.cookie)).status,200,'engineer opens own project evidence');
+ await json(await call('/api/forms/evidence?id='+fPhotoOtherProject.id,'GET',undefined,R.cookie),404,'engineer cannot open unassigned project evidence');
+ await json(await call('/api/forms/evidence?id='+fPhotoR.id,'GET',undefined,C.cookie),404,'shift access never opens project-level evidence');
+ await json(await call('/api/forms/evidence?id='+fShiftBDoc.id,'GET',undefined,C.cookie),404,'guessed evidence id for an unassigned shift refused');
+ await json(await call('/api/forms/evidence?id='+fPhotoR.id,'GET',undefined,B.cookie),404,'other tenant cannot open evidence');
+ const fWhere={addressLine1:'1 Alpha Road',addressLine2:null,locality:'Ingleburn',state:'NSW',postcode:'2565',country:'AU',source:'manual',pin:{lat:-33.99,lng:150.86}};
+ const fGood={plant_safe:true,describe_defect:'left over from a hidden branch',hazard:'traffic',operator:R.user.id,rig:fPlantA,work_point:fWhere,photos:[fPhotoR.id],signed:{name:'Robin Engineer',confirmed:true,documentId:fSigR.id}};
+ const fSubmit=(responses,cookie=R.cookie,contextType='project',contextId=pA,extra={})=>fPost({action:'submit',templateId:fTpl.id,contextType,contextId,responses,...extra},cookie);
+ const fBad=async(patch,label)=>{const {signed:_s,...rest}=fGood;void _s;await json(await fSubmit({...fGood,...patch}),400,label);return rest;};
+ await json(await fSubmit({...fGood,signed:undefined}),400,'required field enforced server-side');
+ await fBad({plant_safe:false,describe_defect:undefined},'visible conditional required field enforced');
+ await fBad({hazard:'fire'},'invalid choice rejected');
+ await fBad({mystery:'x'},'unknown field rejected');
+ await fBad({operator:B.user.id},'person from another organisation rejected');
+ await fBad({rig:fPlantB},'asset from another organisation rejected');
+ await fBad({photos:[fPhotoOtherProject.id]},'document from another project rejected');
+ await fBad({photos:[fPhotoByAdmin.id]},'document uploaded by someone else rejected');
+ await fBad({photos:[fPhotoOtherOrg.id]},'document from another organisation rejected');
+ await json(await fSubmit({...fGood,photos:[fAdminShiftDoc.id]},A.cookie),400,'Forms evidence from another context cannot be inserted');
+ await fBad({photos:[fShiftBDoc.id]},'unauthorised shift evidence rejected');
+ const fOrdinary=(await json(await upload(A.cookie,{contextType:'project',contextId:pA,projectId:pA,title:'Ordinary project doc'}),201)).document;
+ await json(await fSubmit({...fGood,photos:[fOrdinary.id]},A.cookie),400,'ordinary documents are not form evidence');
+ await fBad({work_point:{...fWhere,pin:{lat:200,lng:1}}},'invalid location rejected');
+ await fBad({signed:{name:'Robin',confirmed:false}},'unconfirmed signature rejected');
+ const fSubA=(await json(await fSubmit(fGood),201,'engineer submits Alpha project form')).id;
+ const [[fRowA]]=await db.execute('SELECT * FROM form_submissions WHERE organisation_id=? AND id=?',[memberA.organisation_id,fSubA]);
+ const fOrigJson=fRowA.responses_json,fOrig=JSON.parse(fOrigJson);
+ assert.equal(fRowA.template_version_id,fV1);assert.equal(fRowA.project_id,pA);assert.equal(fRowA.context_type,'project');
+ assert.equal(fOrig.describe_defect,undefined,'hidden conditional answer is not stored');
+ assert.equal(fOrig.signed.signerUserId,R.user.id,'signature stamped with the signer account');assert(fOrig.signed.signedAt,'signature stamped with capture time');
+ assert(fOrig.work_point.locationId,'location stored in the Core locations model');
+ assert.equal(fOrig.signed.documentId,fSigR.id,'drawn signature kept as a Documents reference');assert(!fOrigJson.includes('base64'),'no inline binary');
+ const [[fLoc]]=await db.execute('SELECT owner_type,owner_id FROM locations WHERE organisation_id=? AND id=?',[memberA.organisation_id,fOrig.work_point.locationId]);assert.deepEqual({...fLoc},{owner_type:'form_submission',owner_id:fSubA});
+ // Project scope: Bravo is not the engineer's project.
+ await json(await fSubmit(fGood,R.cookie,'project',pB),404,'engineer cannot submit against an unassigned project');
+ await json(await fGet(`op=submissions&contextType=project&contextId=${pB}`,R.cookie),404,'engineer cannot list another project\'s forms');
+ const fBravoPhoto=(await json(await fUpload(A.cookie,'project',pB),201)).document;
+ const fSubB=(await json(await fSubmit({...fGood,operator:A.user.id,photos:[fBravoPhoto.id],signed:{name:'Admin',confirmed:true}},A.cookie,'project',pB),201,'admin submits Bravo form')).id;
+ await json(await fGet('op=submission&id='+fSubB,R.cookie),404,'engineer cannot open a Bravo submission by id');
+ await json(await fPost({action:'amend',id:fSubB,responses:{...fGood,hazard:'dust'},reason:'Try to edit Bravo'},R.cookie),404,'engineer cannot correct a Bravo submission');
+ const fRList=(await json(await fGet('op=submissions',R.cookie),200)).submissions.map(x=>x.id);assert(fRList.includes(fSubA)&&!fRList.includes(fSubB),'engineer list is project-scoped');
+ // Field worker: assigned shift only; a shift never opens the project.
+ const fFieldPhoto=(await json(await fUpload(C.cookie,'shift',shiftA),201,'Field disabled: assigned field worker uploads shift evidence')).document;
+ assert.equal((await call('/api/forms/evidence?id='+fFieldPhoto.id,'GET',undefined,C.cookie)).status,200,'field worker reopens own shift evidence');
+ assert.equal((await call('/api/forms/evidence?id='+fFieldPhoto.id,'GET',undefined,R.cookie)).status,200,'engineer opens shift evidence on their project');
+ const fShiftSub=(await json(await fSubmit({plant_safe:false,describe_defect:'Hydraulic leak',photos:[fFieldPhoto.id],signed:{name:'Casey Field',confirmed:true}},C.cookie,'shift',shiftA),201,'field worker submits an assigned-shift form')).id;
+ const [[fShiftRow]]=await db.execute('SELECT project_id,context_type FROM form_submissions WHERE organisation_id=? AND id=?',[memberA.organisation_id,fShiftSub]);assert.equal(fShiftRow.project_id,pA,'project derived from the shift, never supplied');
+ await json(await fSubmit({plant_safe:true,signed:{name:'Casey Field',confirmed:true}},C.cookie,'shift',shiftB),404,'field worker cannot submit against an unassigned shift');
+ await json(await fSubmit({plant_safe:true,signed:{name:'Casey Field',confirmed:true}},C.cookie,'project',pA),404,'field worker cannot submit against the whole project');
+ await json(await fGet('op=submission&id='+fSubA,C.cookie),404,'field worker cannot open project-level evidence');
+ await json(await fGet('op=submission&id='+fShiftSub,C.cookie),200,'field worker reopens own shift evidence');
+ await json(await fPost({action:'amend',id:fShiftSub,responses:{plant_safe:true,signed:{name:'Casey Field',confirmed:true}},reason:'oops'},C.cookie),403,'field workers cannot correct evidence');
+ const fShiftList=(await json(await fGet(`op=submissions&contextType=shift&contextId=${shiftA}`,R.cookie),200)).submissions.map(x=>x.id);assert(fShiftList.includes(fShiftSub),'engineer sees shift evidence on their project');
+ // Tenant isolation.
+ await json(await fGet('op=template&id='+fTpl.id,B.cookie),404,'other tenant cannot read the template');
+ await json(await fGet('op=version&id='+fV1,B.cookie),404,'other tenant cannot read the version');
+ await json(await fGet('op=submission&id='+fSubA,B.cookie),404,'other tenant cannot read the submission');
+ await json(await fPost({action:'submit',templateId:fTpl.id,contextType:'organisation',contextId:'current',responses:fGood},B.cookie),404,'other tenant cannot submit against the template');
+ await json(await fPost({action:'amend',id:fSubA,responses:fGood,reason:'hijack'},B.cookie),404,'other tenant cannot correct');
+ await json(await fPost({action:'submit',templateId:fTpl.id,contextType:'project',contextId:pOther,responses:fGood}),404,'another organisation\'s project is not a context');
+ // Versioning: V2 is edited and published without touching V1; V1 evidence keeps V1.
+ const fRev=await json(await fPost({action:'revise',id:fTpl.id}),200,'start revision');assert.equal(fRev.versionNumber,2);
+ assert.equal((await json(await fPost({action:'revise',id:fTpl.id}),200)).versionId,fRev.versionId,'one open draft at a time');
+ const fSchema2={sections:[{...fSchema.sections[0],fields:[...fSchema.sections[0].fields,{id:'tyres_ok',type:'boolean',label:'Tyres OK?',required:true}].map(f=>f.id==='plant_safe'?{...f,label:'Is the plant safe to operate?'}:f)}]};
+ const fDraft=(await json(await fGet('op=template&id='+fTpl.id),200)).draft;
+ await json(await fPost({action:'saveDraft',id:fTpl.id,versionId:fRev.versionId,revision:fDraft.revision,schema:fSchema2,changeReason:'Add tyre check'}),200,'edit v2 draft');
+ await json(await fPost({action:'saveDraft',id:fTpl.id,versionId:fRev.versionId,revision:fDraft.revision,schema:fSchema2}),409,'stale draft edit refused');
+ const fV1After=(await json(await fGet('op=version&id='+fV1),200)).version;assert(!fV1After.schema.sections[0].fields.some(f=>f.id==='tyres_ok'),'v1 unchanged by v2 edits');assert.equal(fV1After.status,'published');
+ await json(await fPost({action:'publish',id:fTpl.id,versionId:fRev.versionId}),200,'publish v2');
+ assert.equal((await json(await fGet('op=version&id='+fV1),200)).version.status,'superseded','v1 becomes historical');
+ const fSubAView=await json(await fGet('op=submission&id='+fSubA,R.cookie),200);assert.equal(fSubAView.submission.versionNumber,1);assert(!fSubAView.schema.sections[0].fields.some(f=>f.id==='tyres_ok'),'v1 evidence renders against v1');assert.equal(fSubAView.schema.sections[0].fields[0].label,'Plant safe to operate?');
+ await json(await fSubmit(fGood,R.cookie,'project',pA,{versionId:fV1}),409,'new submissions cannot target a superseded version');
+ await json(await fSubmit({...fGood,photos:[]}),400,'v2 required field enforced');
+ await json(await fSubmit({...fGood,photos:[],tyres_ok:true}),201,'v2 submission');
+ // Corrections: append-only, reasoned, original untouched.
+ await json(await fPost({action:'amend',id:fSubA,responses:{...fSubAView.effective,hazard:'dust'}},R.cookie),400,'correction needs a reason');
+ await json(await fPost({action:'amend',id:fSubA,responses:{...fSubAView.effective,tyres_ok:true},reason:'Add tyres'},R.cookie),400,'corrections validate against the original version');
+ const fAm1=await json(await fPost({action:'amend',id:fSubA,responses:{...fSubAView.effective,hazard:'dust'},reason:'Wrong hazard selected'},R.cookie),201,'correction 1');
+ assert.equal(fAm1.sequence,1);assert.deepEqual(fAm1.changedFields,['hazard']);
+ await json(await fPost({action:'amend',id:fSubA,responses:{...fSubAView.effective,hazard:'dust'},reason:'Same again'},R.cookie),400,'a correction must change something');
+ const fAm2=await json(await fPost({action:'amend',id:fSubA,responses:{...fSubAView.effective,hazard:'dust',signed:{name:'Robin E. Engineer',confirmed:true}},reason:'Signer name typo'},A.cookie),201,'correction 2');assert.equal(fAm2.sequence,2);
+ const [[fRowAfter]]=await db.execute('SELECT responses_json FROM form_submissions WHERE organisation_id=? AND id=?',[memberA.organisation_id,fSubA]);assert.equal(fRowAfter.responses_json,fOrigJson,'original evidence never mutated');
+ const fHist=await json(await fGet('op=submission&id='+fSubA,R.cookie),200);
+ assert.equal(fHist.original.hazard,'traffic');assert.equal(fHist.effective.hazard,'dust');assert.equal(fHist.amendments.length,2);assert.equal(fHist.amendments[0].reason,'Wrong hazard selected');
+ assert.equal(fHist.effective.signed.signerUserId,A.user.id,'a changed signature is re-stamped');assert.equal(fHist.original.signed.signerUserId,R.user.id,'the original signature is kept');
+ assert.deepEqual(fHist.effective.work_point,fOrig.work_point,'carried location kept');assert.deepEqual(fHist.effective.photos,[fPhotoR.id],'carried files kept');
+ assert.equal(fHist.labels.people[R.user.id]!==undefined,true);
+ // Audit trail.
+ const [fAudit]=await db.execute('SELECT event_type FROM audit_log WHERE organisation_id=? AND entity_id IN (?,?)',[memberA.organisation_id,fTpl.id,fSubA]);const fEvents=new Set(fAudit.map(r=>r.event_type));
+ for(const e of ['form_template.created','form_template.published','form_template.revision_started','form_template.draft_updated','form_submission.submitted','form_submission.amended'])assert(fEvents.has(e),'audit: '+e);
+ // Deterministic version numbers (database-enforced).
+ await assert.rejects(db.execute("INSERT INTO form_template_versions (id,organisation_id,template_id,version_number,status,schema_json,created_at,updated_at) VALUES (?,?,?,1,'draft','{}',?,?)",[crypto.randomUUID(),memberA.organisation_id,fTpl.id,fNow,fNow]),'duplicate version number refused');
+ // Archive stops new submissions; history stays readable.
+ await json(await fPost({action:'archive',id:fTpl.id}),200);await json(await fSubmit({...fGood,photos:[],tyres_ok:true}),404,'archived forms cannot be completed');
+ await json(await fGet('op=submission&id='+fSubA,R.cookie),200,'archived form evidence stays readable');await json(await fPost({action:'restore',id:fTpl.id}),200);
+ // Submitted evidence stays readable with Field disabled; re-enabling Field leaves ordinary field documents unchanged.
+ assert.equal((await call('/api/forms/evidence?id='+fPhotoR.id,'GET',undefined,R.cookie)).status,200,'submitted evidence readable while Field is disabled');
+ assert.equal((await call('/api/forms/evidence?id='+fSigR.id,'GET',undefined,A.cookie)).status,200,'drawn signature readable while Field is disabled');
+ await json(await call('/api/platform/entitlements','PUT',{module:'field',status:'active'},A.cookie),200,'restore Field');
+ const fOrdinaryField=(await json(await upload(C.cookie,{contextType:'field',projectId:pA,title:'Ordinary field doc'}),201,'ordinary Field upload works again')).document;
+ assert.equal((await call('/api/documents?id='+fOrdinaryField.id,'GET',undefined,C.cookie)).status,200,'ordinary Field document opens through the generic route');
+ // IMS entitlement governs the forms surface.
+ await json(await call('/api/platform/entitlements','PUT',{module:'ims',status:'disabled'},A.cookie),200,'disable IMS');
+ await json(await fGet('op=templates'),404,'IMS disabled: forms unavailable');await json(await call('/api/forms/evidence?id='+fPhotoR.id,'GET',undefined,R.cookie),404,'IMS disabled: evidence unavailable');await json(await fUpload(R.cookie,'project',pA),404,'IMS disabled: no evidence uploads');await json(await fSubmit({...fGood,photos:[],tyres_ok:true}),404,'IMS disabled: no submissions');
+ await json(await call('/api/platform/entitlements','PUT',{module:'ims',status:'active'},A.cookie),200,'restore IMS');
+ console.log('PASS F8 forms: draft→publish→immutable v1, v2 revision without touching v1, v1 evidence renders v1, stale version refused, server-side required/conditional/choice/unknown/person/asset/document/location/signature validation, hidden answers dropped, immutable submissions with reasoned append-only corrections, Alpha/Bravo engineer scope, assigned-shift field submission, tenant isolation, audit trail, archive, IMS entitlement; evidence in a controlled IMS Forms document context works with Field disabled, re-derives shift/project scope on every open, never appears in generic document routes, and cannot be moved between contexts');
+
  step='H ABN';
  let reg1=await json(await call('/api/platform/abn?abn=51824753556&lookup=1','GET',undefined,A.cookie),200);assert.equal(reg1.registry.status,'found');assert.equal(reg1.registry.record.entityName,'ALPHA CIVIL PTY LTD');
  const nf=await json(await call('/api/platform/abn','POST',{abn:'53004085616'},A.cookie),404);assert.equal(nf.code,'ABN_NOT_FOUND');

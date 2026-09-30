@@ -486,4 +486,55 @@ console.log('PASS estimate paste: header skipped, $ and thousands parsed, catego
  assert.throws(()=>S.locationColumns({...L.EMPTY_PARTS,source:'manual',pin:{lat:0,lng:0}}));
  console.log('PASS locations: address components, pin state, directions, provider modes, fake provider, geocoded vs exact pin columns, manual entry');
 })().catch(e=>{console.error(e);process.exit(1);});
+{
+ const F=load('lib/v1/forms.ts'),Pm=load('lib/platform/permissions.ts');
+ const schema={sections:[{id:'checks',title:'Checks',fields:[
+  {id:'plant_safe',type:'boolean',label:'Plant safe to operate?',required:true},
+  {id:'describe_defect',type:'textarea',label:'Describe the defect',required:true,showIf:{field:'plant_safe',op:'eq',value:'false'}},
+  {id:'hazards',type:'multiselect',label:'Hazards',options:[{value:'noise',label:'Noise'},{value:'dust',label:'Dust'}]},
+  {id:'dust_control',type:'select',label:'Dust control',options:[{value:'water',label:'Water cart'},{value:'none',label:'None'}],required:true,showIf:{field:'hazards',op:'in',value:['dust']}},
+  {id:'notes',type:'text',label:'Notes',showIf:{field:'describe_defect',op:'answered'}},
+  {id:'ack',type:'checkbox',label:'I have read the SWMS',required:true},
+ ]}]};
+ assert.deepEqual(F.checkSchema(schema).errors,[]);
+ // Structural rules: forward references, duplicate ids, missing options, bad option values, publish needs a field.
+ assert(F.checkSchema({sections:[{id:'s',title:'S',fields:[{id:'a',type:'text',label:'A',showIf:{field:'b',op:'answered'}},{id:'b',type:'text',label:'B'}]}]}).errors[0].includes('earlier field'));
+ assert(F.checkSchema({sections:[{id:'s',title:'S',fields:[{id:'a',type:'text',label:'A'},{id:'a',type:'text',label:'A2'}]}]}).errors.some(e=>e.includes('used twice')));
+ assert(F.checkSchema({sections:[{id:'s',title:'S',fields:[{id:'a',type:'select',label:'A'}]}]}).errors.some(e=>e.includes('option')));
+ assert(F.checkSchema({sections:[{id:'s',title:'S',fields:[{id:'a',type:'select',label:'A',options:[{value:'x',label:'X'}]},{id:'b',type:'text',label:'B',showIf:{field:'a',op:'eq',value:'y'}}]}]}).errors.some(e=>e.includes('not an option')));
+ assert(F.checkSchema({sections:[{id:'s',title:'S',fields:[]}]},{forPublish:true}).errors.some(e=>e.includes('at least one field')));
+ assert(F.checkSchema({sections:[{id:'Bad Id',title:'S',fields:[]}]}).errors.length,'ids are stable machine keys');
+ // Visibility is deterministic and chained: hidden parents hide dependants.
+ assert.deepEqual([...F.visibleFields(schema,{plant_safe:true})].sort(),['ack','hazards','plant_safe']);
+ assert([...F.visibleFields(schema,{plant_safe:false,describe_defect:'Cracked hose'})].includes('notes'));
+ assert(![...F.visibleFields(schema,{plant_safe:true,describe_defect:'stale'})].includes('notes'),'a condition on a hidden field sees it unanswered');
+ // Validation: required, conditional required, hidden values dropped, invalid choice, unknown field, checkbox must be ticked.
+ let r=F.validateShape(schema,{plant_safe:true,ack:true,describe_defect:'left over',hazards:['noise']});
+ assert.deepEqual(r.errors,[]);assert.equal(r.values.describe_defect,undefined,'hidden conditional values are never stored');assert.deepEqual(r.values.hazards,['noise']);
+ r=F.validateShape(schema,{plant_safe:false,ack:true});assert(r.errors.some(e=>e.field==='describe_defect'),'visible conditional required enforced');
+ r=F.validateShape(schema,{plant_safe:true,ack:true,hazards:['dust']});assert(r.errors.some(e=>e.field==='dust_control'),'"in" condition makes a required field visible');
+ r=F.validateShape(schema,{plant_safe:true,ack:true,hazards:['smoke']});assert(r.errors.some(e=>e.field==='hazards'),'invalid multi-select value');
+ r=F.validateShape(schema,{plant_safe:true,ack:true,hazards:['dust'],dust_control:'teleport'});assert(r.errors.some(e=>e.field==='dust_control'),'invalid single choice');
+ r=F.validateShape(schema,{plant_safe:true,ack:true,sneaky:'x'});assert(r.errors.some(e=>e.field==='sneaky'),'unknown field rejected');
+ r=F.validateShape(schema,{plant_safe:true,ack:false});assert(r.errors.some(e=>e.field==='ack'),'required acknowledgement must be ticked');
+ r=F.validateShape(schema,{plant_safe:'yes',ack:true});assert(r.errors.some(e=>e.field==='plant_safe'),'booleans are typed');
+ // Reference types are collected for the server to verify; signatures need a name and confirmation.
+ const refSchema={sections:[{id:'s',title:'S',fields:[{id:'who',type:'person',label:'Who'},{id:'rig',type:'asset',label:'Rig'},{id:'pics',type:'photo',label:'Photos'},{id:'where',type:'location',label:'Where'},{id:'sig',type:'signature',label:'Sign',required:true},{id:'qty',type:'number',label:'Qty',min:0,max:10},{id:'on',type:'date',label:'On'}]}]};
+ r=F.validateShape(refSchema,{who:'u1',rig:'p1',pics:['d1','d1'],where:{addressLine1:'1 Road'},sig:{name:'Casey',confirmed:true,documentId:'d2'},qty:'4',on:'2026-10-01'});
+ assert.deepEqual(r.errors,[]);assert.deepEqual(r.refs,{people:['u1'],assets:['p1'],documents:['d1','d2']});assert.deepEqual(r.values.pics,['d1']);assert.equal(r.values.qty,4);assert(r.locations.where);
+ assert(F.validateShape(refSchema,{sig:{name:'Casey',confirmed:false}}).errors.some(e=>e.field==='sig'));
+ assert(F.validateShape(refSchema,{sig:{name:'C',confirmed:true},qty:11}).errors.some(e=>e.field==='qty'));
+ assert(F.validateShape(refSchema,{sig:{name:'C',confirmed:true},on:'01/10/2026'}).errors.some(e=>e.field==='on'));
+ assert(F.validateShape(refSchema,{sig:{name:'C',confirmed:true},pics:'data:image/png;base64,AAAA'}).errors.some(e=>e.field==='pics'),'no inline binary in responses');
+ assert.deepEqual(F.changedFields({a:1,b:[1]},{a:1,b:[2],c:3}),['b','c']);
+ assert.equal(F.fieldIdFrom('Is the plant safe?',new Set(['is_the_plant_safe'])),'is_the_plant_safe_2');
+ // Capabilities: field workers view/submit only; managers and publishers are distinct; amendment is deliberate.
+ for(const c of ['forms.view','forms.submit'])assert(Pm.can('field',c));
+ for(const c of ['forms.manage','forms.publish','forms.amend'])assert(!Pm.can('field',c),'field cannot '+c);
+ assert(Pm.can('project_manager','forms.publish')&&Pm.can('project_manager','forms.manage')&&Pm.can('office','forms.publish'));
+ assert(Pm.can('project_engineer','forms.amend')&&!Pm.can('project_engineer','forms.manage')&&!Pm.can('site_engineer','forms.publish'));
+ assert(Pm.can('read_only','forms.view')&&!Pm.can('read_only','forms.submit'));
+ assert(!Pm.can('accounts','forms.view'));
+ console.log('PASS forms engine: schema rules, stable ids, deterministic chained conditions, hidden values dropped, required/conditional required, typed values and choices, unknown fields, references and signatures, changed fields, capabilities');
+}
 console.log('PASS V1 logic: lifecycle guards, capability matrix and eleven-role route gate, primary navigation, legacy route resolution, Home quick actions, ABN checksum, forecast/claim/GST/retention arithmetic, risk ratings, register identifiers, estimate items, docket cost lines, legacy stage mapping, scheduling conflict engine, legacy resource mapping');

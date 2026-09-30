@@ -8,7 +8,7 @@ export const dynamic='force-dynamic';
 export const GET=api({permission:'field-read',module:'core'},async({params})=>{
  const id=params.get('id');
  if(id)return openDocument(id);
- return {documents:await listDocuments({contextType:params.get('contextType'),contextId:params.get('contextId'),projectId:params.get('projectId'),includeSuperseded:params.get('all')==='1',q:params.get('q'),category:params.get('category'),limit:params.get('limit')?Number(params.get('limit')):undefined})};
+ return {documents:await listDocuments({contextType:params.get('contextType'),contextId:params.get('contextId'),projectId:params.get('projectId'),includeSuperseded:params.get('all')==='1',unmanaged:params.get('unmanaged')==='1',q:params.get('q'),category:params.get('category'),limit:params.get('limit')?Number(params.get('limit')):undefined})};
 });
 export const POST=api({permission:'field',module:'core',capability:'document.upload'},async({request,actor})=>{
  const form=await request.formData();

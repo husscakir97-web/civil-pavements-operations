@@ -44,7 +44,7 @@ const PORT=33191,base=`http://localhost:${PORT}`;
 Object.assign(process.env,{R2_ENDPOINT:`http://127.0.0.1:${s3.address().port}`,R2_ACCESS_KEY_ID:'fixture',R2_SECRET_ACCESS_KEY:'fixture',R2_BUCKET_NAME:'test-bucket',EMAIL_ENABLED:'false',LOCATION_PROVIDER:'fake',BETTER_AUTH_SECRET:'journey-test-secret-with-at-least-32-characters',BETTER_AUTH_URL:base});
 const app=spawn(process.execPath,['node_modules/next/dist/bin/next','start','-p',String(PORT),'--hostname','127.0.0.1'],{env:process.env,stdio:['ignore','pipe','pipe']});
 let appLog='';app.stdout.on('data',b=>appLog+=b);app.stderr.on('data',b=>appLog+=b);
-let step='startup';
+let step='startup',servicePool=null;
 try{
  for(let i=0;i<120;i++){try{if((await fetch(base+'/login')).ok)break;}catch{}if(i===119)throw new Error(appLog);await new Promise(r=>setTimeout(r,500));}
  const call=async(path,method='GET',body,cookie)=>{for(let attempt=0;;attempt++){const r=await fetch(base+path,{method,headers:{origin:base,...(cookie?{cookie}:{}),...(body instanceof FormData||body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:body instanceof FormData?body:JSON.stringify(body),redirect:'manual'});if(r.status!==429||attempt>=3)return r;await new Promise(res=>setTimeout(res,(Number(r.headers.get('retry-after'))||10)*1000+200));}};
@@ -1487,6 +1487,182 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  assert.deepEqual(await cState(),{status:'Available',hold:0},'returned to service only after both are verified');
  console.log('PASS 8C form defects: field prestart on assigned shift → critical defect linked to the answer → safety hold blocks scheduling → repair → self-verify refused → rejection → independent verification → returned to service; request-id idempotency with several defects per answer, exact amendment provenance, narrow workshop.defect.report capability, Forms-scoped source traceability, read-only Workshop, two critical defects (hold clears only after both), only plant on the form, submission scope, tenant isolation, Workshop entitlement seam, minor defects keep plant available, evidence untouched, audit and domain event');
 
+ { // scoped: the 9A scenario reuses short names
+ // ---------------------------------------------------------------- Scenario 9A: Document Engine foundation (managed documents)
+ step='9A managed documents';
+ await as('project_engineer');
+ const mdForm=(fields,name='doc.pdf',content='%PDF-1.4 fixture')=>{const f=new FormData();for(const [k,v] of Object.entries(fields))if(v!==undefined)f.set(k,v);f.set('file',new File([content],name,{type:'application/pdf'}));return f;};
+ const mdCreate=(fields,cookie=A.cookie,name,content)=>call('/api/managed-documents','POST',mdForm(fields,name,content),cookie);
+ const mdRevise=(fields,cookie=A.cookie,name,content)=>call('/api/managed-documents/versions','POST',mdForm(fields,name,content),cookie);
+ const mdGet=(id,cookie=A.cookie)=>call('/api/managed-documents?id='+encodeURIComponent(id),'GET',undefined,cookie);
+ const mdList=(q,cookie=A.cookie)=>call('/api/managed-documents?'+q,'GET',undefined,cookie);
+ const bytesOf=async r=>Buffer.from(await r.arrayBuffer());
+ const hash=b=>sha('sha256').update(b).digest('hex');
+ const org9=memberA.organisation_id;
+ // Standalone company document: title + file, no project.
+ const c1='%PDF-1.4 layout revision A',c2='%PDF-1.4 layout revision B — changed',c3='%PDF-1.4 layout IFC',c4='%PDF-1.4 layout unlabelled';
+ const md=await json(await mdCreate({title:'CIV-102 Pavement Layout',revisionLabel:'A',documentNumber:'CIV-102',documentType:'Drawing',discipline:'Civil',tags:'pavement, Layout ,pavement'},A.cookie,'layout-a.pdf',c1),201,'create managed document');
+ assert.equal(md.document.document.current.versionNumber,1);assert.equal(md.document.document.projectId,null,'no project required');assert.deepEqual(md.document.document.tags,['pavement','Layout'],'tags normalised and de-duplicated');
+ const [[mRow]]=await db.execute('SELECT * FROM managed_documents WHERE organisation_id=? AND id=?',[org9,md.id]);
+ const [v1Row]=(await db.execute('SELECT * FROM document_versions WHERE organisation_id=? AND managed_document_id=?',[org9,md.id]))[0];
+ const [[f1Row]]=await db.execute('SELECT * FROM documents WHERE organisation_id=? AND id=?',[org9,v1Row.file_document_id]);
+ assert.equal(mRow.current_version_id,v1Row.id);assert.equal(v1Row.version_number,1);assert.equal(v1Row.sha256,hash(Buffer.from(c1)));assert.equal(f1Row.sha256,v1Row.sha256,'physical file hash retained on the version');assert.equal(mRow.context_type,'organisation');assert.equal(Number(f1Row.version),1);assert.equal(f1Row.status,'current');
+ // Revision B: new physical file + version; v1 and its file untouched and still downloadable exactly.
+ await json(await mdRevise({id:md.id,revisionLabel:'A2',expectedVersion:'9'},A.cookie,'layout-b.pdf',c2),409,'stale expectedVersion is refused');
+ await json(await mdRevise({id:md.id,revisionLabel:'<b>x</b>'},A.cookie,'layout-b.pdf',c2),400,'unsafe revision label refused');
+ const md2=await json(await mdRevise({id:md.id,revisionLabel:'B',issueDate:'2026-09-01',changeNote:'Kerb line moved',expectedVersion:'1'},A.cookie,'layout-b.pdf',c2),201,'upload revision B');
+ assert.equal(md2.versionNumber,2);assert.notEqual(md2.fileDocumentId,v1Row.file_document_id,'new physical file');
+ const [[f1After]]=await db.execute('SELECT * FROM documents WHERE organisation_id=? AND id=?',[org9,v1Row.file_document_id]);
+ assert.equal(f1After.sha256,f1Row.sha256);assert.equal(f1After.storage_key,f1Row.storage_key);assert.equal(f1After.status,'superseded','legacy mirror follows the managed layer');assert.equal(f1After.file_name,'layout-a.pdf');
+ const [[mAfter]]=await db.execute('SELECT current_version_id FROM managed_documents WHERE organisation_id=? AND id=?',[org9,md.id]);assert.equal(mAfter.current_version_id,md2.versionId);
+ const [[v1After]]=await db.execute('SELECT * FROM document_versions WHERE organisation_id=? AND id=?',[org9,v1Row.id]);assert.deepEqual({...v1After},{...v1Row},'historical version row is never rewritten');
+ await mdRevise({id:md.id,revisionLabel:'IFC'},A.cookie,'layout-c.pdf',c3).then(r=>json(r,201,'revision IFC'));
+ const md4=await json(await mdRevise({id:md.id},A.cookie,'layout-d.pdf',c4),201,'revision without a label');
+ assert.equal(md4.versionNumber,4,'system controlled sequence');
+ const detail=(await json(await mdGet(md.id),200)).versions;
+ assert.deepEqual(detail.map(v=>[v.versionNumber,v.revisionLabel,v.current]),[[4,null,true],[3,'IFC',false],[2,'B',false],[1,'A',false]]);
+ // Exact-version download and hashes.
+ const dl=async(v,cookie=A.cookie)=>call(v.url,'GET',undefined,cookie);
+ for(const [v,content] of [[detail[3],c1],[detail[2],c2],[detail[1],c3],[detail[0],c4]]){const b=await bytesOf(await dl(v));assert.equal(b.toString(),content);assert.equal(hash(b),v.sha256,'downloaded bytes match the recorded hash');}
+ assert.equal((await bytesOf(await call(`/api/managed-documents?id=${md.id}&download=1`,'GET',undefined,A.cookie))).toString(),c4,'no version id → current');
+ assert.equal((await bytesOf(await call(`/api/documents?id=${v1Row.file_document_id}`,'GET',undefined,A.cookie))).toString(),c1,'raw physical id still downloads');
+ await json(await call('/api/documents','POST',(()=>{const f=new FormData();f.set('file',new File(['x'],'x.pdf',{type:'application/pdf'}));f.set('contextType','organisation');f.set('supersedesId',md4.fileDocumentId);return f;})(),A.cookie),409,'raw supersede cannot bypass the managed revision authority');
+ // Metadata: identity only; versions untouched.
+ const meta0=(await json(await mdGet(md.id),200)).document;
+ const [vBefore]=await db.execute('SELECT * FROM document_versions WHERE organisation_id=? AND managed_document_id=? ORDER BY version_number',[org9,md.id]);
+ const patched=await json(await call('/api/managed-documents','PATCH',{id:md.id,revision:meta0.revision,title:'CIV-102 Pavement Layout (issued)',documentType:'Drawing',discipline:'Pavements',tags:['Layout','IFC']},A.cookie),200);
+ assert.equal(patched.document.title,'CIV-102 Pavement Layout (issued)');assert.equal(patched.document.discipline,'Pavements');
+ await json(await call('/api/managed-documents','PATCH',{id:md.id,revision:meta0.revision,title:'stale'},A.cookie),409,'stale metadata edit refused');
+ const [vAfter]=await db.execute('SELECT * FROM document_versions WHERE organisation_id=? AND managed_document_id=? ORDER BY version_number',[org9,md.id]);assert.deepEqual(vAfter,vBefore,'metadata edit does not touch version records');
+ // Search: one logical result, never one per revision.
+ for(const q of ['CIV-102','pavements','Drawing','ifc','layout-d.pdf'])assert((await json(await mdList('q='+encodeURIComponent(q)),200)).documents.some(d=>d.id===md.id),'register search: '+q);
+ assert(!(await json(await mdList('q=layout-a.pdf'),200)).documents.length,'historical file names are not indexed as separate documents');
+ const gs=async(q,cookie=A.cookie)=>(await json(await call('/api/search?q='+encodeURIComponent(q),'GET',undefined,cookie),200)).results;
+ for(const q of ['CIV-102','Pavements','Drawing','layout-d.pdf'])assert.equal((await gs(q)).filter(r=>r.id===md.id&&r.type==='Managed document').length,1,'global search one result: '+q);
+ assert(!(await gs('layout')).some(r=>r.type==='Document'&&[v1Row.file_document_id,md2.fileDocumentId,md4.fileDocumentId].includes(r.id)),'managed physical files are not duplicate legacy results');
+ assert(!(await gs('layout-a.pdf')).some(r=>r.id===md.id),'a superseded file name does not surface the document twice');
+ // Legacy unmanaged attachment stays searchable and listable.
+ const rawLegacy=(await json(await upload(A.cookie,{contextType:'organisation',category:'Quality',title:'Legacy raw handbook zed'},'legacy-zed.pdf'),201)).document;
+ assert((await gs('handbook zed')).some(r=>r.id===rawLegacy.id&&r.type==='Document'),'legacy raw document remains globally searchable');
+ assert((await json(await call('/api/documents?unmanaged=1&q=handbook%20zed','GET',undefined,A.cookie),200)).documents.some(d=>d.id===rawLegacy.id));
+ assert(!(await json(await call('/api/documents?unmanaged=1&q=layout','GET',undefined,A.cookie),200)).documents.some(d=>d.id===md4.fileDocumentId),'managed files are not legacy attachments');
+ // Project scope: PE assigned to Alpha only.
+ const bTender=null;void bTender;
+ const dA=await json(await mdCreate({title:'Alpha drawing set',contextType:'project',contextId:pA,documentType:'Drawing'},A.cookie,'alpha.pdf','%PDF-1.4 alpha'),201,'project managed document');
+ const dB=await json(await mdCreate({title:'Bravo drawing set',contextType:'project',contextId:pB,documentType:'Drawing'},A.cookie,'bravo.pdf','%PDF-1.4 bravo'),201);
+ assert.equal(dA.document.document.projectId,pA);
+ const dBv=(await json(await mdGet(dB.id),200)).versions[0];
+ for(const role of ['project_engineer','site_engineer']){
+  await as(role);const who=role+': ';
+  await json(await mdGet(dA.id,R.cookie),200,who+'own project managed document');
+  await json(await mdGet(dB.id,R.cookie),404,who+'guessed managed id of another project');
+  assert.equal((await call(dBv.url,'GET',undefined,R.cookie)).status,404,who+'guessed version id of another project');
+  assert.equal((await call(`/api/managed-documents?id=${dA.id}&versionId=${dBv.id}&download=1`,'GET',undefined,R.cookie)).status,404,who+'a version id of another document cannot be swapped in');
+  assert.equal((await call('/api/documents?id='+dB.fileDocumentId,'GET',undefined,R.cookie)).status,404,who+'guessed physical file id of another project');
+  const listed=(await json(await mdList('limit=500',R.cookie),200)).documents.map(d=>d.id);assert(listed.includes(dA.id)&&!listed.includes(dB.id),who+'register is project-scoped');
+  assert(!(await gs('Bravo drawing',R.cookie)).some(r=>r.id===dB.id),who+'search excludes other projects');
+ }
+ await as('site_engineer');
+ await json(await mdRevise({id:dA.id},R.cookie,'x.pdf','x'),403,'site engineer has no manage_versions');
+ await json(await call('/api/managed-documents','PATCH',{id:dA.id,revision:1,title:'x'},R.cookie),403,'site engineer has no document.edit');
+ await as('project_engineer');
+ await json(await mdRevise({id:dA.id,revisionLabel:'B'},R.cookie,'alpha-b.pdf','%PDF-1.4 alpha b'),201,'project engineer revises an Alpha document');
+ await json(await mdRevise({id:dB.id,revisionLabel:'B'},R.cookie,'bravo-b.pdf','x'),404,'project engineer cannot revise a Bravo document');
+ await json(await call('/api/managed-documents','PATCH',{id:dB.id,revision:1,title:'hijack'},R.cookie),404,'project engineer cannot edit a Bravo document');
+ await as('project_manager');
+ await json(await mdGet(dB.id,R.cookie),200,'org-wide project manager opens Bravo');
+ // Links: validated, tenant-safe, never widening access.
+ const link=async(id,body,cookie=A.cookie)=>call('/api/managed-documents/links','POST',{id,...body},cookie);
+ const lProject=await json(await link(dA.id,{targetType:'project',targetId:pA}),201,'link to a project');
+ await json(await link(dA.id,{targetType:'project',targetId:pA}),409,'duplicate link refused');
+ await json(await link(dA.id,{targetType:'tender',targetId:tenderId,relationship:'supporting'}),201,'link to a tender');
+ await json(await link(dA.id,{targetType:'project',targetId:'no-such-project'}),404,'nonexistent target refused');
+ await json(await link(dA.id,{targetType:'docket',targetId:'x'}),400,'unsupported target type refused');
+ const bProject=(await json(await call('/api/projects','POST',{name:'Other tenant project'},B.cookie),201)).projectId;
+ await json(await link(dA.id,{targetType:'project',targetId:bProject}),404,'cross-tenant target refused');
+ await json(await link(dB.id,{targetType:'project',targetId:pA}),201,'a Bravo document may be linked to Alpha');
+ await as('project_engineer');
+ await json(await mdGet(dB.id,R.cookie),404,'link to an assigned project does NOT open the Bravo document');
+ assert(!(await json(await mdList('limit=500',R.cookie),200)).documents.some(d=>d.id===dB.id),'…nor list it');
+ await json(await link(dA.id,{targetType:'project',targetId:pB},R.cookie),404,'engineer cannot link to a project outside their scope');
+ await json(await link(dB.id,{targetType:'project',targetId:pA},R.cookie),404,'engineer cannot link a Bravo document');
+ await json(await call('/api/managed-documents/links?id='+encodeURIComponent((await json(await mdGet(dB.id),200)).links[0].id),'DELETE',undefined,R.cookie),404,'engineer cannot remove a link by guessed id');
+ const linkedDetail=await json(await mdGet(dA.id,R.cookie),200);assert.equal(linkedDetail.links.length,1,'engineer sees the project link');assert.equal(linkedDetail.hiddenLinks,1,'the tender link is hidden from a role without tender access');
+ await json(await call('/api/managed-documents/links?id='+lProject.id,'DELETE',undefined,A.cookie),200,'unlink');
+ // Tenant isolation by known ids.
+ await json(await mdGet(md.id,B.cookie),404,'other tenant managed id');
+ assert.equal((await call(detail[3].url,'GET',undefined,B.cookie)).status,404,'other tenant version id');
+ assert.equal((await call('/api/documents?id='+v1Row.file_document_id,'GET',undefined,B.cookie)).status,404,'other tenant physical file id');
+ await json(await link(md.id,{targetType:'project',targetId:pA},B.cookie),404,'other tenant link attempt');
+ await json(await mdRevise({id:md.id},B.cookie,'x.pdf','x'),404,'other tenant revision attempt');
+ // Field visibility and roles.
+ const fieldDoc=await json(await mdCreate({title:'Site induction pack',visibility:'field'},A.cookie,'induction.pdf','%PDF-1.4 induction'),201);
+ await json(await mdGet(fieldDoc.id,C.cookie),200,'field worker opens a field-visible managed document');
+ await json(await mdGet(md.id,C.cookie),404,'field worker cannot open an office-only managed document');
+ assert(!(await json(await mdList('limit=500',C.cookie),200)).documents.some(d=>d.id===md.id),'field register excludes office-only documents');
+ assert.equal((await mdCreate({title:'Field attempt'},C.cookie,'f.pdf','x')).status,404,'field worker cannot create managed documents');
+ await json(await mdRevise({id:fieldDoc.id},C.cookie,'x.pdf','x'),403,'field worker cannot upload revisions');
+ // Tender + commercial contexts and capability-aware access.
+ const tDoc=await json(await mdCreate({title:'Tender addendum',contextType:'tender',contextId:tenderId},A.cookie,'addendum.pdf','%PDF-1.4 tender'),201,'tender managed document');
+ assert.equal((await json(await mdGet(tDoc.id),200)).document.contextName!==undefined,true);
+ await as('scheduler');await json(await mdGet(tDoc.id,R.cookie),404,'scheduler cannot open a tender managed document');
+ await as('estimator');await json(await mdGet(tDoc.id,R.cookie),200,'estimator opens a tender managed document');
+ await json(await mdCreate({title:'Estimator note',contextType:'tender',contextId:tenderId},R.cookie,'note.pdf','%PDF-1.4 note'),201,'estimator adds a tender document');
+ await json(await mdCreate({title:'Not backed',contextType:'tender',contextId:'nope'},A.cookie,'x.pdf','x'),404,'context must be a real record');
+ await json(await mdCreate({title:'Forms are controlled',contextType:'form',contextId:'project:'+pA},A.cookie,'x.pdf','x'),400,'controlled Forms context is never a managed document');
+ await json(await mdCreate({title:'Field context',contextType:'field'},A.cookie,'x.pdf','x'),400,'evidence contexts are not managed');
+ const cDoc=await json(await mdCreate({title:'Claim support pack',contextType:'claim',contextId:claim.claimId},A.cookie,'claim-support.pdf','%PDF-1.4 claim'),201,'commercial-context managed document');
+ assert.equal(cDoc.document.document.projectId,projectId,'project derived from the claim');
+ await as('project_engineer');await json(await mdGet(cDoc.id,R.cookie),404,'project access alone never exposes a claim artifact');
+ await as('accounts');await json(await mdGet(cDoc.id,R.cookie),200,'accounts (commercial.view) opens the claim artifact');
+ await json(await call('/api/managed-documents','PATCH',{id:cDoc.id,revision:1,title:'x'},R.cookie),403,'…without document administration rights');
+ assert.equal((await mdCreate({title:'Accounts upload'},R.cookie,'x.pdf','x')).status,403,'accounts has no document.upload');
+ await as('project_engineer');
+ // Archive/restore: never a delete.
+ const ar=(await json(await mdGet(tDoc.id),200)).document;
+ await json(await call('/api/managed-documents','PATCH',{id:tDoc.id,revision:ar.revision,archived:true},A.cookie),200,'archive');
+ assert(!(await json(await mdList('q=addendum'),200)).documents.some(d=>d.id===tDoc.id),'archived documents leave the register');
+ assert((await json(await mdList('archived=1'),200)).documents.some(d=>d.id===tDoc.id));assert(!(await gs('Tender addendum')).some(r=>r.id===tDoc.id),'archived documents leave global search');
+ await json(await mdRevise({id:tDoc.id},A.cookie,'x.pdf','x'),409,'archived document takes no revision');
+ await json(await call('/api/managed-documents','PATCH',{id:tDoc.id,revision:ar.revision+1,archived:false},A.cookie),200,'restore');
+ assert.equal(Number((await db.execute('SELECT COUNT(*) n FROM document_versions WHERE organisation_id=? AND managed_document_id=?',[org9,tDoc.id]))[0][0].n),1,'archive keeps every version');
+ // Existing raw upload paths and controlled evidence are unchanged.
+ const rawProject=(await json(await upload(A.cookie,{contextType:'project',projectId:pA,category:'Drawings',title:'Raw project upload'},'raw-project.pdf'),201,'raw project upload still works')).document;
+ assert.equal((await call('/api/documents?id='+rawProject.id,'GET',undefined,A.cookie)).status,200);
+ assert(!(await json(await mdList('limit=500'),200)).documents.some(d=>d.current.fileDocumentId===rawProject.id),'raw uploads are not silently managed');
+ assert.equal((await call('/api/documents?id='+fPhotoR.id,'GET',undefined,A.cookie)).status,404,'controlled Forms evidence is still not served by the generic route');
+ assert(!(await gs('Form evidence')).some(r=>r.id===fPhotoR.id),'controlled Forms evidence is never searchable');
+ // Audit trail.
+ const [aud]=await db.execute("SELECT event_type,after_state FROM audit_log WHERE organisation_id=? AND entity_type='managed_document' AND entity_id=?",[org9,md.id]);
+ const evs=aud.map(r=>r.event_type);
+ for(const e of ['managed_document.created','managed_document.version_created','managed_document.updated'])assert(evs.includes(e),'audit: '+e);
+ assert.equal(evs.filter(e=>e==='managed_document.version_created').length,4);
+ const vEv=aud.filter(r=>r.event_type==='managed_document.version_created').map(r=>JSON.parse(r.after_state)).find(x=>x.versionNumber===2);
+ assert.equal(vEv.fileDocumentId,md2.fileDocumentId);assert.equal(vEv.revisionLabel,'B');assert.equal(vEv.sha256,hash(Buffer.from(c2)));assert.equal(vEv.previousVersionId,v1Row.id);
+ const evsA=(await db.execute("SELECT event_type FROM audit_log WHERE organisation_id=? AND entity_id IN (?,?)",[org9,dA.id,tDoc.id]))[0].map(r=>r.event_type);
+ for(const e of ['managed_document.link_added','managed_document.link_removed','managed_document.archived','managed_document.restored'])assert(evsA.includes(e),'audit: '+e);
+ // Service-level: a server-side caller stores GENERATED bytes (no browser upload) — the seam Commercial will use.
+ const tsm=(await import('typescript')).default,{createRequire}=await import('node:module'),fsm=await import('node:fs'),pathm=await import('node:path');
+ const nodeRequire=createRequire(import.meta.url),modCache={};
+ const loadTs=file=>{file=pathm.resolve(file);if(modCache[file])return modCache[file].exports;const m={exports:{}};modCache[file]=m;const code=tsm.transpileModule(fsm.readFileSync(file,'utf8'),{compilerOptions:{module:tsm.ModuleKind.CommonJS,target:tsm.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;new Function('require','module','exports',code)(n=>n.startsWith('@/')?loadTs(n.slice(2)+'.ts'):n.startsWith('.')?loadTs(pathm.resolve(pathm.dirname(file),n)+'.ts'):nodeRequire(n),m,m.exports);return m.exports;};
+ const svc=loadTs('lib/platform/managed-documents.ts'),ctx=loadTs('lib/platform/context.ts');
+ servicePool=loadTs('lib/platform/database.ts').getPool(); // closed in finally so the process can exit
+ const actorOf=(userId,organisationId,role)=>({userId,email:`svc-${role}@example.invalid`,organisationId,role});
+ const asAdmin=fn=>ctx.actorContext.run(actorOf(A.user.id,org9,'admin'),fn);
+ const genA=Buffer.from('%PDF-1.4 GENERATED proforma issue 1'),genB=Buffer.from('%PDF-1.4 GENERATED proforma issue 2 (amended)');
+ const gen=await asAdmin(()=>svc.createManagedDocument({title:'SYNTH-PINV-001 — September Claim',contextType:'claim',contextId:claim.claimId,documentType:'Proforma',source:'generated',generated:true,revisionLabel:'1',content:{fileName:'proforma.pdf',contentType:'application/pdf',bytes:new Uint8Array(genA)}}));
+ assert.equal(gen.versionNumber,1);assert.equal(gen.sha256,hash(genA));
+ const gen2=await asAdmin(()=>svc.addDocumentVersion(gen.id,{generated:true,revisionLabel:'2',expectedVersion:1,changeNote:'Amended after review',content:{fileName:'proforma-2.pdf',contentType:'application/pdf',bytes:genB}}));
+ assert.equal(gen2.versionNumber,2);
+ const pinned=await asAdmin(()=>svc.getManagedVersion(gen.id,gen.versionId));
+ assert.deepEqual([pinned.versionNumber,pinned.fileDocumentId,pinned.sha256,pinned.current],[1,gen.fileDocumentId,hash(genA),false],'an approved artifact can be pinned to its exact version, file and hash');
+ const dlPinned=await asAdmin(async()=>Buffer.from(await (await svc.openManagedVersion(gen.id,gen.versionId)).arrayBuffer()));assert.equal(dlPinned.toString(),genA.toString(),'the pinned version never resolves to the current file');
+ await assert.rejects(ctx.actorContext.run(actorOf(A.user.id,org9,'accounts'),()=>svc.createManagedDocument({title:'x',contextType:'organisation',generated:true,content:{fileName:'x.pdf',bytes:new Uint8Array([1])}})),/company documents/,'generated:true skips only the upload capability, not the context gate');
+ await assert.rejects(ctx.actorContext.run(actorOf(B.user.id,memberB.organisation_id,'admin'),()=>svc.getManagedVersion(gen.id,gen.versionId)),/not found/i,'cross-tenant service call fails closed');
+ assert.equal((await json(await mdGet(gen.id),200)).versions.length,2,'generated artifact is visible through the normal API');
+ console.log('PASS 9A managed documents: standalone create, immutable revisions with exact-version download and hashes, revision labels, metadata, one search result per document, legacy attachments, project scope (PE/SE), links that never widen access, tenant isolation, field visibility, commercial/tender contexts, archive, audit, and server-side generated artifact seam');
+ }
+
  step='H ABN';
  let reg1=await json(await call('/api/platform/abn?abn=51824753556&lookup=1','GET',undefined,A.cookie),200);assert.equal(reg1.registry.status,'found');assert.equal(reg1.registry.record.entityName,'ALPHA CIVIL PTY LTD');
  const nf=await json(await call('/api/platform/abn','POST',{abn:'53004085616'},A.cookie),404);assert.equal(nf.code,'ABN_NOT_FOUND');
@@ -1549,4 +1725,4 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  billing=await json(await call('/api/billing','GET',undefined,A.cookie),200);assert(billing.events.length>=3);assert.equal(billing.configured,true);
  console.log('PASS H: ABN register lookup → confirm → source/time recorded, change clears confirmation; AI five gates, acknowledgement, idempotent ledger (no second provider call), source-linked suggestions, drafts only, failure recorded, switch-off immediate; billing signature/forgery refusal, idempotent events, plan → entitlements, payment grace, cancellation read-only, cross-org customer refusal, manual path operator-only');
  console.log('PASS V1 journey complete');
-}catch(error){console.error('FAILED at',step);console.error(appLog.slice(-4000));throw error;}finally{app.kill();s3.close();ext.close();await db.end();}
+}catch(error){console.error('FAILED at',step);console.error(appLog.slice(-4000));throw error;}finally{app.kill();s3.close();ext.close();await servicePool?.end();await db.end();}

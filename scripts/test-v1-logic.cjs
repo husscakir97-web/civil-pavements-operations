@@ -540,6 +540,11 @@ console.log('PASS estimate paste: header skipped, $ and thousands parsed, catego
  for(const r of ['estimator','accounts','read_only'])assert(!Pm.can(r,'workshop.defect.report'),r+' cannot report defects');
  for(const r of ['field','supervisor','site_engineer','project_engineer','project_manager'])assert(!Pm.can(r,'workshop.edit')&&!Pm.can(r,'workshop.verify'),r+' reporting grants no repair/verify');
 assert.equal(load('lib/platform/modules.ts').MODULE_SEAMS['form.defect'].capability,'workshop.defect.report');
+ // Document Engine: managed metadata/version rights are separate from raw upload and from document.approve.
+ for(const r of ['admin','office','project_manager','project_engineer','estimator'])assert(Pm.can(r,'document.edit')&&Pm.can(r,'document.manage_versions'),r+' manages documents');
+ for(const r of ['site_engineer','supervisor','scheduler','field','accounts','read_only'])assert(!Pm.can(r,'document.edit')&&!Pm.can(r,'document.manage_versions'),r+' has no document administration');
+ assert(Pm.can('field','document.upload')&&!Pm.can('field','document.manage_versions'),'field evidence upload does not imply version management');
+ assert(Pm.can('project_manager','document.approve')&&!Pm.can('project_engineer','document.approve'),'document.approve is unchanged and separate');
  console.log('PASS forms engine: schema rules, stable ids, deterministic chained conditions, hidden values dropped, required/conditional required, typed values and choices, unknown fields, references and signatures, changed fields, capabilities');
 }
 {

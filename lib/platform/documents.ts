@@ -55,7 +55,12 @@ export const documentContextsFor=(role:string)=>CONTEXTS.filter(generic).filter(
 
 export function publicDocument(r:Row){return {id:r.id,title:r.title,fileName:r.file_name,contentType:r.content_type,sizeBytes:Number(r.size_bytes),category:r.category,version:Number(r.version),status:r.status,visibility:r.visibility,source:r.source,contextType:r.context_type,contextId:r.context_id,projectId:r.project_id,contextName:r.context_name??null,uploadedBy:r.uploaded_by,uploadedByName:r.uploaded_by_name??null,createdAt:r.created_at,url:`/api/documents?id=${encodeURIComponent(r.id)}`};}
 
-export async function storeDocument(file:File,meta:{contextType:DocumentContext;contextId?:string|null;projectId?:string|null;category?:string;title?:string;visibility?:'office'|'field';supersedesId?:string|null;source?:string;controlled?:boolean}){
+type StoreMeta={contextType:DocumentContext;contextId?:string|null;projectId?:string|null;category?:string;title?:string;visibility?:'office'|'field';supersedesId?:string|null;source?:string;controlled?:boolean};
+/**
+ * Every rule for writing a file into a context (entitlement, size, role, capability, project scope, type).
+ * Shared by storeDocument and the managed-document service so both apply exactly the same gate.
+ */
+export async function assertStorable(file:{name:string;size:number},meta:StoreMeta){
  const actor=actorContext.getStore()!;
  // A controlled context may only be written by its owning service, after that service has
  // authorised the record (e.g. lib/platform/forms.ts resolves the form context first).
@@ -70,16 +75,35 @@ export async function storeDocument(file:File,meta:{contextType:DocumentContext;
  if(actor.role!=='field'&&!controlled&&!can(actor.role,CONTEXT_CAPABILITY[meta.contextType]))fail(403,'You are not authorised to attach documents to this record.');
  if(!await canAccessProject(documentProject({project_id:meta.projectId,context_type:meta.contextType,context_id:meta.contextId})))fail(404,'Project not found.');
  if(!ALLOWED.test(file.name))fail(415,'This file type is not accepted. Use PDF, image, Office, CSV, text or ZIP files.');
+}
+
+/** Writes the private object and inserts its `documents` row (the immutable physical file record). */
+export async function insertPhysicalDocument(conn:Conn,d:{id:string;key:string;bytes:Uint8Array;sha256:string;fileName:string;contentType:string;contextType:DocumentContext;contextId:string|null;projectId:string|null;category:string;title:string;visibility:'office'|'field';version:number;supersedesId:string|null;source:string;now:string}){
+ const actor=actorContext.getStore()!;
+ const row={id:d.id,organisation_id:actor.organisationId,context_type:d.contextType,context_id:d.contextId,project_id:d.projectId,category:d.category.slice(0,60),title:d.title.slice(0,255),file_name:d.fileName.slice(0,255),content_type:d.contentType.slice(0,120),size_bytes:d.bytes.byteLength,storage_key:d.key,sha256:d.sha256,version:d.version,status:'current',visibility:d.visibility,source:d.source,supersedes_id:d.supersedesId,uploaded_by:actor.userId,created_at:d.now,updated_at:d.now};
+ const cols=Object.keys(row);
+ await exec(`INSERT INTO documents (${cols.join(',')}) VALUES (${cols.map(()=>'?').join(',')})`,Object.values(row),conn);
+ return row;
+}
+export const storageKey=(id:string)=>`documents/${actorContext.getStore()!.organisationId}/${id}`;
+export const putObject=async(key:string,bytes:Uint8Array,contentType:string)=>{await bucket.put(key,bytes,{httpMetadata:{contentType}});};
+export const sha256Of=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
+
+export async function storeDocument(file:File,meta:StoreMeta){
+ const actor=actorContext.getStore()!;
+ await assertStorable(file,meta);
  const bytes=new Uint8Array(await file.arrayBuffer());
- const sha256=createHash('sha256').update(bytes).digest('hex');
- const id=uuid(),key=`documents/${actor.organisationId}/${id}`,now=nowIso();
+ const sha256=sha256Of(bytes);
+ const id=uuid(),key=storageKey(id),now=nowIso();
  const visibility=actor.role==='field'?'field':meta.visibility||'office';
- await bucket.put(key,bytes,{httpMetadata:{contentType:file.type||'application/octet-stream'}});
+ await putObject(key,bytes,file.type||'application/octet-stream');
  return tx(async conn=>{
   let version=1;
   if(meta.supersedesId){
    const prev=await one('SELECT id,version,status,visibility,uploaded_by,context_type,context_id FROM documents WHERE organisation_id=? AND id=? FOR UPDATE',[actor.organisationId,meta.supersedesId],conn);
    if(!prev||(actor.role==='field'&&prev.visibility!=='field'))fail(404,'Document to replace not found.');
+   // Managed documents have one revision authority: the managed service (never a raw supersede).
+   if(await one('SELECT 1 AS ok FROM document_versions WHERE organisation_id=? AND file_document_id=?',[actor.organisationId,prev!.id],conn))fail(409,'This file belongs to a managed document. Upload a new revision from the document instead.');
    // Only the original uploader or a document approver may publish a new version.
    if(prev!.uploaded_by!==actor.userId&&!can(actor.role,'document.approve'))fail(403,'Only the person who uploaded this document or a document approver can replace it.');
    if(prev!.status!=='current')fail(409,'This document has already been replaced. Upload against the current version.');
@@ -87,15 +111,13 @@ export async function storeDocument(file:File,meta:{contextType:DocumentContext;
    version=Number(prev!.version)+1;
    await exec("UPDATE documents SET status='superseded',updated_at=? WHERE organisation_id=? AND id=?",[now,actor.organisationId,prev!.id],conn);
   }
-  const row={id,organisation_id:actor.organisationId,context_type:meta.contextType,context_id:meta.contextId||null,project_id:meta.projectId||null,category:(meta.category||'General').slice(0,60),title:(meta.title||file.name).slice(0,255),file_name:file.name.slice(0,255),content_type:(file.type||'application/octet-stream').slice(0,120),size_bytes:file.size,storage_key:key,sha256,version,status:'current',visibility,source:meta.source||'upload',supersedes_id:meta.supersedesId||null,uploaded_by:actor.userId,created_at:now,updated_at:now};
-  const cols=Object.keys(row);
-  await exec(`INSERT INTO documents (${cols.join(',')}) VALUES (${cols.map(()=>'?').join(',')})`,Object.values(row),conn);
+  const row=await insertPhysicalDocument(conn,{id,key,bytes,sha256,fileName:file.name,contentType:file.type||'application/octet-stream',contextType:meta.contextType,contextId:meta.contextId||null,projectId:meta.projectId||null,category:meta.category||'General',title:meta.title||file.name,visibility,version,supersedesId:meta.supersedesId||null,source:meta.source||'upload',now});
   await audit({event:'document.uploaded',entityType:'document',entityId:id,projectId:row.project_id,summary:`${row.title} (v${version})`,after:{contextType:row.context_type,contextId:row.context_id,sha256,version}},conn);
   return publicDocument(row);
  });
 }
 
-export async function listDocuments(filter:{contextType?:string|null;contextId?:string|null;projectId?:string|null;includeSuperseded?:boolean;q?:string|null;category?:string|null;limit?:number}){
+export async function listDocuments(filter:{contextType?:string|null;contextId?:string|null;projectId?:string|null;includeSuperseded?:boolean;unmanaged?:boolean;q?:string|null;category?:string|null;limit?:number}){
  const actor=actorContext.getStore()!,entitlements=await getEntitlements(actor.organisationId);
  const where=['d.organisation_id=?'],values:unknown[]=[actor.organisationId];
  if(filter.contextType){where.push('d.context_type=?');values.push(filter.contextType);}
@@ -103,6 +125,8 @@ export async function listDocuments(filter:{contextType?:string|null;contextId?:
  if(filter.projectId){where.push('d.project_id=?');values.push(filter.projectId);}
  if(filter.category){where.push('d.category=?');values.push(filter.category);}
  if(!filter.includeSuperseded)where.push("d.status='current'");
+ // Legacy attachments only: physical files that are not a version of a managed document.
+ if(filter.unmanaged)where.push('NOT EXISTS (SELECT 1 FROM document_versions mv WHERE mv.organisation_id=d.organisation_id AND mv.file_document_id=d.id)');
  const q=String(filter.q||'').trim().toLowerCase().slice(0,160);
  if(q){for(const term of q.split(/\s+/).filter(Boolean).slice(0,6)){const like=`%${term.replace(/[\\%_]/g,m=>'\\'+m)}%`;where.push('(LOWER(d.title) LIKE ? OR LOWER(d.file_name) LIKE ? OR LOWER(d.category) LIKE ? OR LOWER(d.context_type) LIKE ?)');values.push(like,like,like,like);}}
  if(actor.role==='field'){const ctx=fieldDocumentContextsForAccess(entitlements);if(!ctx.length)return [];where.push("d.visibility='field'");where.push('d.context_type IN (?)');values.push(ctx);}
@@ -122,7 +146,7 @@ export async function listDocuments(filter:{contextType?:string|null;contextId?:
  return rows.map(r=>publicDocument({...r,context_name:(r.project_id||r.context_type==='project')?projectName.get(r.project_id||r.context_id)||null:r.context_type==='tender'?tenderName.get(r.context_id)||null:null,uploaded_by_name:userName.get(r.uploaded_by)||null}));
 }
 /** The generic open rules for one document row (never for controlled contexts). Throws when not allowed. */
-async function authoriseRow(row:Row|null,conn?:Conn){
+export async function authoriseDocumentRow(row:Row|null,conn?:Conn){
  const actor=actorContext.getStore()!,entitlements=await getEntitlements(actor.organisationId);
  if(!row)fail(404,'Document not found.');
  if(CONTROLLED_CONTEXTS.includes(row!.context_type))fail(404,'Document not found.');
@@ -137,7 +161,7 @@ async function authoriseRow(row:Row|null,conn?:Conn){
 export async function openDocument(id:string){
  const actor=actorContext.getStore()!;
  const row=await one('SELECT * FROM documents WHERE organisation_id=? AND id=?',[actor.organisationId,id]);
- return streamDocument(await authoriseRow(row));
+ return streamDocument(await authoriseDocumentRow(row));
 }
 /**
  * Server-only: authorises a document as evidence attached to one exact record, without streaming it.
@@ -152,7 +176,7 @@ export async function resolveAuthorisedDocument(id:string,expected:{contextType:
  const bad=()=>fail(400,'Attach evidence uploaded for this record.');
  if(!row||CONTROLLED_CONTEXTS.includes(row.context_type))bad();
  if(row!.status!=='current'||row!.context_type!==expected.contextType||row!.context_id!==expected.contextId||(row!.project_id||null)!==(expected.projectId||null))bad();
- try{return await authoriseRow(row,conn);}catch{return bad();}
+ try{return await authoriseDocumentRow(row,conn);}catch{return bad();}
 }
 /** Streams an already-authorised document from storage (private, never cached). */
 export async function streamDocument(row:Row){

@@ -102,6 +102,30 @@ export const documents=mysqlTable('documents',{
  createdAt:stamp('created_at').notNull(),updatedAt:stamp('updated_at').notNull(),
 },t=>[index('idx_documents_org_context').on(t.organisationId,t.contextType,t.contextId),index('idx_documents_org_project').on(t.organisationId,t.projectId)]);
 
+// ---------------------------------------------------------------- document engine (migration 0022)
+// Managed document (durable business record) → immutable versions → physical file in `documents`.
+// `documents` rows stay the storage/integrity layer and keep every raw id; their legacy
+// version/status/supersedes_id columns are compatibility mirrors written by the managed service.
+export const managedDocuments=mysqlTable('managed_documents',{
+ id:id(),organisationId:org(),title:varchar('title',{length:255}).notNull(),description:text('description'),
+ documentNumber:varchar('document_number',{length:80}),documentType:varchar('document_type',{length:80}),discipline:varchar('discipline',{length:80}),tags:text('tags'),
+ status:varchar('status',{length:20}).notNull().default('active'),currentVersionId:ref('current_version_id'),
+ // The single authoritative access context (same vocabulary as documents.context_type). Links never widen it.
+ contextType:varchar('context_type',{length:40}).notNull(),contextId:ref('context_id'),projectId:ref('project_id'),
+ source:varchar('source',{length:40}).notNull().default('upload'),
+ ...lifecycle(),
+},t=>[index('idx_managed_documents_org').on(t.organisationId,t.status,t.updatedAt),index('idx_managed_documents_context').on(t.organisationId,t.contextType,t.contextId),index('idx_managed_documents_project').on(t.organisationId,t.projectId),index('idx_managed_documents_number').on(t.organisationId,t.documentNumber)]);
+export const documentVersions=mysqlTable('document_versions',{
+ id:id(),organisationId:org(),managedDocumentId:ref('managed_document_id').notNull(),versionNumber:int('version_number').notNull(),
+ revisionLabel:varchar('revision_label',{length:40}),fileDocumentId:ref('file_document_id').notNull(),sha256:varchar('sha256',{length:64}).notNull(),
+ issueDate:day('issue_date'),author:varchar('author',{length:120}),company:varchar('company',{length:120}),changeNote:text('change_note'),
+ createdBy:ref('created_by'),createdAt:stamp('created_at').notNull(),
+},t=>[uniqueIndex('idx_document_versions_seq').on(t.organisationId,t.managedDocumentId,t.versionNumber),uniqueIndex('idx_document_versions_file').on(t.organisationId,t.fileDocumentId),index('idx_document_versions_org').on(t.organisationId)]);
+export const documentLinks=mysqlTable('document_links',{
+ id:id(),organisationId:org(),managedDocumentId:ref('managed_document_id').notNull(),targetType:varchar('target_type',{length:40}).notNull(),targetId:ref('target_id').notNull(),
+ relationship:varchar('relationship',{length:40}).notNull().default('reference'),projectId:ref('project_id'),createdBy:ref('created_by'),createdAt:stamp('created_at').notNull(),
+},t=>[uniqueIndex('idx_document_links_unique').on(t.organisationId,t.managedDocumentId,t.targetType,t.targetId),index('idx_document_links_target').on(t.organisationId,t.targetType,t.targetId),index('idx_document_links_project').on(t.organisationId,t.projectId)]);
+
 export const libraryItems=mysqlTable('library_items',{
  id:id(),organisationId:org(),
  category:varchar('category',{length:60}).notNull(),

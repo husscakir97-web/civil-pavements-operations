@@ -8,6 +8,7 @@ import {TaskLauncher} from './task-launcher';
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,PageHeader,NextAction,Progress,Tabs,Stat,money,pct,dateText,Pill,humanStatus,ReasonDialog} from './kit';
 import {ProgrammePanel} from './program';
 import {CommunicationPanel} from './communication-panel';
+import {DivisionPicker,DivisionFilter,DivisionBadge,inDivision,useDivisions} from './divisions';
 import {ClientPicker,SitePicker,ContactPicker,PersonPicker,ClientContactCard} from './lookup';
 import {RegisterView,usePeople} from './register-view';
 import {SwmsPanel} from './swms';
@@ -23,7 +24,7 @@ import type {Forecast} from '@/lib/platform/finance';
 import {setupAreas,fixFor,categoryLabel,nextActionTarget,type SetupTarget} from '@/lib/v1/project-setup';
 import {PROJECT_ROLE_LABELS,type ProjectRole} from '@/lib/v1/project-roles';
 
-type Project={id:string;name:string;projectNumber:string|null;clientName:string|null;clientId?:string|null;siteId?:string|null;contactId?:string|null;stage:string;stageLabel:string;projectManagerUserId:string|null;projectManagerName:string|null;startDate:string|null;practicalCompletionDate:string|null;finishDate:string|null;siteAddress:string|null;contractNumber:string|null;contractType:string|null;retentionPct:number|null;retentionEnabled?:boolean;retentionCapAmount?:number|null;paymentTermsDays:number|null;defectsMonths:number|null;scope:string|null;assumptions:string|null;exclusions:string|null;clientRequirements:string|null;mobilisationNotes:string|null;sourceTenderId:string|null;sourceEstimateId:string|null;sourceEstimateRevisionId:string|null;revision:number;contractValue?:number|null;originalBudget?:number|null;readiness:number|null;nextAction:string|null;blockerCount?:number;location?:LocationView|null;locationSource?:'project'|'site'|null;siteLocation?:LocationView|null};
+type Project={id:string;businessUnitId?:string|null;name:string;projectNumber:string|null;clientName:string|null;clientId?:string|null;siteId?:string|null;contactId?:string|null;stage:string;stageLabel:string;projectManagerUserId:string|null;projectManagerName:string|null;startDate:string|null;practicalCompletionDate:string|null;finishDate:string|null;siteAddress:string|null;contractNumber:string|null;contractType:string|null;retentionPct:number|null;retentionEnabled?:boolean;retentionCapAmount?:number|null;paymentTermsDays:number|null;defectsMonths:number|null;scope:string|null;assumptions:string|null;exclusions:string|null;clientRequirements:string|null;mobilisationNotes:string|null;sourceTenderId:string|null;sourceEstimateId:string|null;sourceEstimateRevisionId:string|null;revision:number;contractValue?:number|null;originalBudget?:number|null;readiness:number|null;nextAction:string|null;blockerCount?:number;location?:LocationView|null;locationSource?:'project'|'site'|null;siteLocation?:LocationView|null};
 type ReadinessItem={id?:string;category:string;title:string;mandatory:boolean;ok:boolean;status:string;source:'checklist'|'derived';detail?:string|null};
 type Detail={project:Project;readiness:{percent:number|null;blockers:string[];categories:Array<{category:string;items:ReadinessItem[]}>;mandatoryTotal:number;mandatoryComplete:number};closeout:{items:number;blockers:string[]}|null;baselines:Array<{id:string;revision:number;reason:string;sourceType:string;estimateRevisionId:string|null;tenderId:string|null;scope:string|null;assumptions:string|null;exclusions:string|null;clarifications:Array<{reference:string;question:string;response:string|null}>;createdAt:string;contractValue?:number;budget?:Record<string,number>}>;financials:{forecast:Forecast}|null;activity:Array<{id:string;event_type:string;summary:string;actor_email:string|null;created_at:string}>};
 
@@ -38,17 +39,19 @@ function ProjectRegister({area}:{area:'Prepare Work'|'Deliver Work'}){
  const {data,error,loading,refresh}=useApi<{projects:Project[]}>('/api/projects');
  const {navigate}=useNav();const {can}=useSession();const [creating,setCreating]=useState(false);
  const [show,setShow]=useState<'active'|'setup'|'ready'|'delivery'|'closeout'|'closed'>('active');
- const all=data?.projects||[];
+ const [division,setDivision]=useState('');const divs=useDivisions();
+ const all=(data?.projects||[]).filter(p=>inDivision(division,p.businessUnitId,divs.defaultId));
  const matches=(p:Project,k:typeof show)=>k==='closed'?p.stage==='closed':k==='setup'?p.stage==='setup':k==='ready'?p.stage==='ready':k==='delivery'?p.stage==='active':k==='closeout'?['practical_completion','closeout'].includes(p.stage):p.stage!=='closed';
  const list=all.filter(p=>matches(p,show));
  const filters=([['active','All active'],['setup','Setup'],['ready','Ready'],['delivery','Delivery'],['closeout','Closeout'],['closed','Closed']] as const).map(([key,label])=>({key,label,count:all.filter(p=>matches(p,key)).length}));
  return <div className="grid gap-4">
   <PageHeader title="Projects" subtitle="Open a project to see what needs attention and what to do next." actions={can('project.edit')&&can('project.all.view')&&<Btn variant="secondary" onClick={()=>setCreating(true)}><Plus aria-hidden className="size-4"/>New project without tender</Btn>}/>
   <ErrorState error={error} onRetry={refresh}/>
+  <DivisionFilter value={division} onChange={setDivision}/>
   {all.length>0&&<div role="group" aria-label="Project workflow stage" className="flex flex-wrap gap-2">{filters.map(x=><button key={x.key} aria-pressed={show===x.key} onClick={()=>setShow(x.key)} className={`min-h-9 rounded-full border px-3 text-sm ${show===x.key?'border-[#172633] bg-[#172633] text-white':'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{x.label} ({x.count})</button>)}</div>}
   {loading&&!data?<Loading/>:!all.length?<EmptyState title="No projects yet." detail="Projects are created automatically when a tender or estimate is awarded, preserving the approved baseline."/>:!list.length?<EmptyState title={`No projects are in ${filters.find(x=>x.key===show)?.label.toLowerCase()}.`}/>:
    <section className="surface overflow-hidden"><ul className="divide-y">{list.map(p=><li key={p.id}><button onClick={()=>navigate(area,'Projects',p.id)} className="grid w-full gap-2 p-4 text-left hover:bg-slate-50 md:grid-cols-[minmax(0,2fr)_1fr_1fr_1fr] md:items-center">
-    <span className="min-w-0"><span className="block font-medium">{p.name}</span><span className="block text-xs text-slate-500">{[p.projectNumber,p.clientName,p.projectManagerName].filter(Boolean).join(' · ')||'Client not recorded'}</span></span>
+    <span className="min-w-0"><span className="block font-medium">{p.name} <DivisionBadge id={p.businessUnitId}/></span><span className="block text-xs text-slate-500">{[p.projectNumber,p.clientName,p.projectManagerName].filter(Boolean).join(' · ')||'Client not recorded'}</span></span>
     <span><StatusBadge machine="project" state={p.stage}/></span>
     <span>{can('commercial.view')?<span className="text-sm">{money(p.contractValue)}</span>:<span className="text-sm text-slate-500">{dateText(p.startDate)}</span>}</span>
     <span><Progress value={p.readiness} label="Ready"/>{p.nextAction&&<span className="mt-1 block truncate text-xs text-orange-800">{p.nextAction}</span>}</span>
@@ -57,7 +60,7 @@ function ProjectRegister({area}:{area:'Prepare Work'|'Deliver Work'}){
  </div>;
 }
 function NewProjectForm({onDone}:{onDone:(id?:string)=>void}){
- const [v,setV]=useState({name:'',clientId:null as string|null,siteId:null as string|null,contactId:null as string|null,startDate:'',siteAddress:''});const {busy,error,run}=useAction();
+ const [v,setV]=useState({name:'',businessUnitId:null as string|null,clientId:null as string|null,siteId:null as string|null,contactId:null as string|null,startDate:'',siteAddress:''});const {busy,error,run}=useAction();
  const [more,setMore]=useState(false);
  return <form className="grid gap-4 p-5" onSubmit={e=>{e.preventDefault();void run(()=>api<{projectId:string}>('/api/projects',{method:'POST',body:v}),r=>onDone(r.projectId));}}>
   <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">Use this when work did not come through a tender (for example IMS-only or Projects-only customers). Record the baseline in Setup.</p>
@@ -65,6 +68,8 @@ function NewProjectForm({onDone}:{onDone:(id?:string)=>void}){
   <ClientPicker value={v.clientId} onChange={c=>setV(s=>({...s,clientId:c?.id??null,siteId:c?.sites.length===1?c.sites[0].id:c&&c.sites.some(x=>x.id===s.siteId)?s.siteId:null,contactId:c&&(c.contacts||[]).some(x=>x.id===s.contactId)?s.contactId:(c?.contacts||[]).find(x=>x.isPrimary)?.id??null}))}/>
   {v.clientId&&<SitePicker clientId={v.clientId} value={v.siteId} onChange={x=>setV(s=>({...s,siteId:x?.id??null}))}/>}
   <Field label="Project name" required><input className={field} required value={v.name} onChange={e=>setV({...v,name:e.target.value})}/></Field>
+  {/* Only organisations with more than one division are asked; everyone else gets the default silently. */}
+  <DivisionPicker value={v.businessUnitId} onChange={id=>setV(s=>({...s,businessUnitId:id}))}/>
   <button type="button" aria-expanded={more} onClick={()=>setMore(!more)} className="justify-self-start text-sm font-medium text-orange-700 underline-offset-2 hover:underline">{more?'Fewer details':'More details'}</button>
   {more&&<div className="grid gap-4 rounded-lg border p-4">
    {v.clientId&&<ContactPicker clientId={v.clientId} value={v.contactId} onChange={x=>setV(s=>({...s,contactId:x?.id??null}))}/>}
@@ -136,6 +141,18 @@ function AttentionList({items,empty}:{items:Attention[];empty:string}){
  return <ul className="divide-y rounded-lg border">{items.map(i=><li key={i.key} className={`flex flex-wrap items-center gap-3 border-l-4 px-3 py-2.5 ${TONE[i.tone]}`}><span className="min-w-0 flex-1"><span className="block text-sm font-medium">{i.title}</span>{i.detail&&<span className="block text-xs text-slate-500">{i.detail}</span>}</span><Btn variant="secondary" className="min-h-9 py-1" onClick={i.go}>{i.action}<ArrowRight aria-hidden className="size-3.5"/></Btn></li>)}</ul>;
 }
 
+/** Which division owns the project. Hidden for single-division organisations; changing it moves the project's shifts with it. */
+function ProjectDivision({projectId,value,editable}:{projectId:string;value?:string|null;editable:boolean}){
+ const d=useDivisions();const {busy,error,run}=useAction();const [current,setCurrent]=useState(value??null);
+ // Single-division companies see nothing, unless the record still carries a non-default (e.g. archived) division: history stays visible.
+ if(!d.multi&&(!value||value===d.defaultId))return null;
+ if(!d.multi)return <p className="text-sm text-slate-600">Division: {d.label(value)}</p>;
+ return <Section title="Division" description="Organises this project's reporting. Clients, people and plant are shared across divisions.">
+  <ErrorState error={error}/>
+  {editable?<DivisionPicker label="Owning division" disabled={busy} value={current} onChange={id=>void run(()=>api('/api/projects/workspace',{method:'POST',body:{action:'set-division',id:projectId,businessUnitId:id}}),()=>setCurrent(id))}/>:<p className="text-sm">{d.label(current)}</p>}
+ </Section>;
+}
+
 type Rec=Record<string,string>;
 function Overview({d,onTab,goTarget}:{d:Detail;onTab:(k:TabKey)=>void;goTarget:(t:SetupTarget)=>void}){
  const p=d.project;const {can,module}=useSession();const {navigate}=useNav();
@@ -172,6 +189,7 @@ function Overview({d,onTab,goTarget}:{d:Detail;onTab:(k:TabKey)=>void;goTarget:(
   <Section title="Needs attention" description={items.length?`${items.length} item${items.length===1?'':'s'} for this project`:undefined}><AttentionList items={items} empty="Nothing needs attention on this project right now."/></Section>
   {knowledge&&<KnowledgeCheckPanel title="Civil knowledge checks" topics={['project','contract','construction','hseq','pavements','asphalt','concrete','earthworks','drainage','traffic','plant','workforce']} scope={{projectId:p.id}} context={{project:{id:p.id,name:p.name,stage:p.stage,clientName:p.clientName,contractType:p.contractType,siteAddress:p.siteAddress,startDate:p.startDate,finishDate:p.finishDate,scope:p.scope,assumptions:p.assumptions,exclusions:p.exclusions,clientRequirements:p.clientRequirements,mobilisationNotes:p.mobilisationNotes}}}/>} 
   <ClientContactCard clientId={d.project.clientId} contactId={d.project.contactId} siteId={d.project.siteId}/>
+  <ProjectDivision projectId={p.id} value={p.businessUnitId} editable={can('project.edit')&&p.stage!=='closed'}/>
   <ProjectTeam projectId={p.id}/>
   <div className="grid gap-4 lg:grid-cols-2">
    <Section title="Today and upcoming" actions={<Btn variant="ghost" onClick={()=>onTab('delivery')}>Delivery<ArrowRight aria-hidden className="size-4"/></Btn>}>{hub.loading&&!hub.data?<Loading/>:upcoming.length?<ul className="divide-y text-sm">{upcoming.map(s=><li key={s.id} className="flex flex-wrap items-center justify-between gap-2 py-2"><span><span className="font-medium">{s.metadata.date===today?'Today':dateText(s.metadata.date)}</span> · {s.name}<span className="block text-xs text-slate-500">{[s.metadata.start&&`${s.metadata.start}–${s.metadata.finish}`,s.metadata.supervisor].filter(Boolean).join(' · ')}</span></span><Pill>{s.status}</Pill></li>)}</ul>:<EmptyState title="No upcoming work is scheduled for this project." action={can('schedule.edit')?<Btn variant="secondary" onClick={()=>navigate('Operations','Schedule',p.id)}><CalendarDays aria-hidden className="size-4"/>Plan a shift</Btn>:undefined}/>}</Section>

@@ -18,6 +18,10 @@ Full text: [docs/UX-DOCTRINE.md](docs/UX-DOCTRINE.md). Unified experience above,
 
 Different roles get different work. Task actions (`lib/v1/task-actions.ts`) only decide what is shown; server routes remain authoritative. Internal modules and the six engines are not the ordinary mental model.
 
+## Divisions
+
+Organisations may organise work by division (see [docs/DIVISIONS.md](docs/DIVISIONS.md)). A division filters and files records inside one organisation; clients, people and plant stay shared, and a division never grants access. Single-division companies see no division choices.
+
 ## Document capture
 
 - Standard extraction reads digital PDF text first and uses local OCR for printed scans. It incurs no AI-provider charge.

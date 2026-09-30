@@ -36,6 +36,7 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import { ClientPicker, SitePicker, ContactPicker } from "@/components/v1/lookup";
+import { DivisionPicker, DivisionFilter, inDivision, useDivisions } from "@/components/v1/divisions";
 import {
   DEFAULT_RATE_LIBRARY,
   calculateEstimate,
@@ -54,6 +55,8 @@ import {
 
 type EstimateRecord = {
   id: string;
+  businessUnitId?: string | null;
+  tenderId?: string | null;
   name: string;
   status: EstimateStatus;
   createdAt: string;
@@ -177,11 +180,15 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
 
   const totals = useMemo(() => calculateEstimate(form), [form]);
   const validation = useMemo(() => validateEstimate(form, totals), [form, totals]);
+  const [divisionFilter, setDivisionFilter] = useState("");
+  const [newDivision, setNewDivision] = useState<string | null>(null);
+  const divisions = useDivisions();
   const filteredEstimates = useMemo(() => {
     const query = filter.trim().toLowerCase();
-    if (!query) return estimates;
-    return estimates.filter((estimate) => [estimate.name, estimate.data.clientName, estimate.data.projectName, estimate.status].join(" ").toLowerCase().includes(query));
-  }, [estimates, filter]);
+    const scoped = estimates.filter((estimate) => inDivision(divisionFilter, estimate.businessUnitId, divisions.defaultId));
+    if (!query) return scoped;
+    return scoped.filter((estimate) => [estimate.name, estimate.data.clientName, estimate.data.projectName, estimate.status].join(" ").toLowerCase().includes(query));
+  }, [estimates, filter, divisionFilter, divisions.defaultId]);
 
   async function readJson(response: Response): Promise<JsonPayload> {
     const payload = await response.json().catch(() => ({})) as JsonPayload;
@@ -299,7 +306,7 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
     try {
       const response = selectedId
         ? await fetch("/api/estimates", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: selectedId, data: form, status, reason }) })
-        : await fetch("/api/estimates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data: form, status }) });
+        : await fetch("/api/estimates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data: form, status, businessUnitId: newDivision }) });
       const payload = await readJson(response) as { estimate?: EstimateRecord };
       const id = payload.estimate?.id ?? selectedId;
       toast.success(selectedId ? `Revision saved as ${status}.` : "Estimate created as Draft.");
@@ -307,6 +314,23 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
       onSaved?.();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "The estimate could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function changeDivision(businessUnitId: string) {
+    if (!selectedId) return;
+    setBusy(true);
+    try {
+      // Division is filing metadata, not part of the working form: update only the register entry so unsaved
+      // quantities, rates and names in the open estimate are never reloaded, saved or discarded.
+      const payload = await readJson(await fetch("/api/estimates", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: selectedId, action: "set-division", businessUnitId }) })) as { estimate?: EstimateRecord };
+      const saved = payload.estimate?.businessUnitId ?? businessUnitId;
+      setEstimates((list) => list.map((item) => (item.id === selectedId ? { ...item, businessUnitId: saved } : item)));
+      toast.success("Division updated.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The division could not be changed.");
     } finally {
       setBusy(false);
     }
@@ -423,6 +447,7 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
         <aside className={embedded?'hidden':'space-y-4'}>
           <div className="rounded-xl border bg-white p-3 shadow-sm">
             <div className="flex items-center justify-between px-2 pb-2"><p className="text-sm font-semibold text-slate-900">Estimate register</p><span className="text-xs text-slate-500">{estimates.length}</span></div>
+            <div className="mb-2"><DivisionFilter value={divisionFilter} onChange={setDivisionFilter} /></div>
             <Input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search estimates…" className="mb-2 h-9" />
             <div className="max-h-[480px] space-y-1 overflow-y-auto">
               {filteredEstimates.length === 0 && <p className="px-2 py-6 text-center text-sm text-slate-500">No saved estimates yet.</p>}
@@ -437,6 +462,7 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
           <section className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
             <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><h3 className="text-lg font-semibold text-slate-950">{form.name || form.projectName || "New estimate"}</h3>{workflow ? <WorkflowBadge machine="estimate" state={workflow} /> : !selectedId ? <WorkflowBadge machine="estimate" state="draft" label="Unsaved" /> : null}{!embedded && outcome !== "open" && <StatusBadge status={currentStatus === "Submitted" ? "Submitted to client" as EstimateStatus : currentStatus} />}</div><p className="mt-1 text-sm text-slate-500">{selectedId ? `Estimate ID ${selectedId.slice(0, 8)} · Rev ${revisions[0]?.metadata?.revisionNumber ?? 1}` : "Unsaved estimate · complete the inputs and save a draft"}</p></div><div className="no-print flex flex-wrap gap-2">{embedded&&<Button variant="outline" size="sm" onClick={() => setShowRates((value) => !value)}><LibraryBig className="size-4" /> Rate library</Button>}<Button variant="outline" size="sm" disabled={readOnly} onClick={applyLibraryRates}><RefreshCw className="size-3.5" /> Apply rates</Button><Button variant="outline" size="sm" onClick={exportEstimate}><Download className="size-3.5" /> Export data (JSON)</Button><Button variant="outline" size="sm" onClick={()=>void exportExcel()}>Export Excel</Button><Button variant="outline" size="sm" onClick={() => window.print()}><Printer className="size-3.5" /> Print quote</Button></div></div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="lg:col-span-2"><DivisionPicker value={selectedId ? estimates.find((e) => e.id === selectedId)?.businessUnitId : newDivision} disabled={busy || Boolean(selectedId && estimates.find((e) => e.id === selectedId)?.tenderId)} note={selectedId && estimates.find((e) => e.id === selectedId)?.tenderId ? "Follows its tender — change the division on the tender." : undefined} onChange={(id) => { if (!selectedId) { setNewDivision(id); return; } void changeDivision(id); }} /></div>
               <Field label="Estimate name" className="lg:col-span-2"><Input disabled={readOnly} value={form.name} onChange={(event) => setField("name", event.target.value)} placeholder="e.g. Kings Highway resurfacing" /></Field>
               {!embedded && <Field label="Quote outcome" hint="Approval is handled by the estimate workflow."><NativeSelect disabled={readOnly} value={outcome} onChange={(event) => { const v = event.target.value; if (v === "open") { if (outcome !== "open") setCurrentStatus("Draft"); } else setCurrentStatus(v as EstimateStatus); }} ><NativeSelectOption value="open">Open (not yet sent)</NativeSelectOption><NativeSelectOption value="Submitted">Submitted to client</NativeSelectOption><NativeSelectOption value="Lost">Lost</NativeSelectOption><NativeSelectOption value="Cancelled">Cancelled</NativeSelectOption>{currentStatus === "Awarded" && <NativeSelectOption value="Awarded">Awarded</NativeSelectOption>}</NativeSelect></Field>}
               <Field label="Rate library"><NativeSelect disabled={readOnly} value={activeLibrary.id ?? ""} onChange={(event) => { const next = rateLibraries.find((library) => library.id === event.target.value); if (next) setActiveLibrary(next); }}><NativeSelectOption value="">Select library</NativeSelectOption>{rateLibraries.map((library) => <NativeSelectOption key={library.id ?? library.name} value={library.id ?? ""}>{library.name}</NativeSelectOption>)}</NativeSelect></Field>

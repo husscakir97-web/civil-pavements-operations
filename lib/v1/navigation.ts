@@ -5,6 +5,7 @@ import {can,type Capability} from '@/lib/platform/permissions';
 export type NavItem={key:string;anyOf:Capability[];module?:string};
 export const ADMIN_SUBS:NavItem[]=[
  {key:'Company',anyOf:['org.admin']},
+ {key:'Divisions',anyOf:['org.admin']},
  {key:'Rates',anyOf:['rates.edit','estimate.edit'],module:'estimating'},
  {key:'Civil Knowledge',anyOf:['knowledge.edit']},
  {key:'Team & Permissions',anyOf:['team.admin']},

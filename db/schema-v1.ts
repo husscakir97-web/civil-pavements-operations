@@ -18,6 +18,20 @@ const lifecycle=()=>({
 });
 
 // ---------------------------------------------------------------- platform
+// Divisions (migration 0023): a reporting/filtering dimension inside ONE organisation. Clients, people and
+// plant stay organisation-level and shared; a division never grants access.
+export const businessUnits=mysqlTable('business_units',{
+ id:id(),organisationId:org(),
+ name:varchar('name',{length:120}).notNull(),
+ nameKey:varchar('name_key',{length:120}).notNull(),
+ code:varchar('code',{length:20}).notNull(),
+ description:text('description'),
+ status:varchar('status',{length:20}).notNull().default('active'),
+ isDefault:int('is_default').notNull().default(0),
+ sortOrder:int('sort_order').notNull().default(0),
+ archivedAt:stamp('archived_at'),
+ ...lifecycle(),
+},t=>[index('idx_business_units_org').on(t.organisationId,t.status),uniqueIndex('uq_business_units_code').on(t.organisationId,t.code),uniqueIndex('uq_business_units_name').on(t.organisationId,t.nameKey)]);
 export const organisationEntitlements=mysqlTable('organisation_entitlements',{
  id:id(),organisationId:org(),
  module:varchar('module',{length:40}).notNull(),
@@ -233,6 +247,8 @@ export const tenders=mysqlTable('tenders',{
  estimatedValue:money('estimated_value'),
  location:varchar('location',{length:255}),
  scopeSummary:text('scope_summary'),
+ // 0023: owning division; flows to the estimate and, on award, the project.
+ businessUnitId:ref('business_unit_id'),
  estimateId:ref('estimate_id'),
  approvedEstimateRevisionId:ref('approved_estimate_revision_id'),
  approvalStatus:varchar('approval_status',{length:20}).notNull().default('not_requested'),
@@ -253,7 +269,7 @@ export const tenders=mysqlTable('tenders',{
  projectId:ref('project_id'),
  clientId:ref('client_id'),siteId:ref('site_id'),contactId:ref('contact_id'),
  ...lifecycle(),
-},t=>[uniqueIndex('idx_tenders_org_opportunity').on(t.organisationId,t.opportunityId),index('idx_tenders_org_stage').on(t.organisationId,t.stage),index('idx_tenders_org_client').on(t.organisationId,t.clientId)]);
+},t=>[index('idx_tenders_business_unit').on(t.organisationId,t.businessUnitId),uniqueIndex('idx_tenders_org_opportunity').on(t.organisationId,t.opportunityId),index('idx_tenders_org_stage').on(t.organisationId,t.stage),index('idx_tenders_org_client').on(t.organisationId,t.clientId)]);
 
 export const tenderBidReviews=mysqlTable('tender_bid_reviews',{
  id:id(),organisationId:org(),

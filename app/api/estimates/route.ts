@@ -23,6 +23,7 @@ import {
 } from "@/lib/estimates-db";
 import { assertEditable } from '@/lib/modules/estimating/approval';
 import { HttpError } from '@/lib/platform/http';
+import { resolveDivisionD1, resolveDivisionChangeD1 } from '@/lib/platform/business-units-db';
 import { requireActor } from '@/lib/authz';
 
 export const dynamic = "force-dynamic";
@@ -63,6 +64,8 @@ function rowToEstimate(row: GenericRow) {
     id: row.id,
     name: row.name,
     status,
+    businessUnitId: ((row as Record<string, unknown>).business_unit_id as string | null) ?? null,
+    tenderId: ((row as Record<string, unknown>).tender_id as string | null) ?? null,
     createdAt: row.created_at,
     updatedAt: metadata.updatedAt ?? row.created_at,
     revisionNumber: Number(metadata.revisionNumber ?? 1),
@@ -158,7 +161,7 @@ async function getLookups(db: Database) {
 
 async function getEstimateRow(db: Database, id: string) {
   return db
-    .prepare("SELECT id, organisation_id, name, status, metadata, created_at FROM estimates WHERE organisation_id = ? AND id = ? LIMIT 1")
+    .prepare("SELECT id, organisation_id, name, status, metadata, created_at, business_unit_id, tender_id FROM estimates WHERE organisation_id = ? AND id = ? LIMIT 1")
     .bind(currentOrganisationId(), id)
     .first<GenericRow>();
 }
@@ -188,7 +191,7 @@ async function handleGET(request: Request) {
       return Response.json({ estimate: rowToEstimate(row), revisions: await getRevisions(db, id), rateLibraries: libraries });
     }
     const result = await db
-      .prepare("SELECT id, organisation_id, name, status, metadata, created_at FROM estimates WHERE organisation_id = ? ORDER BY created_at DESC")
+      .prepare("SELECT id, organisation_id, name, status, metadata, created_at, business_unit_id, tender_id FROM estimates WHERE organisation_id = ? ORDER BY created_at DESC")
       .bind(currentOrganisationId())
       .all<GenericRow>();
     return Response.json({
@@ -251,13 +254,15 @@ async function handlePOST(request: Request) {
     const now = nowIso();
     const id = crypto.randomUUID();
     const revisionId = crypto.randomUUID();
+    // A chosen active division, otherwise the organisation's default (single-division companies never choose).
+    const businessUnitId = (await resolveDivisionD1(db, currentOrganisationId(), body.businessUnitId)) ?? (await resolveDivisionD1(db, currentOrganisationId(), null)) ?? null;
     const name = data.name || [data.clientName, data.projectName].filter(Boolean).join(" · ") || "New estimate";
     const metadata = metadataFor(data, totals, validation, requestedStatus, 1, revisionId);
     const statements = [
       db.prepare(
-        `INSERT INTO estimates (id, organisation_id, name, status, metadata, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      ).bind(id, currentOrganisationId(), name, requestedStatus, JSON.stringify(metadata), now),
+        `INSERT INTO estimates (id, organisation_id, name, status, metadata, created_at, business_unit_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(id, currentOrganisationId(), name, requestedStatus, JSON.stringify(metadata), now, businessUnitId),
       revisionStatement(db, revisionId, id, name, requestedStatus, 1, data, totals, validation, "Created", now),
       auditStatement(db, "estimate.created", id, { status: requestedStatus, revisionNumber: 1 }, now),
     ];
@@ -265,6 +270,7 @@ async function handlePOST(request: Request) {
     const row = await getEstimateRow(db, id);
     return Response.json({ estimate: row ? rowToEstimate(row) : null, validation, totals }, { status: 201 });
   } catch (error) {
+    if (error instanceof HttpError) return jsonError(error.message, error.status);
     console.error("create estimate", error);
     return jsonError("The estimate could not be created.", 503);
   }
@@ -278,6 +284,22 @@ async function handlePUT(request: Request) {
     if (!id) return jsonError("An estimate ID is required.");
     const row = await getEstimateRow(db, id);
     if (!row) return jsonError("The estimate was not found.", 404);
+    if (cleanText(body.action, 30) === "set-division") {
+      // Division is filing metadata, not contractual content: no new revision is created.
+      if (row.status === "Awarded") return jsonError("An awarded estimate can no longer change division.", 409);
+      // One rule: an estimate created from a tender follows that tender's division. Change it on the tender.
+      if ((row as Record<string, unknown>).tender_id) return jsonError("This estimate follows its tender's division. Change the division on the tender.", 409);
+      const to = (await resolveDivisionChangeD1(db, currentOrganisationId(), body.businessUnitId, (row as Record<string, unknown>).business_unit_id as string | null)) ?? null;
+      if (to !== (row as Record<string, unknown>).business_unit_id) {
+        const at = nowIso();
+        await db.batch([
+          db.prepare("UPDATE estimates SET business_unit_id = ?, updated_at = ? WHERE organisation_id = ? AND id = ?").bind(to, at, currentOrganisationId(), id),
+          auditStatement(db, "estimate.division_changed", id, { from: (row as Record<string, unknown>).business_unit_id ?? null, to }, at),
+        ]);
+      }
+      const moved = await getEstimateRow(db, id);
+      return Response.json({ estimate: moved ? rowToEstimate(moved) : null, action: "set-division" });
+    }
     const workflow = await assertEditable(id).catch((e: unknown) => e);
     if (workflow instanceof HttpError) return jsonError(workflow.message, workflow.status);
     const current = rowToEstimate(row);
@@ -327,6 +349,7 @@ async function handlePUT(request: Request) {
     const saved = await getEstimateRow(db, id);
     return Response.json({ estimate: saved ? rowToEstimate(saved) : null, validation, totals, action: action || "save" });
   } catch (error) {
+    if (error instanceof HttpError) return jsonError(error.message, error.status);
     console.error("save estimate", error);
     return jsonError("The estimate could not be saved.", 503);
   }

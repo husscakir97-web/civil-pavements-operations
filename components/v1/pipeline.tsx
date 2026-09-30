@@ -2,6 +2,7 @@
 import {useState} from 'react';
 import dynamic from 'next/dynamic';
 import {ArrowRight,Plus,Trophy} from 'lucide-react';
+import {DivisionPicker,DivisionFilter,DivisionBadge,inDivision,useDivisions} from './divisions';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,FieldGroup,field,Section,PageHeader,NextAction,Progress,Stat,money,dateText,humanStatus} from './kit';
 import {ClientPicker,SitePicker,ContactPicker,PersonPicker,ClientContactCard} from './lookup';
@@ -31,7 +32,7 @@ export function OpportunitiesView(){
  </div>;
 }
 
-type Tender={awardBlockers?:string[];id:string;opportunityId:string;reference:string|null;title:string;clientName:string|null;clientId?:string|null;siteId?:string|null;contactId?:string|null;ownerUserId:string|null;ownerName:string|null;stage:string;stageLabel:string;dueDate:string|null;location:string|null;scopeSummary:string|null;estimateId:string|null;approvalStatus:string;approvedAt:string|null;approvalNotes:string|null;submittedAt:string|null;submissionMethod:string|null;submissionVersion:string|null;submissionNotes:string|null;submissionOverrideReason:string|null;outcomeAt:string|null;outcomeReason:string|null;projectId:string|null;revision:number;estimatedValue?:number|null;approvedSellPrice?:number|null;approvedMarginPct?:number|null;completion:number;nextAction:string|null;checks:Array<{key:string;label:string;ok:boolean;detail:string|null}>;stats:{documents:number;requirements:number;suggested:number;mandatoryOpen:number;returnables:number;returnablesMandatoryOpen:number;clarificationsOpen:number;nextClarificationDue:string|null;estimateState:string|null;bidDecision:string;approvedRevisionNumber:number|null}};
+type Tender={awardBlockers?:string[];businessUnitId?:string|null;id:string;opportunityId:string;reference:string|null;title:string;clientName:string|null;clientId?:string|null;siteId?:string|null;contactId?:string|null;ownerUserId:string|null;ownerName:string|null;stage:string;stageLabel:string;dueDate:string|null;location:string|null;scopeSummary:string|null;estimateId:string|null;approvalStatus:string;approvedAt:string|null;approvalNotes:string|null;submittedAt:string|null;submissionMethod:string|null;submissionVersion:string|null;submissionNotes:string|null;submissionOverrideReason:string|null;outcomeAt:string|null;outcomeReason:string|null;projectId:string|null;revision:number;estimatedValue?:number|null;approvedSellPrice?:number|null;approvedMarginPct?:number|null;completion:number;nextAction:string|null;checks:Array<{key:string;label:string;ok:boolean;detail:string|null}>;stats:{documents:number;requirements:number;suggested:number;mandatoryOpen:number;returnables:number;returnablesMandatoryOpen:number;clarificationsOpen:number;nextClarificationDue:string|null;estimateState:string|null;bidDecision:string;approvedRevisionNumber:number|null}};
 
 export function TendersView(){
  const {route,navigate}=useNav();
@@ -51,14 +52,15 @@ function TenderRegister(){
  const opps=useApi<{records:Array<{id:string;stage:string;tender_id:string|null}>}>('/api/registers/opportunities');
  const {navigate}=useNav();const {can}=useSession();const [creating,setCreating]=useState(false);
  const [phase,setPhase]=useState<string>('active');
- const tenders=data?.tenders||[];
+ const [division,setDivision]=useState('');const divs=useDivisions();
+ const tenders=(data?.tenders||[]).filter(t=>inDivision(division,t.businessUnitId,divs.defaultId));
  const inPhase=(k:string)=>tenders.filter(t=>TENDER_PHASES.find(p=>p.key===k)!.stages.includes(t.stage));
  const openOpps=(opps.data?.records||[]).filter(o=>!o.tender_id&&!['converted','lost','archived'].includes(o.stage)).length;
  const shown=phase==='active'?tenders.filter(t=>!['awarded','lost'].includes(t.stage)):inPhase(phase);
  // Most urgent first: overdue and soonest due at the top of each phase.
  const sorted=[...shown].sort((a,b)=>(a.dueDate||'9999').localeCompare(b.dueDate||'9999'));
  const row=(t:Tender)=>{const closed=['awarded','lost'].includes(t.stage);return <li key={t.id}><button onClick={()=>navigate('Pipeline','Tenders',t.id)} className="grid w-full gap-2 p-4 text-left hover:bg-slate-50 md:grid-cols-[minmax(0,2fr)_9rem_9rem_minmax(0,1.4fr)] md:items-center">
-  <span className="min-w-0"><span className="block font-medium">{t.title}</span><span className="block text-xs text-slate-500">{[t.clientName,t.ownerName?`Owner ${t.ownerName}`:'No owner'].filter(Boolean).join(' · ')}</span></span>
+  <span className="min-w-0"><span className="block font-medium">{t.title} <DivisionBadge id={t.businessUnitId}/></span><span className="block text-xs text-slate-500">{[t.clientName,t.ownerName?`Owner ${t.ownerName}`:'No owner'].filter(Boolean).join(' · ')}</span></span>
   <span className="flex flex-wrap items-center gap-2"><StatusBadge machine="tender" state={t.stage}/></span>
   <span className="text-sm"><DueText date={t.dueDate} closed={closed}/></span>
   <span className="min-w-0">{t.nextAction&&!closed?<span className="block truncate text-sm text-orange-900">{t.nextAction}</span>:<span className="text-sm text-slate-500">{t.stage==='awarded'?'Awarded':t.stage==='lost'?'Lost / not bid':''}</span>}{!closed&&<span className="mt-1 block max-w-48"><Progress value={t.completion}/></span>}</span>
@@ -67,6 +69,7 @@ function TenderRegister(){
  return <div className="grid gap-4">
   <PageHeader title="Tenders" subtitle="Opportunity → tender → submitted → award. Each tender opens one workspace that follows the whole bid." actions={can('pipeline.edit')&&<Btn onClick={()=>setCreating(true)}><Plus aria-hidden className="size-4"/>New tender</Btn>}/>
   <ErrorState error={error} onRetry={refresh}/>
+  <DivisionFilter value={division} onChange={setDivision}/>
   <nav aria-label="Tender pipeline" className="flex flex-wrap items-center gap-2">
    <button onClick={()=>navigate('Pipeline','Opportunities')} className="min-h-9 rounded-full border border-dashed border-slate-300 bg-white px-3 text-sm text-slate-700 hover:bg-slate-50">Opportunities{opps.data?` (${openOpps})`:''}<ArrowRight aria-hidden className="ml-1 inline size-3.5"/></button>
    {chips.map(c=><button key={c.key} aria-pressed={phase===c.key} onClick={()=>setPhase(c.key)} className={`min-h-9 rounded-full border px-3 text-sm ${phase===c.key?'border-[#172633] bg-[#172633] text-white':'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{c.label} ({c.count})</button>)}
@@ -78,11 +81,12 @@ function TenderRegister(){
 
 function TenderForm({tender,onDone}:{tender?:Tender;onDone:(id?:string)=>void}){
  const people=usePeople();const {can}=useSession();const {busy,error,run}=useAction();
- const [v,setV]=useState({title:tender?.title||'',clientName:tender?.clientName||'',clientId:tender?.clientId||null as string|null,siteId:tender?.siteId||null as string|null,contactId:tender?.contactId||null as string|null,reference:tender?.reference||'',dueDate:tender?.dueDate?.slice(0,10)||'',estimatedValue:tender?.estimatedValue??'',ownerUserId:tender?.ownerUserId||'',location:tender?.location||'',scopeSummary:tender?.scopeSummary||''});
+ const [v,setV]=useState({businessUnitId:(tender?.businessUnitId??null) as string|null,title:tender?.title||'',clientName:tender?.clientName||'',clientId:tender?.clientId||null as string|null,siteId:tender?.siteId||null as string|null,contactId:tender?.contactId||null as string|null,reference:tender?.reference||'',dueDate:tender?.dueDate?.slice(0,10)||'',estimatedValue:tender?.estimatedValue??'',ownerUserId:tender?.ownerUserId||'',location:tender?.location||'',scopeSummary:tender?.scopeSummary||''});
  const set=(k:string,val:string|null)=>setV(s=>({...s,[k]:val}));
  const body={...v,estimatedValue:v.estimatedValue===''?null:Number(v.estimatedValue),dueDate:v.dueDate||null,ownerUserId:v.ownerUserId||null};
  return <form className="grid gap-4 p-5" onSubmit={e=>{e.preventDefault();void run(async()=>tender?(await api('/api/tenders/workspace',{method:'PATCH',body:{...body,id:tender.id,revision:tender.revision}}),tender.id):(await api<{tenderId:string}>('/api/tenders/register',{method:'POST',body})).tenderId,id=>onDone(id));}}>
   <Field label="Tender title" required><input className={field} required value={v.title} onChange={e=>set('title',e.target.value)}/></Field>
+  <DivisionPicker value={v.businessUnitId} onChange={id=>set('businessUnitId',id)}/>
   <div className="grid gap-4 sm:grid-cols-2"><ClientPicker value={v.clientId} legacyName={v.clientId?null:tender?.clientName} onChange={c=>setV(s=>({...s,clientId:c?.id??null,clientName:c?.name??s.clientName,siteId:c?.sites.length===1?c.sites[0].id:c&&c.sites.some(x=>x.id===s.siteId)?s.siteId:null,location:c?.sites.length===1&&!s.location?c.sites[0].label:s.location,contactId:c&&(c.contacts||[]).some(x=>x.id===s.contactId)?s.contactId:(c?.contacts||[]).find(x=>x.isPrimary)?.id??null}))}/><Field label="Client reference"><input className={field} value={v.reference} onChange={e=>set('reference',e.target.value)}/></Field>
   <Field label="Closing date"><input className={field} type="date" value={v.dueDate} onChange={e=>set('dueDate',e.target.value)}/></Field>{can('commercial.view')&&<Field label="Estimated value"><input className={field} type="number" value={String(v.estimatedValue)} onChange={e=>set('estimatedValue',e.target.value)}/></Field>}
   <PersonPicker label="Owner" people={people} value={v.ownerUserId} onChange={id=>set('ownerUserId',id||'')}/>{v.clientId&&<SitePicker clientId={v.clientId} value={v.siteId} onChange={x=>setV(s=>({...s,siteId:x?.id??null,location:x?x.label:s.location}))}/>}{v.clientId&&<ContactPicker clientId={v.clientId} value={v.contactId} onChange={x=>setV(s=>({...s,contactId:x?.id??null}))}/>}<Field label="Location"><input className={field} value={v.location} onChange={e=>set('location',e.target.value)}/></Field></div>

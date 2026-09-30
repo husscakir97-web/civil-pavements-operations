@@ -6,6 +6,7 @@ import {api,useApi,useAction,useSession,ErrorState,Loading,Btn,Field,field,Secti
 import {AiAdmin,BillingAdmin,ImsDraftAssist} from './ai';
 import {RegisterView} from './register-view';
 import {CompanyProfile} from './company';
+import {DivisionsAdmin} from './divisions';
 import {KnowledgeAdmin} from './knowledge';
 import {WorkspaceBrandSettings} from '@/components/workspace-brand';
 import {ROLES,ROLE_CAPABILITIES,CAPABILITIES} from '@/lib/platform/permissions';
@@ -78,6 +79,7 @@ export function AdminArea({sub,onNavigate,initialQuery}:{sub:string;onNavigate:(
  const {can}=useSession();const [libraryTick,setLibraryTick]=useState(0);
  void onNavigate;
  if(sub==='Company')return <CompanyProfile/>;
+ if(sub==='Divisions')return <DivisionsAdmin/>;
  if(sub==='Rates')return <RatesAdmin/>;
  if(sub==='Company Library')return <div className="grid gap-4"><RegisterView key={`${libraryTick}-${initialQuery||''}`} register="library" initialQuery={initialQuery} focus={{label:'Expired or expiring',test:r=>{const d=String(r.expiry_date||'');return Boolean(d)&&d<=new Date(Date.now()+30*86400000).toISOString().slice(0,10);},empty:'Nothing in the Library has expired or expires in the next 30 days.'}} description="Reusable company knowledge. Tender returnables and project setup link to these items instead of duplicating them."/><ImsDraftAssist onApplied={()=>setLibraryTick(t=>t+1)}/></div>;
  if(sub==='Civil Knowledge')return <KnowledgeAdmin/>;

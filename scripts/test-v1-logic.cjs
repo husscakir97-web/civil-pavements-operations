@@ -535,6 +535,11 @@ console.log('PASS estimate paste: header skipped, $ and thousands parsed, catego
  assert(Pm.can('project_engineer','forms.amend')&&!Pm.can('project_engineer','forms.manage')&&!Pm.can('site_engineer','forms.publish'));
  assert(Pm.can('read_only','forms.view')&&!Pm.can('read_only','forms.submit'));
  assert(!Pm.can('accounts','forms.view'));
+ // workshop.defect.report is a narrow reporting authority: not repair, verify or Workshop administration.
+ for(const r of ['admin','office','scheduler','project_manager','project_engineer','site_engineer','supervisor','field'])assert(Pm.can(r,'workshop.defect.report'),r+' can report defects');
+ for(const r of ['estimator','accounts','read_only'])assert(!Pm.can(r,'workshop.defect.report'),r+' cannot report defects');
+ for(const r of ['field','supervisor','site_engineer','project_engineer','project_manager'])assert(!Pm.can(r,'workshop.edit')&&!Pm.can(r,'workshop.verify'),r+' reporting grants no repair/verify');
+assert.equal(load('lib/platform/modules.ts').MODULE_SEAMS['form.defect'].capability,'workshop.defect.report');
  console.log('PASS forms engine: schema rules, stable ids, deterministic chained conditions, hidden values dropped, required/conditional required, typed values and choices, unknown fields, references and signatures, changed fields, capabilities');
 }
 {

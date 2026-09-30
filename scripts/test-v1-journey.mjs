@@ -1373,7 +1373,8 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  // ---------------------------------------------------------------- Scenario 8C: prestart → defect → safety hold → repair → verification → return to service
  step='8C form defects';
  await as('project_engineer');
- const dPost=(b,cookie=C.cookie)=>call('/api/forms/defects','POST',b,cookie);
+ // Every deliberate defect carries its own request id; a retry re-sends the same one.
+ const dPost=(b,cookie=C.cookie)=>call('/api/forms/defects','POST',{clientRequestId:crypto.randomUUID(),...b},cookie);
  const dList=(id,cookie=C.cookie)=>call('/api/forms/defects?submissionId='+encodeURIComponent(id),'GET',undefined,cookie);
  const dPlant=await json(await workshop({action:'asset',name:'Prestart roller',number:'PR-08',category:'Roller',registration:'PR08'}),200,'workshop asset');
  const dOther=await json(await workshop({action:'asset',name:'Unrelated truck',number:'TR-09',category:'Truck',registration:'TR09'}),200);
@@ -1390,9 +1391,9 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const dDef=await json(await dPost({submissionId:dSub,assetId:dPlant.id,fieldId:'plant_safe',title:'Reverse alarm not sounding',severity:'critical',note:'Found at prestart; roller parked'}),201,'operator raises a critical defect from the prestart');
  assert.equal(dDef.safetyHold,true);
  const [[dPlantRow]]=await db.execute('SELECT status,safety_hold FROM plant WHERE organisation_id=? AND id=?',[memberA.organisation_id,dPlant.id]);assert.equal(Number(dPlantRow.safety_hold),1);assert.equal(dPlantRow.status,'Out of service','critical defect takes the plant out of service');
- const [[dOrder]]=await db.execute('SELECT status,severity,source_type,source_id,source_field,created_by FROM workshop_orders WHERE organisation_id=? AND id=?',[memberA.organisation_id,dDef.id]);
- assert.deepEqual({...dOrder},{status:'open',severity:'critical',source_type:'form_submission',source_id:dSub,source_field:'plant_safe',created_by:C.user.id},'work order linked to the form answer');
- await json(await dPost({submissionId:dSub,assetId:dPlant.id,fieldId:'plant_safe',title:'Again',severity:'major',note:'dup'}),409,'one defect per answer');
+ const [[dOrder]]=await db.execute('SELECT status,severity,source_type,source_id,source_field,source_amendment_sequence,source_context_type,source_context_id,source_project_id,created_by FROM workshop_orders WHERE organisation_id=? AND id=?',[memberA.organisation_id,dDef.id]);
+ assert.deepEqual({...dOrder},{status:'open',severity:'critical',source_type:'form_submission',source_id:dSub,source_field:'plant_safe',source_amendment_sequence:0,source_context_type:'shift',source_context_id:shiftA,source_project_id:pA,created_by:C.user.id},'work order linked to the form answer, exact evidence state and context');
+ await json(await call('/api/forms/defects','POST',{submissionId:dSub,assetId:dPlant.id,fieldId:'plant_safe',title:'No request id',severity:'minor',note:'x'},C.cookie),400,'a request id is required');
  const dHeld=await json(await call('/api/delivery','POST',{kind:'shifts',check:true,record:{id:'',name:'Hold check',status:'Planned',metadata:{date:'2026-12-01',start:'07:00',finish:'17:00',assignments:[{category:'plant',resourceId:dPlant.id}]}},candidates:[]},A.cookie),200);
  assert(dHeld.conflicts.some(c=>c.code==='RESOURCE_UNAVAILABLE'),'held plant cannot be scheduled');
  // Scope: the submission's own access rules govern the seam.
@@ -1421,7 +1422,70 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const [dAud]=await db.execute('SELECT event_type FROM audit_log WHERE organisation_id=? AND entity_id IN (?,?)',[memberA.organisation_id,dSub,dDef.id]);const dEv=new Set(dAud.map(r=>r.event_type));
  for(const e of ['form_defect.raised','workshop.defect','workshop.repair','workshop.verify'])assert(dEv.has(e),'audit: '+e);
  const [[dEvent]]=await db.execute("SELECT COUNT(*) AS n FROM domain_events WHERE organisation_id=? AND entity_id=? AND event_type='workshop.defect.reported'",[memberA.organisation_id,dDef.id]);assert(Number(dEvent.n)>=1,'domain event published');
- console.log('PASS 8C form defects: field prestart on assigned shift → critical defect linked to the answer → safety hold blocks scheduling → repair → self-verify refused → rejection → independent verification → returned to service; one defect per answer, only plant on the form, submission scope, tenant isolation, Workshop entitlement seam, minor defects keep plant available, evidence untouched, audit and domain event');
+ // ---- 8C corrections: exact evidence provenance, narrow capability, idempotency vs source linkage, traceability
+ const orderCount=async(sub)=>Number((await db.execute("SELECT COUNT(*) AS n FROM workshop_orders WHERE organisation_id=? AND source_id=?",[memberA.organisation_id,sub]))[0][0].n);
+ // Legitimate multiple defects from one answer, and retry replay.
+ const dRid=crypto.randomUUID(),dMulti={submissionId:dSub,assetId:dPlant.id,fieldId:'plant_safe',title:'Rear beacon failed',severity:'minor',note:'Beacon dead',clientRequestId:dRid};
+ const before=await orderCount(dSub);
+ const mA=await json(await call('/api/forms/defects','POST',dMulti,C.cookie),201,'defect A from plant_safe');
+ const mAretry=await json(await call('/api/forms/defects','POST',dMulti,C.cookie),201,'retry of the same request replays');
+ assert.equal(mAretry.id,mA.id,'retry returns the original work order');assert.equal(await orderCount(dSub),before+1,'retry created no second order');
+ await json(await call('/api/forms/defects','POST',{...dMulti,title:'Different content, same request id'},C.cookie),409,'a request id cannot be reused for different content');
+ const mB=await json(await dPost({...dMulti,clientRequestId:crypto.randomUUID(),title:'Left work light failed',note:'Light dead'}),201,'deliberate defect B from the same answer');
+ assert.notEqual(mB.id,mA.id);assert.equal(await orderCount(dSub),before+2,'both defects exist for one answer');
+ // Amendment provenance: the order keeps the evidence state it was raised on.
+ const eff0=(await json(await fGet('op=submission&id='+dSub,A.cookie),200)).effective;
+ await json(await fPost({action:'amend',id:dSub,responses:{...eff0,describe_defect:'Reverse alarm and beacon not working'},reason:'Add beacon'},A.cookie),201,'dSub correction 1');
+ const p1=await json(await dPost({submissionId:dSub,assetId:dPlant.id,fieldId:'describe_defect',title:'Beacon (after correction 1)',severity:'minor',note:'x'}),201);
+ assert.equal(p1.amendmentSequence,1);
+ const eff1=(await json(await fGet('op=submission&id='+dSub,A.cookie),200)).effective;
+ await json(await fPost({action:'amend',id:dSub,responses:{...eff1,describe_defect:'Reverse alarm, beacon and horn'},reason:'Add horn'},A.cookie),201,'dSub correction 2');
+ const seqOf=async id=>Number((await db.execute('SELECT source_amendment_sequence AS n FROM workshop_orders WHERE organisation_id=? AND id=?',[memberA.organisation_id,id]))[0][0].n);
+ assert.equal(await seqOf(p1.id),1,'later correction does not alter the order provenance');assert.equal(await seqOf(dDef.id),0,'original-record defect stays at sequence 0');
+ const p2=await json(await dPost({submissionId:dSub,assetId:dPlant.id,fieldId:'describe_defect',title:'Horn (after correction 2)',severity:'minor',note:'x'}),201);assert.equal(p2.amendmentSequence,2);
+ // Traceability: Workshop reads the source through the Forms helper, no answers copied.
+ const src=(await json(await call('/api/forms/defects?workOrderId='+p1.id,'GET',undefined,A.cookie),200)).source;
+ assert.equal(src.restricted,false);assert.equal(src.formName,'Plant prestart');assert.equal(src.submissionId,dSub);assert.equal(src.contextType,'shift');assert.equal(src.evidenceState,'Correction 1');assert.equal(src.currentAmendmentSequence,2);assert.equal(src.projectName,'Scope Project Alpha');
+ assert(!JSON.stringify(src).includes('Reverse alarm and beacon'),'answers are not copied into the Workshop source view');
+ assert.equal((await json(await call('/api/forms/defects?workOrderId='+dDef.id,'GET',undefined,A.cookie),200)).source.evidenceState,'Original submission');
+ // Source access follows Forms scope: an engineer outside the project fails closed.
+ const bravoRig=(await json(await fSubmit({...fGood,rig:dPlant.id,tyres_ok:true,operator:A.user.id,photos:[fBravoPhoto.id],signed:{name:'Admin',confirmed:true}},A.cookie,'project',pB),201,'Bravo submission recording the plant')).id;
+ const bravoDef=await json(await dPost({submissionId:bravoRig,assetId:dPlant.id,fieldId:'plant_safe',title:'Bravo-sourced minor',severity:'minor',note:'x'},A.cookie),201);
+ assert.equal((await json(await call('/api/forms/defects?workOrderId='+bravoDef.id,'GET',undefined,R.cookie),200)).source.restricted,true,'out-of-project engineer sees no form content');
+ assert.equal(JSON.stringify(await (await call('/api/forms/defects?workOrderId='+bravoDef.id,'GET',undefined,R.cookie)).json()).includes('Bravo'),false);
+ await json(await dPost({submissionId:bravoRig,assetId:dPlant.id,fieldId:'plant_safe',title:'x',severity:'minor',note:'x'},R.cookie),404,'engineer outside the project cannot raise from it');
+ await json(await call('/api/forms/defects?workOrderId=nope','GET',undefined,A.cookie),404,'unknown order');
+ // Capability: the field worker can report but has no repair / verify authority; a role without the capability cannot use the seam.
+ await json(await workshop({action:'repair',id:dDef.id,revision:9,note:'x',labourHours:1,parts:''},C.cookie),403,'reporter cannot record a repair');
+ await json(await workshop({action:'verify',id:dDef.id,revision:9,note:'x',accepted:true},C.cookie),403,'reporter cannot verify');
+ await as('read_only');
+ await json(await dList(dSub),200,'read-only role can still view the defects');
+ await json(await dPost({submissionId:dSub,assetId:dPlant.id,fieldId:'tyres_ok',title:'x',severity:'minor',note:'x'},R.cookie),403,'no workshop.defect.report → seam refused');
+ await as('project_engineer');
+ // Workshop read-only: readable, no new defects, and the UI capability flag is off.
+ await json(await call('/api/platform/entitlements','PUT',{module:'workshop',status:'read_only'},A.cookie),200);
+ assert.equal((await json(await dList(dSub),200)).canRaise,false,'Forms panel is told not to offer Raise defect');
+ assert((await json(await dList(dSub),200)).defects.length>=5,'existing defects stay readable');
+ await json(await dPost({submissionId:dSub,assetId:dPlant.id,fieldId:'tyres_ok',title:'x',severity:'minor',note:'x'}),409,'read-only Workshop refuses new defects');
+ await json(await call('/api/workshop','GET',undefined,A.cookie),200,'Workshop orders remain readable');
+ await json(await call('/api/platform/entitlements','PUT',{module:'workshop',status:'active'},A.cookie),200);
+ assert.equal((await json(await dList(dSub),200)).canRaise,true);
+ // Two critical defects on one asset: the hold clears only after BOTH are independently verified.
+ const cPlant=await json(await workshop({action:'asset',name:'Double-hold grader',number:'GR-10',category:'Grader',registration:'GR10'}),200);
+ const cSub=(await json(await fSubmit({plant_safe:false,describe_defect:'Two faults',rig:cPlant.id,tyres_ok:false,signed:{name:'Casey Field',confirmed:true}},C.cookie,'shift',shiftA),201)).id;
+ const cA=await json(await dPost({submissionId:cSub,assetId:cPlant.id,fieldId:'plant_safe',title:'Brakes failed',severity:'critical',note:'A'}),201);
+ const cB=await json(await dPost({submissionId:cSub,assetId:cPlant.id,fieldId:'tyres_ok',title:'Steering failed',severity:'critical',note:'B'}),201);
+ const cState=async()=>{const [[r]]=await db.execute('SELECT status,safety_hold FROM plant WHERE organisation_id=? AND id=?',[memberA.organisation_id,cPlant.id]);return {status:r.status,hold:Number(r.safety_hold)};};
+ assert.deepEqual(await cState(),{status:'Out of service',hold:1});
+ await json(await workshop({action:'repair',id:cA.id,revision:1,note:'Brakes rebuilt',labourHours:2,parts:''}),200);
+ await json(await workshop({action:'verify',id:cA.id,revision:2,note:'Brakes tested',accepted:true},W.cookie),200);
+ assert.deepEqual(await cState(),{status:'Out of service',hold:1},'still held: critical defect B is open');
+ const cHeld=await json(await call('/api/delivery','POST',{kind:'shifts',check:true,record:{id:'',name:'Hold check 2',status:'Planned',metadata:{date:'2026-12-02',start:'07:00',finish:'17:00',assignments:[{category:'plant',resourceId:cPlant.id}]}},candidates:[]},A.cookie),200);
+ assert(cHeld.conflicts.some(c=>c.code==='RESOURCE_UNAVAILABLE'),'still cannot be scheduled after only A is verified');
+ await json(await workshop({action:'repair',id:cB.id,revision:1,note:'Steering rebuilt',labourHours:2,parts:''}),200);
+ await json(await workshop({action:'verify',id:cB.id,revision:2,note:'Steering tested',accepted:true},W.cookie),200);
+ assert.deepEqual(await cState(),{status:'Available',hold:0},'returned to service only after both are verified');
+ console.log('PASS 8C form defects: field prestart on assigned shift → critical defect linked to the answer → safety hold blocks scheduling → repair → self-verify refused → rejection → independent verification → returned to service; request-id idempotency with several defects per answer, exact amendment provenance, narrow workshop.defect.report capability, Forms-scoped source traceability, read-only Workshop, two critical defects (hold clears only after both), only plant on the form, submission scope, tenant isolation, Workshop entitlement seam, minor defects keep plant available, evidence untouched, audit and domain event');
 
  step='H ABN';
  let reg1=await json(await call('/api/platform/abn?abn=51824753556&lookup=1','GET',undefined,A.cookie),200);assert.equal(reg1.registry.status,'found');assert.equal(reg1.registry.record.entityName,'ALPHA CIVIL PTY LTD');

@@ -848,8 +848,10 @@ export const workshopOrders=mysqlTable('workshop_orders',{
  severity:varchar('severity',{length:20}).notNull(),status:varchar('status',{length:30}).notNull().default('open'),
  dueDate:day('due_date'),repairerId:ref('repairer_id'),verifiedBy:ref('verified_by'),
  // Evidence that raised the defect (e.g. a prestart form submission and the answer's field id).
- sourceType:varchar('source_type',{length:30}),sourceId:ref('source_id'),sourceField:varchar('source_field',{length:64}),...lifecycle(),
-},t=>[index('workshop_orders_org_idx').on(t.organisationId),index('workshop_orders_asset_idx').on(t.organisationId,t.assetId),uniqueIndex('idx_workshop_orders_source').on(t.organisationId,t.sourceType,t.sourceId,t.sourceField)]);
+ sourceType:varchar('source_type',{length:30}),sourceId:ref('source_id'),sourceField:varchar('source_field',{length:64}),
+ // Exact evidence state when raised: the effective Forms amendment sequence (0 = original), and the authoritative context.
+ sourceAmendmentSequence:int('source_amendment_sequence'),sourceContextType:varchar('source_context_type',{length:40}),sourceContextId:ref('source_context_id'),sourceProjectId:ref('source_project_id'),...lifecycle(),
+},t=>[index('workshop_orders_org_idx').on(t.organisationId),index('workshop_orders_asset_idx').on(t.organisationId,t.assetId),index('idx_workshop_orders_source').on(t.organisationId,t.sourceType,t.sourceId,t.sourceField)]);
 export const workshopEntries=mysqlTable('workshop_entries',{
  id:id(),organisationId:org(),orderId:ref('order_id').notNull(),kind:varchar('kind',{length:30}).notNull(),
  note:text('note').notNull(),labourHours:decimal('labour_hours',{precision:10,scale:2}),parts:text('parts'),

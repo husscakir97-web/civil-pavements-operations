@@ -53,6 +53,6 @@ export const MODULE_SEAMS={
  'project.ims':{modules:['projects','ims'],capability:'tender.award'},
  'docket.cost':{modules:['dockets','projects'],capability:'docket.approve'},
  // Prestart/inspection evidence raises a Workshop defect (critical → safety hold). Forms stay immutable.
- 'form.defect':{modules:['ims','workshop'],capability:'forms.submit'},
+ 'form.defect':{modules:['ims','workshop'],capability:'workshop.defect.report'},
 } as const satisfies Record<string,{modules:readonly ModuleKey[];capability:Capability}>;
 export type SeamKey=keyof typeof MODULE_SEAMS;

@@ -1,171 +1,210 @@
-# Claude approved task setup (inactive draft)
+# Claude approved tasks — inactive review draft
 
-This proposal does not enable execution. The template is outside .github/workflows,
-has a .disabled extension, and its job has a literal false guard. No credentials,
-App installation, permission changes, AI runs, merges or deployments were performed.
+This PR does not enable automation. The template remains in
+`docs/automation/claude-approved-task.yml.disabled`, outside Actions' workflow
+directory, with a literal `false` job guard. Do not add OAuth credentials or
+install an App until the separate activation/security review is approved.
 
-## Current repository and route
+## Small first version
 
-Inspected main at 131bc35dac1bdf8f8cfedcfe06537f6ec6f442b2 on 2026-09-30.
-Connected GitHub user: husscakir97-web (id 328914270), repository permission admin.
-There is already .github/workflows/claude.yml on main with issue/comment/review
-events and an ANTHROPIC_API_KEY reference. It has no explicit approval-label gate,
-time/turn/concurrency cap, or deterministic draft-PR step. Its actual App and secret
-status are unknown: this connector cannot enumerate secrets or Claude installations.
-The existing workflow is unchanged. Before configuring auth, review and separately
-approve retirement or restriction of that workflow so it cannot provide a second,
-broader execution path. Do not trigger @claude while doing setup.
+Dot prepares a small task; the repository owner reviews its complete content and
+dispatches its exact SHA-256; Claude edits approved files; a fixed helper runs
+checks and opens a draft PR; a human reviews it. There is no automatic merge,
+deployment, security work, feature work, or automatic retry using API billing.
+The initial owner dispatch is intentional: dot and bot comments cannot authorize
+their own task. The parent's review webhook is a separate, not-yet-configured step.
 
-Main has CLAUDE.md (read and honored); no AGENTS.md or .agents/skills/SKILL.md entries
-were present in its recursive tree. No checkout, gh CLI, or RW-PB440DEC23 remote
-tool was exposed in this delegated environment. The draft uses GitHub API writes
-to its own branch, so no current device checkout needs changing.
-
-## Proposed behavior
-
-Human collaborator applies claude-approved to an open [claude-task] issue, or
-manually dispatches from main with that approved issue number. Both the actor and
-task author must currently have write/maintain/admin permission; bot users and
-untrusted external tasks are rejected. This does not support bot-triggered dot tasks.
-Dot may write a scoped task, but a human collaborator must author/approve it for
-this first version. Do not broaden allowed_bots or allowed_non_write_users.
-
-Claude edits only a JSON task's exact approved paths and runs deterministic checks.
-The workflow rechecks approval and unchanged task content, rejects out-of-scope
-changes, then explicitly creates a separate claude/task-N-RUN branch and draft PR
-using the GitHub API. It does not rely on the default @claude prefilled PR link.
-No existing branch is pushed, merged, or deployed. Main must still match the frozen
-base SHA at publication. An existing open task PR prevents another run for that task.
-
-Example issue title: [claude-task] Clarify the empty docket message
-
-Issue body (human must review the complete scope before applying approval):
+Use one open issue titled `[claude-task] ...` containing exactly one JSON block:
 
 ```json
 {
   "summary": "Clarify the empty docket message",
-  "request": "Describe the exact current problem and the requested behavior here.",
-  "acceptance": "State observable results and regression checks here.",
-  "allowed_paths": ["components/dockets-workspace.tsx"]
+  "request": "Describe the precise correction",
+  "acceptance": "Describe observable behavior and the required regression",
+  "allowed_paths": [
+    "components/dockets-workspace.tsx",
+    "scripts/test-example.cjs"
+  ]
 }
 ```
 
-Only 1-20 exact paths under app/, components/, lib/, db/ or migrations/mysql/
-are supported. Wildcards, deletions, symlinks, binary/large files, instructions,
-package scripts, dependency files, workflows, credentials and live configuration
-are excluded. Scope expansions and tooling changes need a separate reviewed task.
-Migrations remain append-only under CLAUDE.md; use only NEW migration paths.
+Scope is 1–20 distinct exact paths under app/, components/, lib/, db/,
+migrations/mysql/, or scripts/test-*.cjs and scripts/test-*.mjs. Regression paths
+must be explicitly approved too. Existing migration files cannot be edited.
+Tooling, publisher, settings, instructions, dependency files, arbitrary scripts,
+credentials, deletion, symlinks, hardlinks and non-text files are excluded.
+New regression files must already be reached by the trusted test runner; adding
+a new npm script remains a separate setup change. This PR wires the automation
+suite into the existing npm test chain, so existing CI runs it.
 
-## Authentication recommendation and explicit user handoff
+## Approval binds the reviewed content
 
-The user confirmed Claude Pro. Prefer that existing subscription for this single-repository
-pilot. Run claude setup-token LOCALLY in the user's own trusted Claude terminal and
-paste its result directly into GitHub's protected environment secret form as
-CLAUDE_CODE_OAUTH_TOKEN. Never paste it into chat, an issue, a PR, or a committed file.
-If no trusted computer has Claude Code CLI, the user must first install the official
-CLI following https://code.claude.com/docs/en/setup . It need not be installed on
-this Windows computer if another trusted computer already has it. This preparation
-did not install software or run setup-token. No gh CLI is needed for manual setup.
-Subscription OAuth uses subscription capacity; it is not an API spend cap and
-GitHub runner minutes can still incur charges. No API fallback is configured.
+The sole trigger is workflow_dispatch from main, by husscakir97-web, with
+`issue_number` and `task_sha256`. A label is never sufficient. Hash input is the
+fixed repository, issue number, exact title, exact body and updated_at, serialized
+in that order by issueHash(). Including the edit version invalidates approval
+even when text is changed and subsequently restored. Some metadata changes may
+also require renewal; that is deliberately conservative.
 
-Use a custom GitHub App for the smallest documented permission set and deterministic
-publishing after Claude exits. The official Claude App's generated token is revoked
-at the end of its composite action, so it cannot be reused safely in a later
-publishing step. A custom App token supplied as github_token remains available until
-create-github-app-token revokes it in job cleanup. No PAT is required.
+Fetch the current issue JSON, review that snapshot, and calculate its hash with
+the trusted helper, for example on a machine with an authenticated gh CLI:
 
-User steps, only after explicit approval:
-1. Create a private custom App in https://github.com/settings/apps/new following
-   https://github.com/anthropics/claude-code-action/blob/main/docs/setup.md#using-a-custom-github-app .
-   Repository permissions: Contents read/write, Issues read/write, Pull requests
-   read/write; Metadata read is implicit. No account, organization, Actions,
-   Workflows, administration, or deployment permissions. Disable its webhook
-   (the App is an authentication identity here, not an event receiver).
-   Install on ONLY civil-pavements-operations.
-2. Generate/download its private key in GitHub yourself. Create the GitHub
-   environment claude-approved-tasks with required human reviewers and deployment
-   branch policy permitting only main. Place CLAUDE_TASK_APP_PRIVATE_KEY and
-   CLAUDE_CODE_OAUTH_TOKEN in that environment's secrets. Put the App's numeric ID
-   in environment variable CLAUDE_TASK_APP_ID. Do not use production secrets.
-   Confirm environment protection availability for this public repository.
-3. Separately review/restrict the pre-existing broad Claude workflow BEFORE adding
-   repository-level auth secrets or installing the official Claude App. The custom
-   route above does not need the official App or ANTHROPIC_API_KEY.
-4. Review this draft and its static checks. A human may merge the inert scaffold;
-   that still cannot run Claude. In a SEPARATE activation PR copy
-   docs/automation/claude-approved-task.yml.disabled to
-   .github/workflows/claude-approved-task.yml and remove ONLY the literal false
-   conjunction. Verify pins, scope and environment protections. A human merges.
-5. Explicitly set repository variable CLAUDE_TASKS_ENABLED=true after approval.
-   This variable alone cannot activate this draft. Create the claude-approved label
-   and one human-authored scoped test issue. Apply approval or manually dispatch.
-   The reviewer approves each environment run. Do not enter secrets using an agent.
-6. Validate the first draft PR, branch, local test results and full PR CI to terminal.
-   Keep it draft and do not merge/deploy during this acceptance test. Confirm no
-   other Claude workflow ran, and that denied actors/paths fail without AI work.
-   Only then describe the implementation/review loop as tested.
+```sh
+gh api repos/husscakir97-web/civil-pavements-operations/issues/NUMBER > task.json
+node .github/automation/claude-approved-task.cjs hash task.json
+```
 
-Stop switch after activation: set CLAUDE_TASKS_ENABLED=false and cancel active runs
-in GitHub. Disabling a variable does not cancel an already running job. Revoke the
-custom App installation/key or OAuth credential through the provider if needed.
+The setup assistant can prepare the public task snapshot/hash for review; a
+hash alone is not evidence that the owner reviewed it. The owner submits those
+two dispatch inputs after review. The gate compares the current issue against
+the supplied hash before any AI call, then checks again before/after tests and
+before PR creation. Queued runs and manual reruns cannot silently use edited
+content. GitHub cannot atomically couple issue editing to PR creation: an edit
+after the final API read remains a narrow race, so reviewers must also verify
+the approval hash recorded in the draft PR.
 
-The official App alternative is https://github.com/apps/claude (verified via the
-official docs). Its current full install grant is Actions, Checks, Contents,
-Discussions, Issues, Pull requests, Repository hooks and Workflows read/write;
-Members, Metadata and Statuses read. GitHub does not permit selecting a subset.
-This draft deliberately uses the custom App route; do not install both blindly.
+## Runtime boundaries and publication
 
-The user requires no extra spending. API billing, paid Claude extra usage and new
-paid subscriptions are not authorized. Keep this scaffold inactive until the user
-confirms Claude paid extra usage is OFF and GitHub spending is blocked outside
-included/free usage. Pause when Pro allowance is exhausted; do not retry using API
-billing or enable extra usage. The connector cannot verify those account settings.
-The 20-turn/30-minute/concurrency controls bound work, not money, and are not a
-guarantee of zero extra charges. No paid-job or credential action was performed.
+The pinned official action supports user settings with PreToolUse command hooks.
+A helper and approval state are copied outside the checkout before Claude starts.
+The hook only permits Read of tracked public files, Edit/Write of exact approved
+paths, and one exact foreground Bash command invoking the helper. It rejects
+other tools, shell suffixes/arguments, background requests, path traversal and
+link paths before execution. Project/local settings are excluded with
+`--setting-sources user`; all MCP, agent, skill and web tools are denied.
+The model cannot edit or read the helper, state or credential locations through
+these permitted tools. A post-edit diff remains defense in depth, not the runtime
+path boundary.
 
-## Limits and review coordination
+The fixed finish command runs lint, typecheck and the complete npm test chain in
+a separate Docker container. Only a public source snapshot is mounted read-only;
+the container has its own writable tmpfs, no forwarded host credentials, no host
+home/process namespace or Docker socket, no network, dropped capabilities,
+a non-root user, resource caps and a 10-minute process timeout. Dependencies are
+prepared before OAuth/App credentials are supplied, using npm ci --ignore-scripts.
+The Node 22 image is resolved before the run and checks use the resulting local
+immutable image ID. The input Node image tag is still mutable between runs;
+review/pin a verified registry digest before activation if required.
 
-One repository-wide concurrent run, 20 turns and a 30-minute job timeout. No schedule,
-issue_comment, PR, fork, repository_dispatch or workflow_run trigger is present.
-No all-bot allowlist, web tools, MCP tools, general shell allowlist, or live secrets.
-Bash autoapproval is limited to npm run lint, npm run typecheck and npm test;
-dontAsk rejects other unapproved commands. The publisher has no AI-controlled shell
-or PR API calls. Task scope is checked before deterministic tests and again before
-publication. The trusted helper is copied into RUNNER_TEMP before Claude starts.
+The trusted host helper, rather than repository tests, holds publication
+authority. It rechecks approval and unchanged source, creates an isolated
+`claude/task-N-HASH` branch, and requests a draft PR against main in this one
+repository. No update-ref, merge, deploy or main-write operation exists.
+A failed test blocks all branch/PR writes. If branch creation succeeds but PR
+creation fails, rerunning verifies the existing commit's exact tree, parent and
+approval message before reusing it; it never overwrites an existing branch.
+An already matching open draft PR is reused. Changed, closed or non-draft PRs
+require human review.
 
-These controls reduce authority; they are not a sandbox against malicious trusted
-repository code or prompt injection. Human-authored and reviewed tasks, protected
-environment approval, and a review of existing repository test/configuration code
-remain required. npm tests execute repository code. Do not supply production
-credentials. Do not enable Actions step debug or full Claude output in this public
-repository. Local checks do not replace the existing full MySQL/build PR CI.
+These are tool-policy controls plus test-container isolation, **not an OS sandbox
+for the entire Claude process**. The official action and CLI remain trusted code
+holding credentials. Hook loading, credential inheritance and draft publication
+inside the pinned action still need a separately approved end-to-end acceptance
+run. If that route fails, stop and investigate; do not introduce a custom App,
+PAT, broader tools or API billing without a new user decision.
 
-Task PR titles ALWAYS begin [claude-task] at creation; use that title prefix plus
-repository scope for the parent review webhook. The setup PR uses [setup], so it
-does not match task review. No PR label is required or added after opening, avoiding
-the opening-event label race. PR author is the CUSTOM App bot, whose actual login
-must be resolved after installation; don't filter by a guessed claude[bot] login.
+## Authentication route and the existing broad workflow
 
-The parent's supported webhook wakes on PR creation/head changes/human comments
-or reviews, not issue events or workflow-run/check completion. After a PR wake,
-the reviewer must inspect/monitor CI for that exact head SHA until terminal.
-Do not assume bot comments wake it. Review findings do not automatically trigger
-a second Claude run in this first version; a new human-approved scoped follow-up
-issue is required. This is a staged task implementation pipeline, not an unattended
-end-to-end loop.
+Use the official Claude App, installed on ONLY this repository, and the user's
+existing Claude Pro subscription via CLAUDE_CODE_OAUTH_TOKEN. A custom App/private
+key is no longer required merely because the official action revokes its token:
+the pinned action sets GH_TOKEN/GITHUB_TOKEN during execution, and the trusted
+helper publishes before that composite action's token-revocation step.
 
-## Validation
+The official App's full install permission grant must still be reviewed by the
+user at installation; it is broader than this workflow's declared permissions.
+Do not claim this draft reduces the App installation's grant. No App has been
+installed or granted access by this revision.
 
-Run node --test .github/automation/claude-approved-task.test.cjs and
-node --check .github/automation/claude-approved-task.cjs. Static checks cover
-trusted actors, approved issue shape, event selection, scoped paths, frozen approval
-and inert workflow. No Claude or Actions job should be dispatched during preparation.
+Inspected existing main `.github/workflows/claude.yml`:
+- issue_comment created; pull_request_review_comment created; issues opened and
+  assigned; pull_request_review submitted.
+- actions/checkout@v4 and anthropics/claude-code-action@v1 are mutable tags.
+- Contents, Issues, Pull requests and id-token permissions are write.
+- It references ANTHROPIC_API_KEY, with no explicit task approval/hash, timeout,
+  turn cap, concurrency group or deterministic draft-only publisher.
 
-Primary references checked 2026-09-30:
+The action still supplies its own actor/mention checks; these triggers alone do
+not mean every public commenter can run Claude. Credential/App availability and
+account spend controls are unknown. Nevertheless, this is a second, broader
+execution route and must be retired/restricted in a separately approved change
+before authentication/activation. This PR does not change that live file.
+
+Minimal inert restriction proposal for that later review (not applied here):
+
+```yaml
+name: Claude Assistant (retired pending approved-task activation)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  disabled:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Use the separately approved task workflow."
+```
+
+## One-time human handoff — after guard review, not now
+
+1. Review this inactive PR and exact-head CI, including the Linux container probe.
+   Separately approve retirement/restriction of the old workflow and the final
+   activation change. No activation follows automatically from merging this draft.
+2. Confirm Claude paid extra usage is OFF and account spending controls satisfy
+   the user's no-extra-spend requirement. Standard GitHub-hosted public-repository
+   runners are currently free; private/larger/self-hosted runner billing is outside
+   this proposal. These account settings have not been verified.
+3. Approve the official App's displayed permissions and selected-repository
+   installation. No custom App, PAT, extra subscription or API fallback.
+4. Check for an official local Claude CLI. On DESKTOP-DK2PF99, it was not found on
+   PATH or at ~/.local/bin/claude.exe or the npm global shim location. Ask the
+   parent/user before installing it. Do not infer it is absent everywhere.
+5. The user runs `claude setup-token` securely themselves and enters the result
+   directly in GitHub as the protected environment's CLAUDE_CODE_OAUTH_TOKEN.
+   Never send it to chat, a task, a log, an agent tool call or a committed file.
+   Configure the claude-approved-tasks environment with required human reviewers
+   and main-only deployment branches; review availability and bypass settings.
+6. A separately approved activation PR may copy this template into
+   .github/workflows/ and remove the literal false. A human merges it.
+   Only after cost/permissions approval set CLAUDE_NO_EXTRA_SPEND_CONFIRMED=true
+   and CLAUDE_TASKS_ENABLED=true. The variables alone cannot activate this draft.
+7. Separately authorize one small acceptance run. Verify the hook rejects an
+   unauthorized path before a write, test failure prevents publication, OAuth
+   uses the intended subscription, the official App can publish before revocation,
+   and the resulting draft's exact-head CI passes. No paid AI test is authorized
+   during this setup revision.
+
+Limits: one concurrent run, 12 model turns, 30-minute job timeout, 10-minute checks.
+**Turn/time limits are not monetary caps.** Exhausted Pro allowance must stop the
+run; no API-key fallback, paid extra usage or new subscription is authorized.
+Stop switch: set CLAUDE_TASKS_ENABLED=false and cancel active/queued runs.
+Changing a variable does not cancel an already-running job. User-managed credential
+revocation/App removal is a separate incident action if needed.
+
+## Review coordination and verification
+
+Task PR titles start [claude-task] at creation, allowing the parent to scope its
+GitHub PR-open/synchronize webhook to this repository and title prefix. The setup
+PR starts [setup]. No review webhook has been configured here. Do not assume
+CI-completion or bot-comment events will wake the parent: after a PR wake, it must
+monitor checks for that exact head SHA. Review findings do not automatically
+authorize another implementation run.
+
+Run `npm test`, `npm run lint`, and `npm run typecheck`. The automation suite
+includes approval changes, runtime tool/path denial, test-failure publication
+blocking, successful draft creation, and branch/PR recovery. Its Linux GitHub
+Actions probe exercises container credential exclusion, read-only source and
+network denial. A second Linux CI test runs the actual isolated lint/typecheck/regression chain.
+Windows skips both Docker tests and cannot establish Docker isolation.
+Full MySQL/build integration remains the existing PR CI's responsibility.
+No AI run is part of these checks.
+
+Sources:
 - https://code.claude.com/docs/en/github-actions
 - https://github.com/anthropics/claude-code-action/blob/main/docs/security.md
-- https://github.com/anthropics/claude-code-action/blob/main/docs/setup.md
-- https://code.claude.com/docs/en/cli-reference
-- Action pin fd1c128679612beff4ca259c78021c506e8aa7a7 resolved from v1
-  (v1.0.237). Other actions are pinned to their current tag commit.
+- https://github.com/anthropics/claude-code-action/blob/main/docs/configuration.md
+- https://code.claude.com/docs/en/hooks
+- https://docs.github.com/en/billing/concepts/product-billing/github-actions
+- https://github.com/anthropics/claude-code-action/blob/fd1c128679612beff4ca259c78021c506e8aa7a7/src/entrypoints/run.ts
+- https://github.com/anthropics/claude-code-action/blob/fd1c128679612beff4ca259c78021c506e8aa7a7/action.yml

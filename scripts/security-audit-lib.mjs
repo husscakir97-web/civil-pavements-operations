@@ -4,6 +4,7 @@
 // an exception is a human decision made in review, not something this tool grants itself.
 export const GATE_SEVERITIES=['high','critical'];
 export const SEVERITIES=['info','low','moderate','high','critical'];
+export const SUPPORTED_REPORT_VERSION=2;
 const isObject=(v)=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const isCount=(v)=>typeof v==='number'&&Number.isInteger(v)&&v>=0;
 const isString=(v)=>typeof v==='string';
@@ -11,6 +12,8 @@ const isString=(v)=>typeof v==='string';
 /** Structural validation. Returns null when the report is well-formed, else a description of the first defect. */
 export function malformedReason(d){
  if(!isObject(d))return 'the report is not a JSON object';
+ // Only the report layout this validator understands is accepted; a missing or different version is never assumed compatible.
+ if(d.auditReportVersion!==SUPPORTED_REPORT_VERSION)return `auditReportVersion must be the number ${SUPPORTED_REPORT_VERSION} (got ${JSON.stringify(d.auditReportVersion)})`;
  const counts=d.metadata?.vulnerabilities;
  if(!isObject(d.metadata)||!isObject(counts))return 'missing metadata.vulnerabilities';
  for(const k of Object.keys(counts))if(k!=='total'&&!SEVERITIES.includes(k))return `unknown severity "${k}" in the counts`;
@@ -27,6 +30,8 @@ export function malformedReason(d){
    if(isString(x))continue;
    if(!isObject(x))return `finding "${name}" has an invalid via entry`;
    if(!SEVERITIES.includes(x.severity))return `finding "${name}" has an advisory with an unknown severity ${JSON.stringify(x.severity)}`;
+   // A finding's severity is the most severe advisory it carries; a lower label hides a worse advisory (a false pass).
+   if(SEVERITIES.indexOf(x.severity)>SEVERITIES.indexOf(v.severity))return `finding "${name}" is labelled ${v.severity} but contains a ${x.severity} advisory`;
    if(!isString(x.title)||!isString(x.url))return `finding "${name}" has an advisory without a title or url`;
    if(x.range!==undefined&&!isString(x.range))return `finding "${name}" has an advisory with an invalid range`;
   }

@@ -27,11 +27,11 @@ for(const [label,value] of [['array','[]'],['array of reports',`[${report({})}]`
 mustBeScannerFailure('error payload',JSON.stringify({error:{code:'ENOTFOUND',summary:'request failed'}}));
 mustBeScannerFailure('error string payload',JSON.stringify({error:'boom'}));
 // Missing / invalid metadata and counts.
-mustBeScannerFailure('no metadata',JSON.stringify({vulnerabilities:{}}),{exitCode:0});
-mustBeScannerFailure('metadata is an array',JSON.stringify({metadata:[],vulnerabilities:{}}),{exitCode:0});
-mustBeScannerFailure('counts is an array',JSON.stringify({metadata:{vulnerabilities:[]},vulnerabilities:{}}),{exitCode:0});
-mustBeScannerFailure('no vulnerabilities map',JSON.stringify({metadata:{vulnerabilities:{info:0,low:0,moderate:0,high:0,critical:0,total:0}}}),{exitCode:0});
-mustBeScannerFailure('vulnerabilities is an array',JSON.stringify({metadata:{vulnerabilities:{info:0,low:0,moderate:0,high:0,critical:0,total:0}},vulnerabilities:[]}),{exitCode:0});
+mustBeScannerFailure('no metadata',JSON.stringify({auditReportVersion:2,vulnerabilities:{}}),{exitCode:0});
+mustBeScannerFailure('metadata is an array',JSON.stringify({auditReportVersion:2,metadata:[],vulnerabilities:{}}),{exitCode:0});
+mustBeScannerFailure('counts is an array',JSON.stringify({auditReportVersion:2,metadata:{vulnerabilities:[]},vulnerabilities:{}}),{exitCode:0});
+mustBeScannerFailure('no vulnerabilities map',JSON.stringify({auditReportVersion:2,metadata:{vulnerabilities:{info:0,low:0,moderate:0,high:0,critical:0,total:0}}}),{exitCode:0});
+mustBeScannerFailure('vulnerabilities is an array',JSON.stringify({auditReportVersion:2,metadata:{vulnerabilities:{info:0,low:0,moderate:0,high:0,critical:0,total:0}},vulnerabilities:[]}),{exitCode:0});
 for(const s of [...SEV,'total'])mustBeScannerFailure('missing count '+s,withCounts(c=>{delete c[s];},{}),{exitCode:0});
 for(const [label,bad] of [['negative',-1],['fractional',1.5],['string','0'],['null',null],['NaN-like',Number.NaN],['array',[0]]])mustBeScannerFailure('invalid count ('+label+')',withCounts(c=>{c.high=bad;},{}),{exitCode:0});
 mustBeScannerFailure('unknown severity key in counts',withCounts(c=>{c.catastrophic=1;},{}),{exitCode:0});
@@ -51,6 +51,24 @@ mustBeScannerFailure('per-severity count too high',withCounts(c=>{c.moderate=2;c
 mustBeScannerFailure('severity shifted between buckets',withCounts(c=>{c.moderate=0;c.high=1;}));
 mustBeScannerFailure('declared findings but none listed',withCounts(c=>{c.moderate=1;c.total=1;},{}));
 mustBeScannerFailure('finding listed but zero declared',JSON.stringify({...JSON.parse(report({a:finding('high')})),metadata:{vulnerabilities:{info:0,low:0,moderate:0,high:0,critical:0,total:0}}}));
+// A finding must never be labelled less severe than an advisory it carries (that would hide a worse advisory).
+{const adv=(severity)=>({title:'t',url:'https://github.com/advisories/GHSA-y',severity,range:'<1.0.0'});
+ const lowLabel=(label,advisorySeverities)=>{const f=finding(label,{via:advisorySeverities.map(adv)});const d=JSON.parse(report({a:f}));return JSON.stringify(d);};
+ mustBeScannerFailure('moderate finding containing a critical advisory',lowLabel('moderate',['critical']));
+ mustBeScannerFailure('low finding containing a high advisory',lowLabel('low',['high']));
+ mustBeScannerFailure('high finding containing a critical advisory',lowLabel('high',['critical']));
+ mustBeScannerFailure('moderate finding whose SECOND advisory is critical',lowLabel('moderate',['moderate','critical']));
+ mustBeScannerFailure('info finding containing a moderate advisory',lowLabel('info',['moderate']));
+ // Consistent labels are still accepted: equal severity, or a label at least as severe as every advisory.
+ assert.equal(classifyAudit(lowLabel('critical',['critical','moderate']),{exitCode:1}).ok,false,'a consistent critical finding still blocks');
+ assert.equal(classifyAudit(lowLabel('moderate',['moderate','low']),{exitCode:1}).ok,true,'a consistent moderate finding still passes');
+ assert.equal(classifyAudit(lowLabel('high',['moderate']),{exitCode:1}).scannerFailure,null,'a label MORE severe than its advisories is not a contradiction');}
+// Only auditReportVersion === 2 (a number) is supported.
+{const withVersion=(v,drop=false)=>{const d=JSON.parse(CLEAN);if(drop)delete d.auditReportVersion;else d.auditReportVersion=v;return JSON.stringify(d);};
+ mustBeScannerFailure('missing auditReportVersion',withVersion(undefined,true),{exitCode:0});
+ for(const [label,v] of [['null',null],['string "2"','2'],['string "v2"','v2'],['boolean',true],['array',[2]],['object',{v:2}],['zero',0],['one',1],['three (unsupported)',3],['fractional',2.5],['negative',-2]])mustBeScannerFailure('invalid/unsupported auditReportVersion ('+label+')',withVersion(v),{exitCode:0});
+ assert.equal(classifyAudit(withVersion(2),{exitCode:0}).ok,true,'version 2 is accepted');
+ mustBeScannerFailure('unsupported version even with findings',(()=>{const d=JSON.parse(MODERATE);d.auditReportVersion=1;return JSON.stringify(d);})());}
 // Exit code must agree with the report; other exits are scanner failures.
 mustBeScannerFailure('findings but exit 0',MODERATE,{exitCode:0});mustBeScannerFailure('clean but exit 1',CLEAN,{exitCode:1});
 for(const code of [2,127,-1])mustBeScannerFailure('exit '+code,CLEAN,{exitCode:code});
@@ -81,13 +99,22 @@ try{
   const r=cli({prod:ok(CLEAN),full});assert.equal(r.code,2,'full-tree '+label+' must exit 2');neverPassed(r);assert.match(r.err,/SCANNER FAILURE \(full-tree/);}
  // 5. Production scanner failures.
  {const r=cli({prod:NET,full:ok(CLEAN)});assert.equal(r.code,2);neverPassed(r);assert.match(r.err,/SCANNER FAILURE \(production scan/);}
- for(const [label,prod] of [['array report',ok('[]',0)],['missing counts',ok(JSON.stringify({vulnerabilities:{}}))],['hidden high (counts say none)',ok(JSON.stringify({...JSON.parse(report({a:finding('high')})),metadata:{vulnerabilities:{info:0,low:0,moderate:0,high:0,critical:0,total:0}}}),1)],['unknown severity',ok(JSON.stringify({...JSON.parse(CLEAN),vulnerabilities:{a:finding('catastrophic')},metadata:{vulnerabilities:{info:0,low:0,moderate:0,high:0,critical:0,total:1}}}),1)]]){
+ for(const [label,prod] of [['array report',ok('[]',0)],['missing counts',ok(JSON.stringify({auditReportVersion:2,vulnerabilities:{}}))],['hidden high (counts say none)',ok(JSON.stringify({...JSON.parse(report({a:finding('high')})),metadata:{vulnerabilities:{info:0,low:0,moderate:0,high:0,critical:0,total:0}}}),1)],['unknown severity',ok(JSON.stringify({...JSON.parse(CLEAN),vulnerabilities:{a:finding('catastrophic')},metadata:{vulnerabilities:{info:0,low:0,moderate:0,high:0,critical:0,total:1}}}),1)]]){
   const r=cli({prod,full:ok(CLEAN)});assert.equal(r.code,2,'production '+label+' must exit 2');neverPassed(r);}
  // 6. Both scanners fail, or a blocking production finding coexists with a failed full-tree scan: exit 2, findings still printed.
  {const r=cli({prod:NET,full:NET});assert.equal(r.code,2);neverPassed(r);assert.match(r.err,/production scan/);assert.match(r.err,/full-tree scan/);}
  {const r=cli({prod:ok(HIGH,1),full:NET});assert.equal(r.code,2);neverPassed(r);assert.match(r.err,/BLOCKING: 2/,'the blocking findings are not hidden by the scanner failure');}
  // 7. Development-only findings are informational: high findings only in the full tree do not fail a clean production scan.
  {const r=cli({prod:ok(CLEAN),full:ok(HIGH,1)});assert.equal(r.code,0);assert.match(r.out,/development findings are informational/);assert.match(r.out,/PASS/);}
+ // 7b. A moderate-labelled finding hiding a critical advisory is a contradiction: exit 2, never PASS (production and full tree).
+ {const hidden=(()=>{const d=JSON.parse(report({a:finding('moderate',{via:[{title:'t',url:'https://github.com/advisories/GHSA-y',severity:'critical',range:'<1.0.0'}]})}));return JSON.stringify(d);})();
+  const p=cli({prod:ok(hidden,1),full:ok(CLEAN)});assert.equal(p.code,2);neverPassed(p);assert.match(p.err,/SCANNER FAILURE \(production scan/);assert.match(p.err,/labelled moderate but contains a critical advisory/);
+  const f=cli({prod:ok(CLEAN),full:ok(hidden,1)});assert.equal(f.code,2);neverPassed(f);assert.match(f.err,/SCANNER FAILURE \(full-tree/);}
+ // 7c. Report versions: missing, invalid and unsupported are scanner failures in either scan; version 2 keeps passing.
+ for(const [label,mut] of [['missing',d=>{delete d.auditReportVersion;}],['string "2"',d=>{d.auditReportVersion='2';}],['null',d=>{d.auditReportVersion=null;}],['unsupported 1',d=>{d.auditReportVersion=1;}],['unsupported 3',d=>{d.auditReportVersion=3;}]]){
+  const bad=(()=>{const d=JSON.parse(CLEAN);mut(d);return JSON.stringify(d);})();
+  const p=cli({prod:ok(bad),full:ok(CLEAN)});assert.equal(p.code,2,'production version '+label);neverPassed(p);assert.match(p.err,/auditReportVersion/);
+  const f=cli({prod:ok(CLEAN),full:ok(bad)});assert.equal(f.code,2,'full-tree version '+label);neverPassed(f);assert.match(f.err,/SCANNER FAILURE \(full-tree/);}
  // 8. The scanner cannot be run at all.
  {const r=cli({prod:ok(CLEAN),full:ok(CLEAN)},{noNpm:true});assert.equal(r.code,2);neverPassed(r);assert.match(r.err,/could not run npm audit/);}
 }finally{rmSync(dir,{recursive:true,force:true});}

@@ -3,6 +3,8 @@ import {ManagedDocumentSheet} from './documents';
 import {useState,type ReactNode} from 'react';
 import {ArrowRight,CalendarDays,CheckCircle2,Plus,Upload} from 'lucide-react';
 import {Sheet,SheetContent,SheetTitle,SheetDescription} from '@/components/ui/sheet';
+import {projectTasks} from '@/lib/v1/task-actions';
+import {TaskLauncher} from './task-launcher';
 import {api,useApi,useAction,useSession,StatusBadge,EmptyState,ErrorState,Loading,Btn,Field,field,Section,PageHeader,NextAction,Progress,Tabs,Stat,money,pct,dateText,Pill,humanStatus,ReasonDialog} from './kit';
 import {ProgrammePanel} from './program';
 import {CommunicationPanel} from './communication-panel';
@@ -41,7 +43,7 @@ function ProjectRegister({area}:{area:'Prepare Work'|'Deliver Work'}){
  const list=all.filter(p=>matches(p,show));
  const filters=([['active','All active'],['setup','Setup'],['ready','Ready'],['delivery','Delivery'],['closeout','Closeout'],['closed','Closed']] as const).map(([key,label])=>({key,label,count:all.filter(p=>matches(p,key)).length}));
  return <div className="grid gap-4">
-  <PageHeader title="Projects" subtitle="Every awarded or manually created project, with readiness and the next action." actions={can('project.edit')&&can('project.all.view')&&<Btn variant="secondary" onClick={()=>setCreating(true)}><Plus aria-hidden className="size-4"/>New project without tender</Btn>}/>
+  <PageHeader title="Projects" subtitle="Open a project to see what needs attention and what to do next." actions={can('project.edit')&&can('project.all.view')&&<Btn variant="secondary" onClick={()=>setCreating(true)}><Plus aria-hidden className="size-4"/>New project without tender</Btn>}/>
   <ErrorState error={error} onRetry={refresh}/>
   {all.length>0&&<div role="group" aria-label="Project workflow stage" className="flex flex-wrap gap-2">{filters.map(x=><button key={x.key} aria-pressed={show===x.key} onClick={()=>setShow(x.key)} className={`min-h-9 rounded-full border px-3 text-sm ${show===x.key?'border-[#172633] bg-[#172633] text-white':'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{x.label} ({x.count})</button>)}</div>}
   {loading&&!data?<Loading/>:!all.length?<EmptyState title="No projects yet." detail="Projects are created automatically when a tender or estimate is awarded, preserving the approved baseline."/>:!list.length?<EmptyState title={`No projects are in ${filters.find(x=>x.key===show)?.label.toLowerCase()}.`}/>:
@@ -56,15 +58,19 @@ function ProjectRegister({area}:{area:'Prepare Work'|'Deliver Work'}){
 }
 function NewProjectForm({onDone}:{onDone:(id?:string)=>void}){
  const [v,setV]=useState({name:'',clientId:null as string|null,siteId:null as string|null,contactId:null as string|null,startDate:'',siteAddress:''});const {busy,error,run}=useAction();
+ const [more,setMore]=useState(false);
  return <form className="grid gap-4 p-5" onSubmit={e=>{e.preventDefault();void run(()=>api<{projectId:string}>('/api/projects',{method:'POST',body:v}),r=>onDone(r.projectId));}}>
   <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">Use this when work did not come through a tender (for example IMS-only or Projects-only customers). Record the baseline in Setup.</p>
-  <Field label="Project name" required><input className={field} required value={v.name} onChange={e=>setV({...v,name:e.target.value})}/></Field>
-  {/* Choosing a client suggests its only site; a chosen site fills the address unless one is typed. */}
+  {/* Ask once: client, site, name. Choosing a client suggests its only site and primary contact; a chosen site supplies the address. */}
   <ClientPicker value={v.clientId} onChange={c=>setV(s=>({...s,clientId:c?.id??null,siteId:c?.sites.length===1?c.sites[0].id:c&&c.sites.some(x=>x.id===s.siteId)?s.siteId:null,contactId:c&&(c.contacts||[]).some(x=>x.id===s.contactId)?s.contactId:(c?.contacts||[]).find(x=>x.isPrimary)?.id??null}))}/>
   {v.clientId&&<SitePicker clientId={v.clientId} value={v.siteId} onChange={x=>setV(s=>({...s,siteId:x?.id??null}))}/>}
-  {v.clientId&&<ContactPicker clientId={v.clientId} value={v.contactId} onChange={x=>setV(s=>({...s,contactId:x?.id??null}))}/>}
-  <Field label="Start date"><input className={field} type="date" value={v.startDate} onChange={e=>setV({...v,startDate:e.target.value})}/></Field>
-  {!v.siteId&&<Field label="Site address"><textarea className={`${field} min-h-16`} value={v.siteAddress} onChange={e=>setV({...v,siteAddress:e.target.value})}/></Field>}
+  <Field label="Project name" required><input className={field} required value={v.name} onChange={e=>setV({...v,name:e.target.value})}/></Field>
+  <button type="button" aria-expanded={more} onClick={()=>setMore(!more)} className="justify-self-start text-sm font-medium text-orange-700 underline-offset-2 hover:underline">{more?'Fewer details':'More details'}</button>
+  {more&&<div className="grid gap-4 rounded-lg border p-4">
+   {v.clientId&&<ContactPicker clientId={v.clientId} value={v.contactId} onChange={x=>setV(s=>({...s,contactId:x?.id??null}))}/>}
+   <Field label="Start date"><input className={field} type="date" value={v.startDate} onChange={e=>setV({...v,startDate:e.target.value})}/></Field>
+   {!v.siteId&&<Field label="Site address"><textarea className={`${field} min-h-16`} value={v.siteAddress} onChange={e=>setV({...v,siteAddress:e.target.value})}/></Field>}
+  </div>}
   <ErrorState error={error}/><div className="flex gap-2"><Btn busy={busy} type="submit">Create project</Btn><Btn type="button" variant="secondary" onClick={()=>onDone()}>Cancel</Btn></div>
  </form>;
 }
@@ -78,8 +84,10 @@ function ProjectWorkspace({id,tab,area,onBack}:{id:string;tab?:string;area:'Prep
  const [reopening,setReopening]=useState<string|null>(null);
  // Re-fetch on tab change so the header (readiness, next action) reflects work done in other tabs.
  const {data,error,loading,refresh}=useApi<Detail>(`/api/projects/workspace?id=${id}&view=${active}`);
- if(loading&&!data)return <Loading label="Loading project…"/>;
- if(error&&!data)return <div className="grid gap-3"><ErrorState error={error} onRetry={refresh}/><Btn variant="secondary" onClick={onBack}>Back to projects</Btn></div>;
+ // A previous project's data must never stand in for the one requested (guessed or stale ids).
+ const wrong=Boolean(data&&data.project.id!==id);
+ if(loading&&(!data||wrong))return <Loading label="Loading project…"/>;
+ if(error&&(!data||wrong))return <div className="grid gap-3"><ErrorState error={error} onRetry={refresh}/><Btn variant="secondary" onClick={onBack}>Back to projects</Btn></div>;
  const d=data!,p=d.project,closed=p.stage==='closed';
  const moves=allowedTransitions('project',p.stage,session.role,true);
  const move=(to:string,reason?:string)=>{if(p.stage==='closed'&&reason===undefined){setReopening(to);return;}if(to==='closed'&&!confirm('Close this project? Records become read-only until it is reopened with a reason.'))return;void run(()=>api('/api/projects/workspace',{method:'POST',body:{action:'transition',id,to,reason}}),refresh);};
@@ -155,10 +163,12 @@ function Overview({d,onTab,goTarget}:{d:Detail;onTab:(k:TabKey)=>void;goTarget:(
  const f=d.financials?.forecast;
  if(money_&&f&&Number(f.unbilled)>0)items.push({key:'unbilled',title:`Unbilled work ${money(f.unbilled)}`,detail:'Earned revenue not yet claimed',tone:'info',action:'Prepare claim',go:()=>onTab('commercial')});
  const reviewDockets=(hub.data?.dockets||[]).filter(x=>['review','uploaded','matched','ready','draft'].includes(x.status)).length;
- if(reviewDockets&&can('docket.approve'))items.push({key:'dockets',title:`${reviewDockets} docket${reviewDockets===1?'':'s'} waiting for review`,tone:'warning',action:'Review dockets',go:()=>navigate('Operations','Dockets')});
+ if(reviewDockets&&can('docket.approve'))items.push({key:'dockets',title:`${reviewDockets} work record${reviewDockets===1?'':'s'} waiting for review`,tone:'warning',action:'Review work records',go:()=>navigate('Operations','Dockets')});
  const today=new Date().toLocaleDateString('en-CA',{timeZone:'Australia/Sydney'});
  const upcoming=(hub.data?.shifts||[]).filter(s=>(s.metadata.date||'')>=today&&!['Cancelled','Archived'].includes(s.status)).sort((a,b)=>`${a.metadata.date}${a.metadata.start}`.localeCompare(`${b.metadata.date}${b.metadata.start}`)).slice(0,5);
+ const tasks=projectTasks({id:p.id,stage:p.stage},{can,module});
  return <div className="grid gap-4">
+  <TaskLauncher title="What do you need to do?" label="Project tasks" actions={tasks} context={{id:p.id,stage:p.stage}}/>
   <Section title="Needs attention" description={items.length?`${items.length} item${items.length===1?'':'s'} for this project`:undefined}><AttentionList items={items} empty="Nothing needs attention on this project right now."/></Section>
   {knowledge&&<KnowledgeCheckPanel title="Civil knowledge checks" topics={['project','contract','construction','hseq','pavements','asphalt','concrete','earthworks','drainage','traffic','plant','workforce']} scope={{projectId:p.id}} context={{project:{id:p.id,name:p.name,stage:p.stage,clientName:p.clientName,contractType:p.contractType,siteAddress:p.siteAddress,startDate:p.startDate,finishDate:p.finishDate,scope:p.scope,assumptions:p.assumptions,exclusions:p.exclusions,clientRequirements:p.clientRequirements,mobilisationNotes:p.mobilisationNotes}}}/>} 
   <ClientContactCard clientId={d.project.clientId} contactId={d.project.contactId} siteId={d.project.siteId}/>

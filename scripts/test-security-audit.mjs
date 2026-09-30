@@ -2,7 +2,7 @@
 // placed first on PATH (no network, no real audit). The CLI cases prove exit codes and that PASS is never printed on failure.
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {mkdtempSync,writeFileSync,chmodSync,rmSync} from 'node:fs';
+import {mkdtempSync,readFileSync,writeFileSync,chmodSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {classifyAudit} from './security-audit-lib.mjs';
@@ -88,7 +88,7 @@ const ok=(stdout,exit=0)=>({stdout,exit}),NET={stdout:JSON.stringify({error:{cod
 const neverPassed=(r)=>assert.ok(!/PASS/.test(r.out),'PASS must not be printed. stdout: '+r.out);
 try{
  // 1. Success path.
- {const r=cli({prod:ok(CLEAN),full:ok(CLEAN)});assert.equal(r.code,0);assert.match(r.out,/PASS: no unresolved high\/critical/);}
+ {const r=cli({prod:ok(CLEAN),full:ok(CLEAN)});assert.equal(r.code,0,'CLI success path exited '+r.code+'. stderr: '+r.err+' stdout: '+r.out+' launch: '+JSON.stringify(spawnSync(path.join(dir,'npm'),[],{encoding:'utf8',env:{FAKE_NPM_SCENARIO:'{"prod":{},"full":{}}'}}).error?.code)+' mounts: '+(()=>{try{return readFileSync('/proc/self/mountinfo','utf8').split('\n').filter(l=>/ \/(tmp)? /.test(l)||l.includes(tmpdir())).join(' | ');}catch(e){return String(e.message);}})());assert.match(r.out,/PASS: no unresolved high\/critical/);}
  // 2. Moderate/low production findings are shown but do not fail.
  {const r=cli({prod:ok(MODERATE,1),full:ok(MODERATE,1)});assert.equal(r.code,0);assert.match(r.out,/Reported \(moderate\/low/);assert.match(r.out,/\[moderate\]/);assert.match(r.out,/PASS/);}
  // 3. High/critical production findings: exit 1, listed with advisory links, no PASS.

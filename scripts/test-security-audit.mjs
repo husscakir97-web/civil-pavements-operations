@@ -83,10 +83,12 @@ const s=JSON.parse(process.env.FAKE_NPM_SCENARIO);const c=s[process.argv.include
 if(c.crash)process.kill(process.pid,'SIGKILL');
 process.stdout.write(c.stdout??'');process.stderr.write(c.stderr??'');process.exit(c.exit??0);
 `);chmodSync(path.join(dir,'npm'),0o755);
-const cli=(scenario,{noNpm=false}={})=>{const r=spawnSync(process.execPath,['scripts/security-audit.mjs'],{encoding:'utf8',env:{...process.env,PATH:noNpm?path.join(dir,'empty'):dir+path.delimiter+process.env.PATH,FAKE_NPM_SCENARIO:JSON.stringify(scenario)},cwd:path.resolve(path.dirname(new URL(import.meta.url).pathname),'..')});return {code:r.status,out:r.stdout,err:r.stderr};};
+const execCli=(scenario,{noNpm=false}={})=>{const r=spawnSync(process.execPath,['scripts/security-audit.mjs'],{encoding:'utf8',env:{...process.env,PATH:noNpm?path.join(dir,'empty'):dir+path.delimiter+process.env.PATH,FAKE_NPM_SCENARIO:JSON.stringify(scenario)},cwd:path.resolve(path.dirname(new URL(import.meta.url).pathname),'..')});return {code:r.status,out:r.stdout,err:r.stderr};};
+const root=path.resolve(path.dirname(new URL(import.meta.url).pathname),'..');
+const preloadCli=(scenario,{noNpm=false}={})=>{const r=spawnSync(process.execPath,['--require',path.join(root,'scripts/fixtures/fake-npm-preload.cjs'),'scripts/security-audit.mjs'],{encoding:'utf8',env:{...process.env,FAKE_NPM_SCENARIO:JSON.stringify(scenario),FAKE_NPM_MISSING:noNpm?'1':'0'},cwd:root});return {code:r.status,out:r.stdout,err:r.stderr};};
 const ok=(stdout,exit=0)=>({stdout,exit}),NET={stdout:JSON.stringify({error:{code:'ENOTFOUND',summary:'audit endpoint unreachable'}}),stderr:'npm error audit endpoint returned an error',exit:1};
 const neverPassed=(r)=>assert.ok(!/PASS/.test(r.out),'PASS must not be printed. stdout: '+r.out);
-try{
+const suite=(cli)=>{
  // 1. Success path.
  {const r=cli({prod:ok(CLEAN),full:ok(CLEAN)});assert.equal(r.code,0,'CLI success path exited '+r.code+'. stderr: '+r.err+' stdout: '+r.out+' launch: '+JSON.stringify(spawnSync(path.join(dir,'npm'),[],{encoding:'utf8',env:{FAKE_NPM_SCENARIO:'{"prod":{},"full":{}}'}}).error?.code)+' mounts: '+(()=>{try{return readFileSync('/proc/self/mountinfo','utf8').split('\n').filter(l=>/ \/(tmp)? /.test(l)||l.includes(tmpdir())).join(' | ');}catch(e){return String(e.message);}})());assert.match(r.out,/PASS: no unresolved high\/critical/);}
  // 2. Moderate/low production findings are shown but do not fail.
@@ -117,5 +119,18 @@ try{
   const f=cli({prod:ok(CLEAN),full:ok(bad)});assert.equal(f.code,2,'full-tree version '+label);neverPassed(f);assert.match(f.err,/SCANNER FAILURE \(full-tree/);}
  // 8. The scanner cannot be run at all.
  {const r=cli({prod:ok(CLEAN),full:ok(CLEAN)},{noNpm:true});assert.equal(r.code,2);neverPassed(r);assert.match(r.err,/could not run npm audit/);}
+};
+// Explicit harness selection (never a silent skip):
+//  - preload harness (mocked npm boundary): always runs, in a fresh Node subprocess with the test-only preload. This is the
+//    harness used inside the isolated automation sandbox, where /tmp is noexec and a fake npm executable cannot be launched.
+//  - executable harness (fake npm executable first on PATH, real command launching): REQUIRED on GitHub Actions (ordinary CI),
+//    where an inability to launch it is a hard failure; elsewhere it runs when launchable and is reported when not.
+const probe=spawnSync(path.join(dir,'npm'),[],{env:{FAKE_NPM_SCENARIO:'{"prod":{},"full":{}}'}});
+const canExec=probe.error?.code!=='EACCES';
+try{
+ suite(preloadCli);console.log('HARNESS preload (mocked npm boundary): all CLI cases passed');
+ if(canExec){suite(execCli);console.log('HARNESS executable (real fake-npm launch): all CLI cases passed');}
+ else if(process.env.GITHUB_ACTIONS==='true')throw new Error('executable harness is required on ordinary CI but the fake npm could not be launched (EACCES)');
+ else console.log('HARNESS executable NOT RUN: temporary directory is noexec (isolated sandbox); ordinary CI (GITHUB_ACTIONS=true) requires and runs it');
 }finally{rmSync(dir,{recursive:true,force:true});}
 console.log('PASS security audit gate: strict report validation (shapes, counts, severities, findings, consistency, exit codes) and real CLI runs — high/critical production findings exit 1, any production OR full-tree scanner failure exits 2, PASS is never printed on failure, no suppression path');

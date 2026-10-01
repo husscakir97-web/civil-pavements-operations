@@ -8,7 +8,7 @@ const { execFileSync } = require('node:child_process');
 const { REPO, FINISH, issueHash, validateTask, approval, gate, checkTool, collectChanges,
   dockerArgs, runChecks, publish, finish, EXPECTED_ASSERTION, appendAudit, readAudit,
   auditReport, verifyCompletion, preflight, NEGATIVE_TARGET, NEGATIVE_COMMAND, ACCEPTANCE_SEQUENCE,
-  isAcceptanceTask, writeNegativeFixture, acceptanceExpectations } = require('./claude-approved-task.cjs');
+  isAcceptanceTask, writeNegativeFixture, acceptanceExpectations, approvedComment } = require('./claude-approved-task.cjs');
 
 test('preflight exercises real CLI paths and rejects missing interpreter or helper', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-preflight-'));
@@ -418,6 +418,7 @@ const crypto = require('node:crypto');
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const acceptanceTask = { summary: 'Verify scoped draft publication', request: 'Acceptance sequence',
   acceptance: 'Inspect the audit receipt: scope_denied_probe, checks_started then checks_failed_expected_assertion ...',
+  acceptance_comment: '// Planning regression suite: exercises estimate approval, award, and shift readiness.',
   allowed_paths: [NEGATIVE_TARGET] };
 const acceptanceIssue = { number: 4, title: '[claude-task] Acceptance', updated_at: '2026-09-30T10:00:00Z', state: 'open',
   body: '\x60\x60\x60json\n' + JSON.stringify(acceptanceTask) + '\n\x60\x60\x60' };
@@ -455,19 +456,25 @@ test('acceptance tasks are identified explicitly or by the receipt named in issu
 test('negative fixture is generated from EXPECTED_ASSERTION including its newline, once, after the confirmed probe denial', () => {
   assert.ok(EXPECTED_ASSERTION.endsWith(';\n'));
   const s = acceptanceFixture(); const file = path.join(s.root, NEGATIVE_TARGET);
+  const trusted = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-trusted-'));
   try {
     const probe = [{ event: 'scope_denied_probe', digest: null }];
     for (const events of [[], [{ event: 'scope_denied', digest: null }], [...probe, ...probe], [...probe, { event: 'checks_started', digest: 'b'.repeat(64) }]])
-      assert.throws(() => writeNegativeFixture(s, events), /Negative fixture/);
+      assert.throws(() => writeNegativeFixture(s, events, trusted), /Negative fixture/);
     assert.equal(fs.readFileSync(file, 'utf8'), ORIGINAL, 'nothing written before the denial evidence');
-    assert.throws(() => writeNegativeFixture({ ...s, task: task }, probe), /not available/);
-    writeNegativeFixture(s, probe);
+    assert.throws(() => writeNegativeFixture({ ...s, task: task }, probe, trusted), /not available/);
+    assert.equal(fs.existsSync(path.join(trusted, 'negative-fixture.used')), false, 'rejections never consume the one use');
+    writeNegativeFixture(s, probe, trusted);
     assert.equal(fs.readFileSync(file, 'utf8'), EXPECTED_ASSERTION + ORIGINAL);
     assert.ok(fs.readFileSync(file, 'utf8').startsWith(EXPECTED_ASSERTION));
-    assert.throws(() => writeNegativeFixture(s, probe), /untouched/, 'cannot run twice');
+    assert.throws(() => writeNegativeFixture(s, probe, trusted), /untouched/, 'cannot run twice on the modified file');
+    fs.writeFileSync(file, ORIGINAL); // restoring the original must NOT re-arm it
+    assert.throws(() => writeNegativeFixture(s, probe, trusted), error => error.code === 'EEXIST');
+    assert.equal(fs.readFileSync(file, 'utf8'), ORIGINAL, 'second use wrote nothing');
+    fs.writeFileSync(file, EXPECTED_ASSERTION + ORIGINAL);
     assert.equal(acceptanceExpectations(s).negativeDigest, digestOf(EXPECTED_ASSERTION + ORIGINAL));
     assert.equal(acceptanceExpectations(s).negativeDigest, sha256(JSON.stringify(collectChanges(s))), 'matches what finish digests');
-  } finally { fs.rmSync(s.root, { recursive: true, force: true }); }
+  } finally { fs.rmSync(s.root, { recursive: true, force: true }); fs.rmSync(trusted, { recursive: true, force: true }); }
 });
 
 test('hook permits only the exact finish and negative-fixture commands, in the foreground', () => {
@@ -518,19 +525,113 @@ test('verify-completion CLI recomputes both digests from the base file and the f
     fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(s));
     const run = () => execFileSync(process.execPath, [helper, 'verify-completion'], { stdio: 'pipe', env: { CLAUDE_STEP_OUTCOME: 'success', CLAUDE_STEP_CONCLUSION: 'success' } });
     const negative = digestOf(EXPECTED_ASSERTION + ORIGINAL);
-    fs.writeFileSync(path.join(s.root, NEGATIVE_TARGET), COMMENT + ORIGINAL);
     const final = acceptanceExpectations(s).finalDigest;
+    assert.equal(final, digestOf(COMMENT + ORIGINAL), 'expected final bytes = approved comment + committed baseline');
     const report = goodReport(negative, final);
     fs.writeFileSync(path.join(dir, 'published.json'), JSON.stringify(report.publication));
     const write = events => fs.writeFileSync(path.join(dir, 'audit.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n');
     write(report.events); run();
     write(report.events.slice(-2)); assert.throws(run, error => error.status === 1);
     write(goodReport(digestOf(EXPECTED_ASSERTION.trimEnd() + ORIGINAL), final).events); assert.throws(run, error => error.status === 1);
-    write(report.events); fs.writeFileSync(path.join(s.root, NEGATIVE_TARGET), COMMENT + ORIGINAL + '// extra\n');
-    assert.throws(run, error => error.status === 1, 'audit digest must describe the tree that is actually published');
+    write(goodReport(negative, digestOf(COMMENT + ORIGINAL + '// extra\n')).events); assert.throws(run, error => error.status === 1, 'a different passing edit is not the approved comment + baseline');
+    fs.writeFileSync(path.join(s.root, NEGATIVE_TARGET), COMMENT + ORIGINAL + '// extra\n');
+    write(report.events); run(); // expected digests never come from the candidate's current tree
   } finally { fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(s.root, { recursive: true, force: true }); }
 });
 
+
+// finish() validates the whole acceptance history and the independently expected bytes BEFORE any publishing API call.
+async function acceptanceScenario(steps) {
+  const s = acceptanceFixture(), trusted = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-scenario-'));
+  const m = mock(acceptanceIssue, acceptanceState, 'c'.repeat(40)), file = path.join(s.root, NEGATIVE_TARGET);
+  const audit = (event, digest) => appendAudit(trusted, event, digest), history = () => readAudit(trusted);
+  const ctx = { s, file, trusted, m, audit, history,
+    fixture: () => writeNegativeFixture(s, history(), trusted),
+    expectedFailure: () => finish(m.api, s, () => { throw Object.assign(new Error('x'), { expectedAssertion: true }); }, audit, history),
+    ordinaryFailure: () => finish(m.api, s, () => { throw Object.assign(new Error('x'), { expectedAssertion: false }); }, audit, history),
+    passing: () => finish(m.api, s, () => {}, audit, history) };
+  try { return { error: await steps(ctx).then(() => null, e => e), ctx, calls: m.calls, events: history() }; }
+  finally { fs.rmSync(s.root, { recursive: true, force: true }); fs.rmSync(trusted, { recursive: true, force: true }); }
+}
+const publishingCalls = calls => calls.filter(c => !(c.method === 'GET' && c.suffix === '/issues/4'));
+const rejectedScenarios = {
+  'no probe, no negative phase, otherwise correct final edit': async c => { fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'negative phase skipped after the probe': async c => { c.audit('scope_denied_probe'); fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'negative phase ended in an ordinary failure': async c => { c.audit('scope_denied_probe'); c.fixture(); await assert.rejects(c.ordinaryFailure()); fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'missing-newline counterexample audited as an ordinary failure': async c => {
+    c.audit('scope_denied_probe'); fs.writeFileSync(c.file, EXPECTED_ASSERTION.trimEnd() + ORIGINAL);
+    await assert.rejects(c.ordinaryFailure()); fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'a different expected-failure source than the generated fixture': async c => {
+    c.audit('scope_denied_probe'); fs.writeFileSync(c.file, EXPECTED_ASSERTION + EXPECTED_ASSERTION + ORIGINAL);
+    await assert.rejects(c.expectedFailure()); fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'extra earlier denial event': async c => { c.audit('scope_denied'); c.audit('scope_denied_probe'); assert.throws(() => c.fixture(), /confirmed probe/); fs.writeFileSync(c.file, EXPECTED_ASSERTION + ORIGINAL); await assert.rejects(c.expectedFailure()); fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'reordered history': async c => {
+    const negative = digestOf(EXPECTED_ASSERTION + ORIGINAL), final = digestOf(COMMENT + ORIGINAL);
+    for (const [event, digest] of [['scope_denied_probe', null], ['checks_started', final], ['checks_failed_expected_assertion', negative], ['checks_started', negative]]) c.audit(event, digest);
+    fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'repeated negative phase': async c => {
+    c.audit('scope_denied_probe'); c.fixture(); await assert.rejects(c.expectedFailure());
+    fs.writeFileSync(c.file, EXPECTED_ASSERTION + ORIGINAL); await assert.rejects(c.expectedFailure());
+    fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'incorrect final edit: extra line after the approved comment': async c => {
+    c.audit('scope_denied_probe'); c.fixture(); await assert.rejects(c.expectedFailure()); fs.writeFileSync(c.file, COMMENT + ORIGINAL + '// extra\n'); await c.passing(); },
+  'incorrect final edit: different comment': async c => {
+    c.audit('scope_denied_probe'); c.fixture(); await assert.rejects(c.expectedFailure()); fs.writeFileSync(c.file, '// Some other comment.\n' + ORIGINAL); await c.passing(); },
+  'incorrect final edit: approved comment but baseline bytes changed': async c => {
+    c.audit('scope_denied_probe'); c.fixture(); await assert.rejects(c.expectedFailure()); fs.writeFileSync(c.file, COMMENT + ORIGINAL.replace('= 1', '= 2')); await c.passing(); },
+  'incorrect final edit: approved comment without its newline': async c => {
+    c.audit('scope_denied_probe'); c.fixture(); await assert.rejects(c.expectedFailure()); fs.writeFileSync(c.file, COMMENT.trimEnd() + ORIGINAL); await c.passing(); },
+  'incorrect final edit: original restored without the comment': async c => {
+    c.audit('scope_denied_probe'); c.fixture(); await assert.rejects(c.expectedFailure()); fs.writeFileSync(c.file, ORIGINAL + '// touched\n'); await c.passing(); },
+};
+for (const [label, steps] of Object.entries(rejectedScenarios)) {
+  test('finish() makes zero publication calls: ' + label, async () => {
+    const { error, calls, events } = await acceptanceScenario(steps);
+    assert.ok(error instanceof Error, 'must be rejected');
+    assert.match(error.message, /Incomplete or mismatched acceptance evidence|Isolated checks failed|No changes/, error.message);
+    assert.deepEqual(publishingCalls(calls), [], 'no branch, tree, commit, ref, pull-request or other publishing call');
+    assert.ok(!events.some(e => e.event === 'published'));
+  });
+}
+test('finish() requires the acceptance history callback and never publishes without it', async () => {
+  const s = acceptanceFixture(), m = mock(acceptanceIssue, acceptanceState, 'c'.repeat(40));
+  try {
+    fs.writeFileSync(path.join(s.root, NEGATIVE_TARGET), COMMENT + ORIGINAL);
+    await assert.rejects(finish(m.api, s, () => {}, () => {}), /history required/);
+    assert.deepEqual(m.calls, []);
+  } finally { fs.rmSync(s.root, { recursive: true, force: true }); }
+});
+test('finish() publishes the canonical complete acceptance sequence, then post-publication verification accepts it', async () => {
+  const { error, calls, events, ctx } = await acceptanceScenario(async c => {
+    c.audit('scope_denied_probe'); c.fixture();
+    await assert.rejects(c.expectedFailure(), /Isolated checks failed/);
+    assert.deepEqual(publishingCalls(c.m.calls), [], 'the expected failure makes zero publication calls');
+    fs.writeFileSync(c.file, COMMENT + ORIGINAL);
+    const pr = await c.passing();
+    c.receipt = { url: pr.html_url, sha: pr.head.sha };
+    c.expected = acceptanceExpectations(c.s);
+  });
+  assert.equal(error, null);
+  assert.deepEqual(events.map(e => e.event), ACCEPTANCE_SEQUENCE);
+  assert.ok(calls.some(c => c.method === 'POST' && c.suffix === '/pulls'));
+  verifyCompletion('success', 'success', { publication: ctx.receipt, events }, ctx.expected);
+});
+test('ordinary tasks still publish after passing checks without any acceptance history', async () => {
+  const s = fixture(), m = mock();
+  try {
+    fs.writeFileSync(path.join(s.root, 'components/example.tsx'), 'export default 2;');
+    const events = []; await finish(m.api, s, () => {}, (event, digest) => events.push({ event, digest }));
+    assert.deepEqual(events.map(e => e.event), ['checks_started', 'checks_passed', 'published']);
+  } finally { fs.rmSync(s.root, { recursive: true, force: true }); }
+});
+test('approved comment comes from the hash-bound task: explicit field, or the single issue-48 sentence; otherwise fail closed', () => {
+  assert.equal(approvedComment(acceptanceTask), COMMENT.trimEnd());
+  const legacy = { request: 'x. After the expected failure, remove only that temporary assertion and prepend exactly ' + COMMENT.trimEnd() + ' followed by a newline. Preserve every original byte.' };
+  assert.equal(approvedComment(legacy), COMMENT.trimEnd());
+  assert.throws(() => approvedComment({ request: 'no sentence' }), /identifiable/);
+  assert.throws(() => approvedComment({ request: legacy.request + ' ' + legacy.request }), /identifiable/);
+  assert.throws(() => validateTask('\x60\x60\x60json\n' + JSON.stringify({ ...task, acceptance_comment: 'not a comment' }) + '\n\x60\x60\x60'));
+});
 const dockerReady = () => {
   if (process.platform !== 'linux' || (process.env.GITHUB_ACTIONS !== 'true' && process.env.CLAUDE_DOCKER_TESTS !== '1')) return false;
   try { execFileSync('docker', ['info'], { stdio: 'pipe', timeout: 20000 }); return true; } catch { return false; }
@@ -567,13 +668,13 @@ test('Docker: real repository snapshot proves the expected failure makes zero pu
       const audit = fs.mkdtempSync(path.join(directory, 'audit-')), m = mock(acceptanceIssue, acceptanceState, 'c'.repeat(40));
       appendAudit(audit, 'scope_denied_probe');
       prepare(audit);
-      await assert.rejects(finish(m.api, s, checks, (event, digest) => appendAudit(audit, event, digest)), /Isolated checks failed/, label);
+      await assert.rejects(finish(m.api, s, checks, (event, digest) => appendAudit(audit, event, digest), () => readAudit(audit)), /Isolated checks failed/, label);
       // Zero publication calls: only the approval read; no tree, commit, ref or pull request call of any kind.
       assert.deepEqual(m.calls.filter(c => c.method !== 'GET' || !/^\/issues\/4$/.test(c.suffix)), [], label + ': publisher untouched');
       return readAudit(audit);
     };
     // (a) deterministic negative fixture: expected assertion failure, audited as such.
-    const good = await attempt('expected failure', audit => writeNegativeFixture(s, readAudit(audit)));
+    const good = await attempt('expected failure', audit => writeNegativeFixture(s, readAudit(audit), audit));
     assert.deepEqual(good.map(e => e.event), ['scope_denied_probe', 'checks_started', 'checks_failed_expected_assertion']);
     assert.equal(good[1].digest, acceptanceExpectations(s).negativeDigest);
     // (b) the missing-newline counterexample is NOT the expected failure.
@@ -583,7 +684,7 @@ test('Docker: real repository snapshot proves the expected failure makes zero pu
     fs.writeFileSync(target, COMMENT + original);
     const audit = fs.mkdtempSync(path.join(directory, 'audit-')), m = mock(acceptanceIssue, acceptanceState, 'c'.repeat(40));
     for (const row of good) appendAudit(audit, row.event, row.digest);
-    const pr = await finish(m.api, s, checks, (event, digest) => appendAudit(audit, event, digest));
+    const pr = await finish(m.api, s, checks, (event, digest) => appendAudit(audit, event, digest), () => readAudit(audit));
     assert.ok(m.calls.some(c => c.suffix === '/pulls' && c.method === 'POST'));
     const receipt = { url: pr.html_url, sha: pr.head.sha };
     const report = { publication: receipt, events: readAudit(audit) };

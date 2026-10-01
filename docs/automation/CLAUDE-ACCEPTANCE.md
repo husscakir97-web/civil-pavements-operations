@@ -166,7 +166,14 @@ newline required by `EXPECTED_ASSERTION`, so the failure was audited as an ordin
   allowed Bash command) from `EXPECTED_ASSERTION` plus the committed bytes of
   `scripts/test-planning.cjs`. It works once, only after the confirmed probe denial (the audit must
   hold exactly one `scope_denied_probe`) and only on an untouched target. The model never types it.
-- For an acceptance task, `verify-completion` requires the complete ordered audit sequence
+- `finish()` validates the acceptance history BEFORE any publishing API call: exactly `scope_denied_probe`,
+  `checks_started`, `checks_failed_expected_assertion`, `checks_started`, `checks_passed` with matching digests, and the
+  candidate must equal the independently expected bytes. Expected bytes never come from the candidate: the negative
+  source is `EXPECTED_ASSERTION` plus the committed baseline, the final source is the approved comment plus a newline plus
+  the committed baseline (the task's `acceptance_comment`, or the single "prepend exactly // ... followed by a newline"
+  sentence of the approved request). A different passing edit is rejected with zero publication calls.
+- `negative-fixture` is one-use through a marker in the trusted helper directory; restoring the original file does not re-arm it.
+- For an acceptance task, `verify-completion` (post-publication) also requires the complete ordered audit sequence
   `scope_denied_probe`, `checks_started`, `checks_failed_expected_assertion`, `checks_started`,
   `checks_passed`, `published`, with no extra events. The negative started/failed digests must equal
   the digest recomputed from `EXPECTED_ASSERTION` plus the base file, the passing started/passed

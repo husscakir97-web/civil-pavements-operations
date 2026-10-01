@@ -626,6 +626,7 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
   await json(await put(approved1,{links:{jobId:p2},allocationReason:'too short'}),422,'the reason must be meaningful');
   await json(await put(approved1,{links:{jobId:p2},allocationReason:'Posted to the wrong job'},B.cookie),404,'foreign docket');
   await json(await put(approved1,{links:{jobId:bProject},allocationReason:'Posted to the wrong job'}),404,"another organisation's project");
+  await db.execute('DELETE FROM jobs WHERE id=?',[bProject]); // keep organisation B empty for the tenancy scenario that follows
   await json(await put(approved1,{links:{jobId:'missing-project'},allocationReason:'Posted to the wrong job'}),404,'unknown project');
   const fieldUser=await signup('alloc-field');await db.execute("UPDATE users SET organisation_id=?,role='field' WHERE id=?",[org,fieldUser.user.id]);
   assert.notEqual((await put(approved1,{links:{jobId:p2},allocationReason:'Posted to the wrong job'},fieldUser.cookie)).status,200,'a role without docket.approve cannot move posted costs');

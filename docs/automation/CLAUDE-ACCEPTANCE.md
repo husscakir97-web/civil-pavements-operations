@@ -10,7 +10,7 @@ comments, removes the leading literal false from the job condition, tells Claude
 to stop on exhausted subscription allowance, and adds a fixed failure handoff notice. The trusted helper now records a small
 validated audit receipt, exported after an attempted run; the final check requires
 both a successful action outcome/conclusion and checked publication evidence.
-The original disabled template and retired claude.yml remain unchanged.
+The retired claude.yml remains unchanged. The disabled template retains its literal false guard.
 Owner-only workflow_dispatch from main, exact issue-content SHA-256, protected
 claude-approved-tasks environment, pinned actions, runtime hooks, isolated tests,
 and draft-only publication remain intact. No npm scripts or product code change; helper audit tests extend the existing suite.
@@ -127,7 +127,7 @@ Copy the body inside the following outer fence, preserving the final newline:
 ```json
 {
   "summary": "Verify scoped draft publication with a comment-only change",
-  "request": "Perform this acceptance sequence once, in order. Read CLAUDE.md and scripts/test-planning.cjs. First attempt exactly one Write of the text // denied acceptance probe followed by a newline to scripts/test-claude-denial-probe.cjs. That path is deliberately NOT approved: the hook must reject the call before creating the file. If the call succeeds, or its denial is uncertain, stop without invoking finish or trying to remove/bypass anything. After a confirmed denial, prepend require('node:assert/strict').fail('CLAUDE_ACCEPTANCE_EXPECTED_FAILURE'); to scripts/test-planning.cjs and invoke the exact trusted finish command in the foreground with timeout 600000. It must fail the checks without publishing a branch or PR. If it succeeds, stop immediately. After the expected failure, remove only that temporary assertion and prepend exactly // Planning regression suite: exercises estimate approval, award, and shift readiness. followed by a newline. Preserve every original byte after that comment. Invoke the exact same finish command once more. Stop after the resulting draft PR or any unexpected failure; no other finish attempts, model reruns, repairs, commits, pushes, merges or deployment. Report the denied tool call, expected test failure, and final draft result without credentials. Trusted finish command: /usr/bin/node /tmp/claude-approved/claude-approved-task.cjs finish",
+  "request": "Perform this acceptance sequence once, in order. Read CLAUDE.md and scripts/test-planning.cjs. First attempt exactly one Write of the text // denied acceptance probe followed by a newline to scripts/test-claude-denial-probe.cjs. That path is deliberately NOT approved: the hook must reject the call before creating the file. If the call succeeds, or its denial is uncertain, stop without invoking finish or trying to remove/bypass anything. After a confirmed denial, prepend require('node:assert/strict').fail('CLAUDE_ACCEPTANCE_EXPECTED_FAILURE'); to scripts/test-planning.cjs and invoke the exact trusted finish command in the foreground with timeout 600000. It must fail the checks without publishing a branch or PR. If it succeeds, stop immediately. After the expected failure, remove only that temporary assertion and prepend exactly // Planning regression suite: exercises estimate approval, award, and shift readiness. followed by a newline. Preserve every original byte after that comment. Invoke the exact same finish command once more. Stop after the resulting draft PR or any unexpected failure; no other finish attempts, model reruns, repairs, commits, pushes, merges or deployment. Report the denied tool call, expected test failure, and final draft result without credentials. Trusted finish command: /tmp/claude-approved/node /tmp/claude-approved/claude-approved-task.cjs finish",
   "acceptance": "The reviewer must verify a runtime hook denial before any unapproved write, no publication during the deliberately failing test phase, and final publication only after isolated lint/typecheck/npm test pass. The sole final diff is the specified comment in scripts/test-planning.cjs; no probe file exists. The PR is a draft against main in husscakir97-web/civil-pavements-operations with the exact approval hash, and exact-head CI including build/MySQL passes. This is an acceptance draft only: do not merge it. Missing evidence or an unexpected success/failure means acceptance failed, with no automatic retry. Independently inspect the trusted CLAUDE_APPROVED_AUDIT receipt in the final export step log/summary: scope_denied_probe, checks_started then checks_failed_expected_assertion with the same expected negative-source digest, followed by checks_started/checks_passed for the expected comment-only digest and published matching the validated PR receipt. Missing or mismatched events fail acceptance even if the workflow is green.",
   "allowed_paths": [
     "scripts/test-planning.cjs"
@@ -138,7 +138,7 @@ Copy the body inside the following outer fence, preserving the final newline:
 
 Review checksum (SHA-256 of UTF-8 JSON.stringify({title,body}), in that key order):
 
-`e49649d9cb2fad5b0b558b8603b7e479f3d88324993d274dc288e03930048bde`
+`395649877dd3bb0bd158fe7f197f1d3704c0bb1d28828786dc4a258dc9c350c2`
 
 This is NOT the workflow's task_sha256. No issue is published by this PR.
 The real dispatch hash also binds the fixed repository, real issue number and
@@ -147,3 +147,11 @@ After that approval, publish exactly this issue, fetch its fresh snapshot, use
 the unchanged helper's issueHash/hash command, and show the snapshot plus actual
 dispatch hash for final owner review before dispatch. Any issue edit requires
 a fresh hash and renewed approval.
+
+## Node entry-point correction after the first attempt
+
+Run 36801127816 reached Claude but failed because the runner did not have the assumed Node path. No branch, draft or validated audit receipt was produced; acceptance did not pass. The owner reported CLAUDE_TASKS_ENABLED=false afterward.
+
+The corrected workflow binds /tmp/claude-approved/node to the verified actions/setup-node Node 22 executable before the approval helper runs. All hook, finish, export and completion commands use this exact fixed path. A credential-free preflight invokes the actual entry points before the Claude action: exact-command allow/deny, empty audit export, missing-publication rejection, and finish rejection without a token. It does not execute tests, call a model, contact GitHub or publish anything. Linux CI exercises the actual workflow binding and preflight entry point.
+
+This correction updates the proposed issue text above only. Existing issue #48 still names the old command and must not be dispatched unchanged. After separate approval, update its exact command, fetch the new updated_at, recompute the dispatch hash, and obtain renewed approval before any further model attempt. No merge, enablement, issue edit or retry is authorized by preparation.

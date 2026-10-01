@@ -34,15 +34,27 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22'
+      - name: Bind verified Node 22 before trusted helper execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_binary="$(realpath "$(command -v node)")"
+          [[ "$node_binary" =~ ^/opt/hostedtoolcache/node/22\.[0-9]+\.[0-9]+/x64/bin/node$ ]]
+          test -x "$node_binary"
+          test "$("$node_binary" -p 'process.versions.node.split(".")[0]')" = 22
+          mkdir -m 700 /tmp/claude-approved
+          ln -s "$node_binary" /tmp/claude-approved/node
+          /tmp/claude-approved/node --version
       - name: Freeze helper and validate exact owner approval
         id: gate
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const fs = require('node:fs');
-            fs.mkdirSync('/tmp/claude-approved', { recursive: false, mode: 0o700 });
             fs.copyFileSync('.github/automation/claude-approved-task.cjs', '/tmp/claude-approved/claude-approved-task.cjs');
             await require('/tmp/claude-approved/claude-approved-task.cjs').gate({ github, context, core });
+      - name: Verify trusted entry points without credentials or model usage
+        run: /tmp/claude-approved/node /tmp/claude-approved/claude-approved-task.cjs preflight
       - name: Prepare test dependencies before exposing OAuth or App credentials
         run: |
           set -euo pipefail
@@ -72,7 +84,7 @@ jobs:
             You may Read tracked public files and Edit/Write only the exact allowed_paths.
             The runtime PreToolUse hook rejects all other tools and paths.
             When ready, invoke exactly this Bash command in the foreground:
-            /usr/bin/node /tmp/claude-approved/claude-approved-task.cjs finish
+            /tmp/claude-approved/node /tmp/claude-approved/claude-approved-task.cjs finish
             Use a 600000 ms timeout. It runs lint, typecheck and npm test without credentials
             or network, then rechecks approval and creates/reuses an isolated draft PR.
             Do not run tests yourself, commit, push, merge, deploy or alter git state.
@@ -83,7 +95,7 @@ jobs:
             --model sonnet
             --permission-mode dontAsk
             --tools Read,Edit,Write,Bash
-            --allowedTools "Read,Edit,Write,Bash(/usr/bin/node /tmp/claude-approved/claude-approved-task.cjs finish)"
+            --allowedTools "Read,Edit,Write,Bash(/tmp/claude-approved/node /tmp/claude-approved/claude-approved-task.cjs finish)"
             --disallowedTools "Agent,Task,Skill,WebFetch,WebSearch,Glob,Grep,NotebookEdit,mcp__*"
             --setting-sources user
           settings: |
@@ -93,7 +105,7 @@ jobs:
                   "matcher": ".*",
                   "hooks": [{
                     "type": "command",
-                    "command": "/usr/bin/node /tmp/claude-approved/claude-approved-task.cjs hook",
+                    "command": "/tmp/claude-approved/node /tmp/claude-approved/claude-approved-task.cjs hook",
                     "timeout": 10
                   }]
                 }]
@@ -113,10 +125,10 @@ jobs:
           NOTICE
       - name: Export validated credential-free audit receipt
         if: ${{ always() && steps.gate.outcome == 'success' }}
-        run: /usr/bin/node /tmp/claude-approved/claude-approved-task.cjs audit-export
+        run: /tmp/claude-approved/node /tmp/claude-approved/claude-approved-task.cjs audit-export
       - name: Require successful conclusion and checked publication receipt
         if: ${{ !cancelled() && steps.claude.outcome != 'skipped' }}
         env:
           CLAUDE_STEP_OUTCOME: ${{ steps.claude.outcome }}
           CLAUDE_STEP_CONCLUSION: ${{ steps.claude.outputs.conclusion }}
-        run: /usr/bin/node /tmp/claude-approved/claude-approved-task.cjs verify-completion
+        run: /tmp/claude-approved/node /tmp/claude-approved/claude-approved-task.cjs verify-completion

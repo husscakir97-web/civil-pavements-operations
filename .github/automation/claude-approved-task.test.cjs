@@ -74,7 +74,7 @@ const body = '\x60\x60\x60json\n' + JSON.stringify(task) + '\n\x60\x60\x60';
 const issue = { number: 4, title: '[claude-task] Correction', body, updated_at: '2026-09-30T10:00:00Z', state: 'open' };
 const state = { number: 4, approvedHash: issueHash(issue), actor: 'husscakir97-web', task,
   base: 'a'.repeat(40), branch: 'claude/task-4-' + issueHash(issue).slice(0, 16) };
-function mock(taskIssue = issue, taskState = state) {
+function mock(taskIssue = issue, taskState = state, commitSha = 'commit') {
   const calls = [];
   let branch = null, pr = null, failPR = false;
   const api = async (method, suffix, data) => {
@@ -83,16 +83,16 @@ function mock(taskIssue = issue, taskState = state) {
     if (suffix === '/branches/main') return { commit: { sha: taskState.base } };
     if (suffix === '/git/commits/' + taskState.base) return { tree: { sha: 'base-tree' } };
     if (suffix === '/git/trees') return { sha: 'new-tree' };
-    if (suffix === '/git/commits' && method === 'POST') return { sha: 'commit' };
+    if (suffix === '/git/commits' && method === 'POST') return { sha: commitSha };
     if (suffix.startsWith('/git/ref/')) { if (branch) return branch; throw Object.assign(new Error('Missing'), { status: 404 }); }
     if (suffix === '/git/refs') { branch = { object: { sha: data.sha } }; return branch; }
-    if (suffix === '/git/commits/commit') return { tree: { sha: 'new-tree' },
+    if (suffix === '/git/commits/' + commitSha) return { tree: { sha: 'new-tree' },
       parents: [{ sha: taskState.base }], message: '[claude-task] #4 ' + taskState.approvedHash };
     if (suffix.startsWith('/pulls?')) return pr ? [pr] : [];
     if (suffix === '/pulls' && method === 'POST') {
       if (failPR) throw new Error('Transient PR failure');
       pr = { number: 7, state: 'open', draft: true, base: { ref: 'main' },
-        head: { sha: 'commit', repo: { full_name: REPO } }, html_url: 'https://github.com/' + REPO + '/pull/7' };
+        head: { sha: commitSha, repo: { full_name: REPO } }, html_url: 'https://github.com/' + REPO + '/pull/7' };
       return pr;
     }
     throw new Error('Unexpected route: ' + method + ' ' + suffix);
@@ -564,7 +564,7 @@ test('Docker: real repository snapshot proves the expected failure makes zero pu
     const checks = st => runChecks(st, execFileSync, image);
     const attempt = async (label, prepare) => {
       fs.writeFileSync(target, original);
-      const audit = fs.mkdtempSync(path.join(directory, 'audit-')), m = mock(acceptanceIssue, acceptanceState);
+      const audit = fs.mkdtempSync(path.join(directory, 'audit-')), m = mock(acceptanceIssue, acceptanceState, 'c'.repeat(40));
       appendAudit(audit, 'scope_denied_probe');
       prepare(audit);
       await assert.rejects(finish(m.api, s, checks, (event, digest) => appendAudit(audit, event, digest)), /Isolated checks failed/, label);
@@ -581,7 +581,7 @@ test('Docker: real repository snapshot proves the expected failure makes zero pu
     assert.deepEqual(bad.map(e => e.event), ['scope_denied_probe', 'checks_started', 'checks_failed']);
     // (c) corrected passing checks and checked publication through the recording publisher.
     fs.writeFileSync(target, COMMENT + original);
-    const audit = fs.mkdtempSync(path.join(directory, 'audit-')), m = mock(acceptanceIssue, acceptanceState);
+    const audit = fs.mkdtempSync(path.join(directory, 'audit-')), m = mock(acceptanceIssue, acceptanceState, 'c'.repeat(40));
     for (const row of good) appendAudit(audit, row.event, row.digest);
     const pr = await finish(m.api, s, checks, (event, digest) => appendAudit(audit, event, digest));
     assert.ok(m.calls.some(c => c.suffix === '/pulls' && c.method === 'POST'));

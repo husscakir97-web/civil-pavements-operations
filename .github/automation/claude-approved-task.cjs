@@ -3,12 +3,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const REPO = 'husscakir97-web/civil-pavements-operations';
 const OWNER = 'husscakir97-web';
 const PREFIX = '[claude-task]';
 const HELPER = '/tmp/claude-approved/claude-approved-task.cjs';
-const FINISH = '/usr/bin/node ' + HELPER + ' finish';
+const FINISH = '/tmp/claude-approved/node ' + HELPER + ' finish';
+const GUARD_ERROR = 'Approved task guard failed. Check scope, current approval and deterministic checks.';
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const EXPECTED_ASSERTION = "require('node:assert/strict').fail('CLAUDE_ACCEPTANCE_EXPECTED_FAILURE');\n";
 const AUDIT_EVENTS = new Set(['scope_denied', 'scope_denied_probe', 'checks_started',
@@ -269,6 +270,39 @@ function githubApi(token) {
     return response.json();
   };
 }
+function preflight(executable = '/tmp/claude-approved/node', helper = HELPER) {
+  // Actual CLI entry points, with no inherited credentials, PATH, NODE_OPTIONS,
+  // summary destination or model invocation. Nothing is published or edited.
+  const invoke = (mode, input, extra = {}) => {
+    const result = spawnSync(executable, [helper, mode], {
+      encoding: 'utf8', input, timeout: 10000, maxBuffer: 32768,
+      env: { ...extra }, windowsHide: true
+    });
+    if (result.error || result.signal) throw new Error('Trusted entry point unavailable');
+    return result;
+  };
+  const hook = command => JSON.stringify({ hook_event_name: 'PreToolUse',
+    tool_name: 'Bash', tool_input: { command } });
+  const allowed = invoke('hook', hook(FINISH));
+  if (allowed.status !== 0 || JSON.parse(allowed.stdout).hookSpecificOutput.permissionDecision !== 'allow')
+    throw new Error('Trusted hook unavailable');
+  const denied = invoke('hook', hook(FINISH + '; echo forbidden'));
+  if (denied.status !== 2 || denied.stderr.trim() !== GUARD_ERROR)
+    throw new Error('Trusted hook did not reject altered command');
+  const report = invoke('audit-export');
+  if (report.status !== 0 || !report.stdout.startsWith('CLAUDE_APPROVED_AUDIT='))
+    throw new Error('Trusted audit export unavailable');
+  const audit = JSON.parse(report.stdout.trim().slice('CLAUDE_APPROVED_AUDIT='.length));
+  if (audit.publication !== null || audit.events.length !== 0)
+    throw new Error('Preflight requires a fresh unpublished run');
+  const completion = invoke('verify-completion', undefined,
+    { CLAUDE_STEP_OUTCOME: 'success', CLAUDE_STEP_CONCLUSION: 'success' });
+  const finishResult = invoke('finish');
+  for (const result of [completion, finishResult]) {
+    if (result.status !== 1 || result.stderr.trim() !== GUARD_ERROR)
+      throw new Error('Trusted entry point did not fail closed');
+  }
+}
 async function main() {
   const mode = process.argv[2];
   if (mode === 'hash') {
@@ -276,7 +310,10 @@ async function main() {
     console.log(issueHash(issue)); return;
   }
   const state = JSON.parse(fs.readFileSync(path.join(__dirname, 'state.json'), 'utf8'));
-  if (mode === 'hook') {
+  if (mode === 'preflight') {
+    preflight();
+    console.log('Trusted entry-point preflight passed; no model or publication attempted.');
+  } else if (mode === 'hook') {
     const input = JSON.parse(fs.readFileSync(0, 'utf8'));
     try { checkTool(input, state, fs.existsSync(path.join(__dirname, 'published.json'))); }
     catch (error) {
@@ -301,9 +338,9 @@ async function main() {
 }
 if (require.main === module) main().catch(() => {
   // Do not echo API responses, environment or tool input into public logs.
-  console.error('Approved task guard failed. Check scope, current approval and deterministic checks.');
+  console.error(GUARD_ERROR);
   process.exitCode = process.argv[2] === 'hook' ? 2 : 1;
 });
 module.exports = { REPO, FINISH, issueHash, validateTask, safeFile, gate, approval, checkTool,
   collectChanges, dockerArgs, runChecks, publish, finish, EXPECTED_ASSERTION,
-  readAudit, appendAudit, auditReport, publicationReceipt, verifyCompletion };
+  readAudit, appendAudit, auditReport, publicationReceipt, verifyCompletion, preflight };

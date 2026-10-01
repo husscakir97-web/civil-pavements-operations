@@ -1,0 +1,27 @@
+name: Claude gate diagnostic
+on:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      TASKS_ENABLED_PRESENT: ${{ vars.CLAUDE_TASKS_ENABLED != '' }}
+      COST_CONFIRMED_PRESENT: ${{ vars.CLAUDE_NO_EXTRA_SPEND_CONFIRMED != '' }}
+      TASKS_ENABLED_TRUE: ${{ vars.CLAUDE_TASKS_ENABLED == 'true' }}
+      COST_CONFIRMED_TRUE: ${{ vars.CLAUDE_NO_EXTRA_SPEND_CONFIRMED == 'true' }}
+      REPOSITORY_MATCH: ${{ github.repository == 'husscakir97-web/civil-pavements-operations' }}
+      ACTOR_MATCH: ${{ github.actor == 'husscakir97-web' }}
+      REF_MATCH: ${{ github.ref == 'refs/heads/main' }}
+      GUARD_PASSES: ${{ vars.CLAUDE_TASKS_ENABLED == 'true' && vars.CLAUDE_NO_EXTRA_SPEND_CONFIRMED == 'true' && github.repository == 'husscakir97-web/civil-pavements-operations' && github.actor == 'husscakir97-web' && github.ref == 'refs/heads/main' }}
+    steps:
+      - name: Report only fixed guard booleans
+        shell: bash
+        run: |
+          set -euo pipefail
+          for key in TASKS_ENABLED_PRESENT COST_CONFIRMED_PRESENT TASKS_ENABLED_TRUE COST_CONFIRMED_TRUE REPOSITORY_MATCH ACTOR_MATCH REF_MATCH GUARD_PASSES; do
+            value="${!key}"
+            case "$value" in true|false) ;; *) exit 1 ;; esac
+            printf '%s=%s\n' "$key" "$value" | tee -a "$GITHUB_STEP_SUMMARY"
+          done

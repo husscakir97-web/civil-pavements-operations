@@ -27,6 +27,15 @@ no('docket HTML named .pdf','a.pdf',HTML,u.DOCKET_UPLOAD_NAME);ok('a.pdf',PDF,u.
 // The shared document service and these routes use ONE allowlist.
 assert.match(fs.readFileSync('lib/platform/documents.ts','utf8'),/ALLOWED=ALLOWED_UPLOAD_NAME/);
 
+// Tender allowlist adds the raster scan formats (TIFF/BMP) with signature validation; docket and shared allowlists do not.
+{const TIFF=new Uint8Array([0x49,0x49,0x2A,0,8,0,0,0]),TIFFB=new Uint8Array([0x4D,0x4D,0,0x2A,0,0,0,8]),BMP=new Uint8Array([0x42,0x4D,0,0,0,0,0,0,0,0,0,0,0,0,40,0,0,0]);
+ const T=u.TENDER_UPLOAD_NAME;assert.equal(ok('a.tif',TIFF,T).contentType,'image/tiff');assert.equal(ok('a.tiff',TIFFB,T).contentType,'image/tiff');assert.equal(ok('a.bmp',BMP,T).contentType,'image/bmp');
+ no('HTML named .tif','a.tif',HTML,T);no('SVG named .bmp','a.bmp',SVG,T);no('"BM" text named .bmp','a.bmp',B('BM <b>x</b> plain text file here'),T);no('PNG named .tiff','a.tiff',PNG,T);no('TIFF bytes named .pdf','a.pdf',TIFF,T);
+ for(const n of ['a.tif','a.tiff','a.bmp']){assert.equal(u.DOCKET_UPLOAD_NAME.test(n),false,'docket intake excludes '+n);assert.equal(u.ALLOWED_UPLOAD_NAME.test(n),false,'shared document allowlist is unchanged for '+n);}
+ assert.equal(u.inlinePreviewType('a.tif','image/tiff',TIFF),null);assert.equal(u.inlinePreviewType('a.bmp','image/bmp',BMP),null);assert.equal(u.safeContentType('x.tif'),'image/tiff');
+ // Viewer-only PDF preview.
+ assert.equal(u.previewablePdf('a.pdf',PDF),true);assert.equal(u.previewablePdf('a.PDF',PDF),true);assert.equal(u.previewablePdf('a.pdf',HTML),false);assert.equal(u.previewablePdf('a.png',PDF),false);assert.equal(u.previewablePdf('a.html',PDF),false);assert.equal(u.previewablePdf('a.pdf',PNG),false);
+ const h=u.inlinePdfHeaders('a b.pdf');assert.equal(h['Content-Type'],'application/pdf');assert.match(h['Content-Disposition'],/^inline; /);assert.equal(h['X-Content-Type-Options'],'nosniff');}
 // Fixed extension -> type mapping with an octet-stream fallback (stored/client types are never consulted).
 for(const [n,t] of [['a.pdf','application/pdf'],['a.png','image/png'],['a.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],['a.html','application/octet-stream'],['a.svg','application/octet-stream'],['a.xml','application/octet-stream'],['a.unknown','application/octet-stream'],['noext','application/octet-stream'],['a.dwg','application/octet-stream']])assert.equal(u.safeContentType(n),t,n);
 

@@ -5,6 +5,8 @@
 // is accepted only when the extension is allowed AND the bytes agree with it. Anything uncertain is served as a download.
 
 export const ALLOWED_UPLOAD_NAME=/\.(pdf|png|jpe?g|gif|webp|heic|txt|csv|docx?|xlsx?|pptx?|zip|msg|eml|dwg|dxf)$/i;
+/** Tender attachments: the shared allowlist plus the raster scan formats the tender picker and local OCR reader support. */
+export const TENDER_UPLOAD_NAME=/\.(pdf|png|jpe?g|gif|webp|heic|tiff?|bmp|txt|csv|docx?|xlsx?|pptx?|zip|msg|eml|dwg|dxf)$/i;
 /** Docket source documents: the formats the docket intake offers (PDF and photos). */
 export const DOCKET_UPLOAD_NAME=/\.(pdf|png|jpe?g|webp)$/i;
 export const UNSUPPORTED_TYPE_MESSAGE='This file type is not accepted. Use PDF, image, Office, CSV, text or ZIP files.';
@@ -18,6 +20,7 @@ const SAFE_TYPE:Record<string,string>={
  doc:'application/msword',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
  xls:'application/vnd.ms-excel',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
  ppt:'application/vnd.ms-powerpoint',pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+ tif:'image/tiff',tiff:'image/tiff',bmp:'image/bmp',
  zip:'application/zip',msg:'application/vnd.ms-outlook',eml:'message/rfc822',
 };
 export const FALLBACK_TYPE='application/octet-stream';
@@ -33,10 +36,13 @@ const isJpeg=(b:Uint8Array)=>at(b,0,[0xFF,0xD8,0xFF]);
 const isGif=(b:Uint8Array)=>at(b,0,ascii('GIF87a'))||at(b,0,ascii('GIF89a'));
 const isWebp=(b:Uint8Array)=>at(b,0,ascii('RIFF'))&&at(b,8,ascii('WEBP'));
 const isHeic=(b:Uint8Array)=>at(b,4,ascii('ftyp'));
+const isTiff=(b:Uint8Array)=>at(b,0,[0x49,0x49,0x2A,0x00])||at(b,0,[0x4D,0x4D,0x00,0x2A]);
+// BMP: 'BM', then the DIB header size at offset 14 must be a known header version (rejects arbitrary text starting with "BM").
+const isBmp=(b:Uint8Array)=>at(b,0,ascii('BM'))&&b.length>=18&&[12,40,52,56,64,108,124].includes(b[14]|(b[15]<<8)|(b[16]<<16)|(b[17]<<24));
 const isOleOrZipOrRtf=(b:Uint8Array)=>at(b,0,OLE)||isZip(b)||at(b,0,ascii('{\\rtf'));
 /** File signatures for the formats with a fixed binary header. Formats without one (txt, csv, eml, msg, dwg, dxf) are checked for markup instead. */
 const SIGNATURE:Record<string,(b:Uint8Array)=>boolean>={
- pdf:isPdf,png:isPng,jpg:isJpeg,jpeg:isJpeg,gif:isGif,webp:isWebp,heic:isHeic,
+ pdf:isPdf,png:isPng,jpg:isJpeg,jpeg:isJpeg,gif:isGif,webp:isWebp,heic:isHeic,tif:isTiff,tiff:isTiff,bmp:isBmp,
  zip:isZip,docx:isZip,xlsx:isZip,pptx:isZip,doc:isOleOrZipOrRtf,xls:isOleOrZipOrRtf,ppt:isOleOrZipOrRtf,
 };
 
@@ -71,6 +77,14 @@ export function inlinePreviewType(name:string,declaredType:string|null|undefined
  const sig=SIGNATURE[ext];if(!sig||!sig(bytes))return null;
  return SAFE_TYPE[ext]??null;
 }
+
+/**
+ * Same-origin preview of a tender PDF in the review viewer. Only a file whose extension is .pdf AND whose bytes carry a PDF
+ * signature may be shown inline (always as application/pdf); everything else stays a download. Images need no inline mode:
+ * <img> renders them from the attachment response.
+ */
+export const previewablePdf=(name:string,bytes:Uint8Array)=>extensionOf(name)==='pdf'&&isPdf(bytes);
+export const inlinePdfHeaders=(name:string):Record<string,string>=>({'Content-Type':'application/pdf','Content-Disposition':`inline; filename*=UTF-8''${encodeFilename(name)}`,'X-Content-Type-Options':'nosniff','Cache-Control':'private, no-store'});
 
 /** RFC 5987 filename*= encoding (encodeURIComponent leaves ' ( ) * unescaped). */
 export const encodeFilename=(name:string)=>encodeURIComponent(String(name||'file')).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase());

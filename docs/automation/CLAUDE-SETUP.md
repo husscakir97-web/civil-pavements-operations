@@ -208,3 +208,7 @@ Sources:
 - https://docs.github.com/en/billing/concepts/product-billing/github-actions
 - https://github.com/anthropics/claude-code-action/blob/fd1c128679612beff4ca259c78021c506e8aa7a7/src/entrypoints/run.ts
 - https://github.com/anthropics/claude-code-action/blob/fd1c128679612beff4ca259c78021c506e8aa7a7/action.yml
+
+### Verified interpreter and preflight
+
+Trusted commands use /tmp/claude-approved/node, a fixed link created before Claude from the verified hosted Node 22 installation. PATH is consulted only during this trusted setup, then the resolved absolute path and major version are checked; model commands cannot select another executable. The preflight exercises the real helper entry points with no inherited credentials or PATH and stops the job before Claude on failure. This is not an OS sandbox for Claude. If the hosted toolcache layout changes, fail closed and review the binding rather than widening command permissions.

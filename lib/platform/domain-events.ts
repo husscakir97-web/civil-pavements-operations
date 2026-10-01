@@ -11,6 +11,10 @@ export const DOMAIN_EVENTS={
  // A defect reported through the form → Workshop seam by someone holding workshop.defect.report (e.g. a plant operator).
  'workshop.defect.reported':{module:'workshop',publish:'workshop.defect.report',read:'workshop.view',entity:'work_order'},
  'workshop.repair.recorded':{module:'workshop',publish:'workshop.edit',read:'workshop.view',entity:'work_order'},
+ // Service plan changes: a completed service, the initial plan, or an administrator correction (distinct events, never conflated).
+ 'workshop.service.recorded':{module:'workshop',publish:'workshop.edit',read:'workshop.view',entity:'asset'},
+ 'workshop.plan.set':{module:'workshop',publish:'workshop.edit',read:'workshop.view',entity:'asset'},
+ 'workshop.plan.corrected':{module:'workshop',publish:'workshop.plan.correct',read:'workshop.view',entity:'asset'},
  'workshop.verified':{module:'workshop',publish:'workshop.verify',read:'workshop.view',entity:'work_order'},
  'project.awarded':{module:'projects',publish:'tender.award',read:'project.view',entity:'project'},
  'docket.approved':{module:'dockets',publish:'docket.approve',read:'docket.approve',entity:'docket'},

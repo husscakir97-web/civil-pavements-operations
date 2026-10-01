@@ -339,6 +339,66 @@ const cf=load('lib/modules/operations/conflicts.ts'),rm=load('lib/v1/resource-ma
 const res=new Map([['worker:w1',{id:'w1',type:'worker',name:'Alex',status:'Active',active:true,competencies:[{type:'White card',expiryDate:'2030-01-01',status:'current'},{type:'First aid',expiryDate:'2020-01-01',status:'current'}]}],['plant:p1',{id:'p1',type:'plant',name:'Paver',status:'Available',active:true,complianceExpiry:'2026-01-01'}]]);
 const sh=(o={})=>({id:'s1',name:'Night',status:'Planned',date:'2026-03-01',start:'20:00',finish:'04:00',assignments:[{resourceType:'worker',resourceId:'w1'}],requiredCompetencies:[],...o});
 const codes=c=>c.map(x=>`${x.code}:${x.severity}`).sort();
+// Service due (Workshop): a WARNING judged on the scheduled shift date; never invented for assets without a plan; critical defects stay hard blocks.
+{const SP=load('lib/v1/service-plan.ts');
+ const plant=service=>new Map([['plant:s1',{id:'s1',type:'plant',name:'Roller 7',status:'Available',active:true,complianceExpiry:'2030-01-01',service}]]);
+ const shift=(o={})=>sh({date:'2026-03-10',assignments:[{resourceType:'plant',resourceId:'s1'}],...o});
+ // pure status
+ assert.deepEqual(SP.serviceStatus({},'2026-03-10'),{overdue:false,meterReached:false,datePassed:false},'no plan, never flagged');
+ assert.equal(SP.serviceStatus({nextServiceDate:'2026-03-10'},'2026-03-10').overdue,false,'on the service date is not after it');
+ assert.equal(SP.serviceStatus({nextServiceDate:'2026-03-10'},'2026-03-11').datePassed,true,'a booking after the deadline is flagged');
+ assert.equal(SP.serviceStatus({currentMeter:250,nextServiceMeter:250},null).meterReached,true,'at the threshold counts as reached');
+ assert.equal(SP.serviceStatus({currentMeter:249.9,nextServiceMeter:250},null).overdue,false);
+ assert.equal(SP.serviceStatus({currentMeter:null,nextServiceMeter:250},null).overdue,false,'no reading, no claim');
+ assert.equal(SP.serviceStatus({nextServiceDate:'2026-03-10'},null).datePassed,false,'no date to judge against');
+ assert(SP.isDateOnly('2026-02-28')&&!SP.isDateOnly('2026-02-30')&&!SP.isDateOnly('2026-3-1')&&!SP.isDateOnly(null));
+ // Impossible dates are a validation failure, never an exception (new Date('2026-13-45').toISOString() would throw RangeError).
+ for(const bad of ['2026-13-01','2026-00-10','2026-01-00','2026-01-32','2026-04-31','2026-06-31','2026-02-29','2100-02-29','2026-99-99','0000-00-00','abcd-ef-gh','2026-1-01','','2026-12-31T00:00:00Z']){assert.doesNotThrow(()=>SP.isDateOnly(bad),'no throw for '+bad);assert.equal(SP.isDateOnly(bad),false,bad);}
+ for(const good of ['2024-02-29','2000-02-29','2026-12-31','2026-01-01','2026-04-30'])assert.equal(SP.isDateOnly(good),true,good);
+ assert.equal(SP.isDateOnly('2023-02-29'),false,'not a leap year');assert.equal(SP.isDateOnly('1900-02-29'),false,'century non-leap');assert.equal(SP.isDateOnly('2000-02-29'),true,'400-year leap');
+ for(const bad of ['2026-13-45',undefined,null,20260101,{}]){assert.equal(SP.serviceStatus({nextServiceDate:bad},'2026-03-10').datePassed,false,'an invalid stored date is never judged');}
+ assert.equal(SP.serviceStatus({nextServiceDate:'2026-03-10'},'2026-13-45').datePassed,false,'an invalid shift date is never judged');
+ // DECIMAL(15,2): at most two decimal places, so distinct values can never be stored as equal.
+ for(const ok of [0,100,100.5,100.25,0.01,123456789012.34,1e12])assert.equal(SP.isMeterValue(ok),true,String(ok));
+ for(const bad of [100.001,100.005,0.001,0.1+0.2,NaN,Infinity,'100',null,undefined])assert.equal(SP.isMeterValue(bad),false,String(bad));
+ // organisation time zone decides the calendar date (an instant that is still 1 Oct in UTC is already 2 Oct in Sydney)
+ assert.equal(SP.dateIn('Australia/Sydney','2026-10-01T14:30:00Z'),'2026-10-02');assert.equal(SP.dateIn('America/Los_Angeles','2026-10-01T05:30:00Z'),'2026-09-30');assert.equal(SP.dateIn('Not/AZone','2026-10-01T14:30:00Z'),'2026-10-02','invalid zone falls back to the default');
+ assert(SP.isTimeZone('Pacific/Kiritimati')&&!SP.isTimeZone('nope')&&!SP.isTimeZone(''));
+ // conflict engine
+ const overdueDate=plant({nextServiceDate:'2026-03-09',currentMeter:10,nextServiceMeter:500,meterType:'hours'});
+ assert.deepEqual(codes(cf.evaluateShift(shift(),overdueDate,[])),['PLANT_SERVICE_OVERDUE:warn'],'booking after the service date is flagged in advance');
+ assert.deepEqual(codes(cf.evaluateShift(shift({date:'2026-03-09'}),overdueDate,[])),[],'booking on the service date is not');
+ assert.deepEqual(codes(cf.evaluateShift(shift({date:'2026-03-01'}),overdueDate,[])),[],'an earlier booking is fine even if later ones are not');
+ assert.deepEqual(codes(cf.evaluateShift(shift({date:null}),overdueDate,[],{today:'2026-03-12'})),['PLANT_SERVICE_OVERDUE:warn'],'no shift date: the organisation\'s today');
+ assert.deepEqual(codes(cf.evaluateShift(shift({date:null}),overdueDate,[])),[],'no date and no today: nothing invented');
+ assert.deepEqual(codes(cf.evaluateShift(shift({date:'2026-03-01'}),plant({currentMeter:300,nextServiceMeter:250,meterType:'hours'}),[])),['PLANT_SERVICE_OVERDUE:warn'],'meter reached');
+ assert.deepEqual(codes(cf.evaluateShift(shift(),plant({}),[])),[],'no recorded plan: never flagged');
+ for(const status of ['Planned','Ready','In Progress','Draft'])assert.deepEqual(cf.blocking(status,cf.evaluateShift(shift({status}),overdueDate,[])),[],'service due never blocks '+status);
+ // a critical defect (safety hold => Out of service) still blocks, alongside the service warning
+ const held=new Map([['plant:s1',{...plant({nextServiceDate:'2026-03-09'}).get('plant:s1'),status:'Out of service'}]]);
+ assert.deepEqual(codes(cf.evaluateShift(shift(),held,[])),['PLANT_SERVICE_OVERDUE:warn','RESOURCE_UNAVAILABLE:block']);
+ assert.equal(cf.blocking('Planned',cf.evaluateShift(shift(),held,[])).length,1,'safety hold remains the hard block');
+ // availability carries the same warning for planner candidates
+ assert.deepEqual(codes(cf.availability(shift({assignments:[]}),[{resourceType:'plant',resourceId:'s1'}],overdueDate,[],{today:'2026-03-12'}).s1),['PLANT_SERVICE_OVERDUE:warn']);
+ // Capabilities: plan correction is administrator-only; completed service uses workshop.edit; no new role.
+ const PmS=load('lib/platform/permissions.ts');
+ assert(PmS.can('admin','workshop.plan.correct'));
+ for(const r of PmS.ROLES.filter(r=>r!=='admin'))assert(!PmS.can(r,'workshop.plan.correct'),r+' cannot correct a service plan');
+ assert(!PmS.ROLES.includes('mechanic'),'no mechanic role in this change');
+ for(const r of ['field','supervisor','site_engineer','project_engineer','project_manager','estimator','accounts','read_only'])assert(!PmS.can(r,'workshop.edit'),r+' cannot record a service');
+ assert(PmS.can('office','workshop.edit')&&PmS.can('admin','workshop.edit'));
+ // Domain events: three distinct events; only the correction is administrator-gated.
+ const DE=load('lib/platform/domain-events.ts').DOMAIN_EVENTS;assert.equal(DE['workshop.service.recorded'].publish,'workshop.edit');assert.equal(DE['workshop.plan.set'].publish,'workshop.edit');assert.equal(DE['workshop.plan.corrected'].publish,'workshop.plan.correct');
+ // Write-path audit: only Workshop writes meter and service-plan columns; resource edits, the legacy sync/backfill and import cannot.
+ const fsx=require('fs'),pathx=require('path'),walk=d=>fsx.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?(['node_modules','.next'].includes(e.name)?[]:walk(pathx.join(d,e.name))):/\.(ts|tsx|mjs|cjs)$/.test(e.name)?[pathx.join(d,e.name)]:[]);
+ const PROTECTED=/\b(next_service_meter|next_service_date|current_meter|meter_type|nextServiceMeter|nextServiceDate|currentMeter|meterType)\b/;
+ for(const f of [...walk('lib'),...walk('app'),...walk('scripts')].filter(f=>!/workshop|service-plan|test-|schema|resources\.tsx?$/.test(f)||/lib\/modules\/operations\/resources\.ts$|resource-(sync|mapping|import)/.test(f))){
+  const text=fsx.readFileSync(f,'utf8');
+  if(/lib\/modules\/operations\/resources\.ts$|lib\/v1\/resource-(sync|mapping)\.ts$|lib\/modules\/operations\/resource-import\.ts$|scripts\/backfill-resources\.mjs$/.test(f))assert(!PROTECTED.test(text),f+' must not read or write the service plan or meter columns');
+  else if(/UPDATE\s+plant|INSERT\s+INTO\s+plant/i.test(text)&&!/lib\/modules\/workshop\//.test(f))assert(!PROTECTED.test(text),f+' writes plant without touching the service plan');}
+ const workshopSrc=fsx.readFileSync('lib/modules/workshop/workshop.ts','utf8');
+ assert.equal((workshopSrc.match(/UPDATE plant SET[^'"`]*(next_service_meter|current_meter)/g)||[]).length,3,'exactly three Workshop statements write the meter/service columns (reading, service, plan)');
+}
 // Availability before saving: each candidate is judged by the same engine for the draft window.
 {const busy=[{id:'s2',name:'Depot',status:'Planned',date:'2026-03-01',start:'22:00',finish:'02:00',assignments:[{resourceType:'plant',resourceId:'p1'}]}];
  const av=cf.availability(sh({assignments:[]}),[{resourceType:'worker',resourceId:'w1'},{resourceType:'plant',resourceId:'p1'},{resourceType:'worker',resourceId:'ghost'}],res,busy);

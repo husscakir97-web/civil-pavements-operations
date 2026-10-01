@@ -320,6 +320,7 @@ export const plant=mysqlTable('plant',{
  meterType:varchar('meter_type',{length:20}),
  currentMeter:decimal('current_meter',{precision:15,scale:2}),
  nextServiceMeter:decimal('next_service_meter',{precision:15,scale:2}),
+ nextServiceDate:varchar('next_service_date',{length:10}),
  id:varchar('id',{length:191}).primaryKey(),
  organisationId:varchar('organisation_id',{length:191}).notNull(),
  name:longtext('name').notNull(),

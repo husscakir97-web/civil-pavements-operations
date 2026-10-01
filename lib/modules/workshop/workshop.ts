@@ -5,18 +5,19 @@ import {can} from '@/lib/platform/permissions';
 import {query,one,exec,tx,uuid,nowIso,type Conn} from '@/lib/platform/sql';
 import {audit} from '@/lib/platform/audit';
 import {idempotent} from '@/lib/platform/idempotency';
-import {isDateOnly,dateIn,isTimeZone,DEFAULT_TIME_ZONE,serviceStatus} from '@/lib/v1/service-plan';
+import {isDateOnly,isMeterValue,METER_PRECISION_MESSAGE,dateIn,isTimeZone,DEFAULT_TIME_ZONE,serviceStatus} from '@/lib/v1/service-plan';
 
 const ref=z.string().min(1).max(191);
 const note=z.string().trim().min(1).max(5000);
-const meterUnit=z.enum(['hours','km']),threshold=z.number().positive().max(1e12),dateOnly=z.string().refine(isDateOnly,'Use a valid date (YYYY-MM-DD).');
+// DECIMAL(15,2) storage: reject excess precision up front so a reading of 100 and a threshold of 100.001 can never be stored as equal.
+const meterUnit=z.enum(['hours','km']),meterValue=z.number().min(0).max(1e12).refine(isMeterValue,METER_PRECISION_MESSAGE),threshold=z.number().positive().max(1e12).refine(isMeterValue,METER_PRECISION_MESSAGE),dateOnly=z.string().refine(isDateOnly,'Use a valid date (YYYY-MM-DD).');
 export const workshopAction=z.discriminatedUnion('action',[
  // A reading records the meter only. Service thresholds are plan values: `.strict()` refuses a reading that tries to carry one.
- z.object({action:z.literal('meter'),assetId:ref,meterType:meterUnit,reading:z.number().min(0).max(1e12),note}).strict(),
+ z.object({action:z.literal('meter'),assetId:ref,meterType:meterUnit,reading:meterValue,note}).strict(),
  // Initial service plan on an asset that has none (never invented for existing assets).
  z.object({action:z.literal('plan'),assetId:ref,revision:z.number().int().positive(),nextServiceMeter:threshold.optional(),nextServiceDate:dateOnly.optional(),note}).strict(),
  // A completed service (workshop.edit). Records who/when/meter and the next thresholds; never touches a safety hold.
- z.object({action:z.literal('service'),assetId:ref,revision:z.number().int().positive(),performedOn:dateOnly,meterType:meterUnit.optional(),meterReading:z.number().min(0).max(1e12).optional(),nextServiceMeter:threshold.optional(),nextServiceDate:dateOnly.optional(),note,clientRequestId:z.string().regex(/^[A-Za-z0-9-]{16,80}$/)}).strict(),
+ z.object({action:z.literal('service'),assetId:ref,revision:z.number().int().positive(),performedOn:dateOnly,meterType:meterUnit.optional(),meterReading:meterValue.optional(),nextServiceMeter:threshold.optional(),nextServiceDate:dateOnly.optional(),note,clientRequestId:z.string().regex(/^[A-Za-z0-9-]{16,80}$/)}).strict(),
  // Administrator correction of the plan (workshop.plan.correct): mandatory reason; null clears a threshold. Not a completed service.
  z.object({action:z.literal('correct'),assetId:ref,revision:z.number().int().positive(),nextServiceMeter:threshold.nullable().optional(),nextServiceDate:dateOnly.nullable().optional(),reason:z.string().trim().min(10).max(2000)}).strict(),
  z.object({action:z.literal('asset'),name:z.string().trim().min(1).max(180),number:z.string().max(60),category:z.string().max(80),registration:z.string().max(40)}),
@@ -28,17 +29,33 @@ export const workshopAction=z.discriminatedUnion('action',[
 export async function overview(){
  const a=need('workshop.view');
  const tz=await organisationTimeZone(a.organisationId);
- const [assets,orders,entries,readings,services]=await Promise.all([
+ const [assets,orders,entries,readings]=await Promise.all([
   query("SELECT id,name,CASE WHEN safety_hold=1 THEN 'Out of service' ELSE status END AS status,plant_number,registration,category,revision,meter_type,current_meter,next_service_meter,next_service_date FROM plant WHERE organisation_id=? AND LOWER(status)<>'archived' ORDER BY name",[a.organisationId]),
   query('SELECT * FROM workshop_orders WHERE organisation_id=? ORDER BY created_at DESC LIMIT 1000',[a.organisationId]),
   query('SELECT * FROM workshop_entries WHERE organisation_id=? ORDER BY created_at DESC LIMIT 3000',[a.organisationId]),
   query('SELECT * FROM asset_meter_readings WHERE organisation_id=? ORDER BY created_at DESC LIMIT 1000',[a.organisationId]),
-  query('SELECT e.*,(SELECT COALESCE(NULLIF(u.name,\'\'),u.email) FROM users u WHERE u.organisation_id=e.organisation_id AND u.id=e.actor_id) AS actor_name FROM asset_service_events e WHERE e.organisation_id=? ORDER BY e.recorded_at DESC LIMIT 1000',[a.organisationId]),
  ]);
  const today=dateIn(tz);
  return {today,timeZone:tz,canCorrect:can(a.role,'workshop.plan.correct'),
   assets:assets.map(x=>({...x,service:serviceStatus({currentMeter:x.current_meter==null?null:Number(x.current_meter),nextServiceMeter:x.next_service_meter==null?null:Number(x.next_service_meter),nextServiceDate:x.next_service_date},today)})),
-  orders,entries,readings,services};
+  orders,entries,readings};
+}
+
+const HISTORY_COLUMNS="e.*,(SELECT COALESCE(NULLIF(u.name,''),u.email) FROM users u WHERE u.organisation_id=e.organisation_id AND u.id=e.actor_id) AS actor_name";
+/**
+ * One asset's service/plan history, newest first, keyset-paginated (recorded_at, id). Scoped to the caller's organisation and
+ * workshop.view; another organisation's asset id is a 404. The caller learns "no history" only from an empty first page.
+ */
+export async function assetServiceHistory(assetId:string,cursor:string|null,limit:number){
+ const a=need('workshop.view');
+ if(!assetId||assetId.length>191)fail(400,'Choose an asset.');
+ if(!await one('SELECT id FROM plant WHERE organisation_id=? AND id=?',[a.organisationId,assetId]))fail(404,'Asset not found.');
+ let before:{at:string;id:string}|null=null;
+ if(cursor){const m=/^([0-9TZ:.-]{1,40})~([A-Za-z0-9-]{1,191})$/.exec(cursor);if(!m)fail(400,'Invalid history cursor.');before={at:m[1],id:m[2]};}
+ const size=Number.isInteger(limit)?Math.min(100,Math.max(1,limit)):20;
+ const rows=await query(`SELECT ${HISTORY_COLUMNS} FROM asset_service_events e WHERE e.organisation_id=? AND e.asset_id=?${before?' AND (e.recorded_at<? OR (e.recorded_at=? AND e.id<?))':''} ORDER BY e.recorded_at DESC,e.id DESC LIMIT ${size+1}`,[a.organisationId,assetId,...(before?[before.at,before.at,before.id]:[])]);
+ const page=rows.slice(0,size),last=page[page.length-1];
+ return {events:page,nextCursor:rows.length>size&&last?`${last.recorded_at}~${last.id}`:null};
 }
 
 export async function mutate(input:z.infer<typeof workshopAction>){

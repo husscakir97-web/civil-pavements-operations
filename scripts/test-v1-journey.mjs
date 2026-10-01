@@ -208,6 +208,42 @@ try{
   const p0=await row();await json(await call('/api/operations/resources','POST',{action:'savePlant',id:wa.id,revision:Number(p0.revision),plant:{name:'QA Paver',status:'Out of service',nextServiceMeter:1,nextServiceDate:'2020-01-01',currentMeter:1,meterType:'km',next_service_meter:1,next_service_date:'2020-01-01',current_meter:1,meter_type:'km'}},A.cookie),200);
   const p1=await row();assert.equal(p1.next_service_meter,p0.next_service_meter);assert.equal(p1.next_service_date,p0.next_service_date);assert.equal(p1.current_meter,p0.current_meter);assert.equal(p1.meter_type,p0.meter_type);assert.equal(Number(p1.safety_hold),1);
   await json(await call('/api/platform/entitlements','PUT',{module:'operations',status:'disabled'},A.cookie),200);
+  // Impossible dates are a validation error (400), never a crash (503).
+  a=await asset();
+  for(const bad of ['2026-13-45','2026-02-30','2026-99-99','2026-04-31'])await json(await workshop({action:'correct',assetId:wa.id,revision:a.revision,nextServiceDate:bad,reason:'Impossible date must be rejected'}),400,'correct '+bad);
+  await json(await workshop(svcBody(a,{performedOn:'2026-02-30'})),400,'impossible performed date');await json(await workshop(svcBody(a,{nextServiceDate:'2026-13-01'})),400,'impossible next date');
+  await json(await workshop({action:'plan',assetId:roller.id,revision:roller.revision,nextServiceDate:'2026-00-10',note:'bad date'}),400,'impossible plan date');
+  // DECIMAL(15,2): excess precision is rejected everywhere, so a reading and a different threshold are never stored as equal.
+  const dec=(await json(await workshop({action:'asset',name:'QA Decimal',number:'QA-D1',category:'Roller',registration:'DEC1'}),200)).id,decRow=async()=>row(dec);
+  await json(await workshop({action:'meter',assetId:dec,meterType:'hours',reading:100.001,note:'too precise'}),400,'reading precision');
+  await json(await workshop({action:'meter',assetId:dec,meterType:'hours',reading:100,note:'exact'}),200);
+  let d=await asset(dec);
+  await json(await workshop({action:'plan',assetId:dec,revision:d.revision,nextServiceMeter:100.001,note:'too precise'}),400,'plan precision (100 vs 100.001 would store as equal)');
+  assert.equal((await decRow()).next_service_meter,null,'nothing stored');
+  await json(await workshop({action:'plan',assetId:dec,revision:d.revision,nextServiceMeter:100.01,note:'cents are fine'}),200);
+  d=await asset(dec);assert.equal(Number(d.next_service_meter),100.01);assert.equal(d.service.overdue,false,'100.00 < 100.01: distinct values stay distinct');
+  await json(await workshop({action:'service',assetId:dec,revision:d.revision,performedOn:today,meterReading:100.001,nextServiceMeter:200,note:'precision',clientRequestId:stamp()}),400,'service reading precision');
+  await json(await workshop({action:'service',assetId:dec,revision:d.revision,performedOn:today,meterReading:100,nextServiceMeter:100.001,note:'precision',clientRequestId:stamp()}),400,'service threshold precision (would equal the reading once stored)');
+  await json(await workshop({action:'correct',assetId:dec,revision:d.revision,nextServiceMeter:100.001,reason:'Precision must be rejected'}),400,'correction precision');
+  assert.equal(await count('asset_service_events','asset_id=?',[dec]),1,'only the valid plan was recorded');assert.equal(await count('asset_meter_readings','asset_id=?',[dec]),1);
+  await json(await workshop({action:'service',assetId:dec,revision:d.revision,performedOn:today,meterReading:100,nextServiceMeter:100.01,note:'cents serviced',clientRequestId:stamp()}),200);
+  d=await asset(dec);assert.equal(Number(d.current_meter),100);assert.equal(Number(d.next_service_meter),100.01);assert.equal(d.service.overdue,false,'a serviced asset is not immediately overdue by rounding');
+  // Per-asset, paginated history: older than 1,000 events on other assets still shows, and "no history" is never inferred from omission.
+  const flood=1005,floodRows=Array.from({length:flood},(_,i)=>[crypto.randomUUID(),orgId,roller.id,'completed',A.user.id,new Date(Date.parse('2031-01-01T00:00:00Z')+i*1000).toISOString(),i+1]);
+  await db.query('INSERT INTO asset_service_events (id,organisation_id,asset_id,kind,actor_id,recorded_at,asset_revision) VALUES ?',[floodRows]);
+  const hist=async(id,qs='',c=A.cookie)=>call('/api/workshop?assetId='+id+qs,'GET',undefined,c);
+  const wholeWa=await json(await hist(wa.id,'&limit=100'),200);assert.equal(wholeWa.nextCursor,null);assert.equal(wholeWa.events.length,await count('asset_service_events','asset_id=?',[wa.id]),"every event of the older asset is shown although "+flood+" newer events exist on another asset");
+  assert(wholeWa.events.some(e=>e.kind==='plan_set'),'the oldest event is present');assert(wholeWa.events.every(e=>e.asset_id===wa.id),'only this asset');
+  const seen=[];let cursor=null,pages=0;do{const pg=await json(await hist(roller.id,'&limit=100'+(cursor?'&cursor='+encodeURIComponent(cursor):'')),200);assert(pg.events.length<=100);seen.push(...pg.events);cursor=pg.nextCursor;pages++;}while(cursor);
+  assert.equal(seen.length,flood);assert.equal(new Set(seen.map(e=>e.id)).size,flood,'no duplicates across pages');assert.equal(pages,11);
+  assert.deepEqual(seen.map(e=>e.recorded_at),[...seen.map(e=>e.recorded_at)].sort().reverse(),'newest first across pages');
+  const small=await json(await hist(roller.id,'&limit=5'),200);assert.equal(small.events.length,5);assert(small.nextCursor);
+  const clamped=await json(await hist(roller.id,'&limit=100000'),200);assert.equal(clamped.events.length,100,'limit is capped');
+  await json(await hist(roller.id,'&cursor=not-a-cursor'),400,'invalid cursor');await json(await hist('missing-asset'),404,'unknown asset');
+  await json(await hist(wa.id,'&limit=100',B.cookie),404,"another organisation cannot read this asset's history");
+  const F2=await signup('workshop-field');await db.execute("UPDATE users SET organisation_id=?,role='field' WHERE id=?",[orgId,F2.user.id]);await json(await hist(wa.id,'',F2.cookie),403,'a role without workshop.view');
+  const bare=(await json(await workshop({action:'asset',name:'QA Bare',number:'QA-B1',category:'Trailer',registration:'BARE1'}),200));const emptyAsset=await json(await hist(bare.id,'&limit=20'),200);assert.deepEqual(emptyAsset,{events:[],nextCursor:null},'an asset with no history is reported empty by an actual empty first page');
+  assert(!('services' in await workshopGet()),'the overview no longer carries an organisation-wide history slice');
   console.log('PASS workshop service plan: readings never change the plan, completed service vs administrator correction, atomic/idempotent/concurrent recording, organisation time zone, warnings by shift date, safety hold preserved, no bypass through other write paths');
  }
  const wo2=await json(await workshop({action:'defect',assetId:wa.id,title:'Second critical fault',severity:'critical',note:'Independent second fault'}),200);

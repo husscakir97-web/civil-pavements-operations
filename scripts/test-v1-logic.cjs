@@ -352,6 +352,15 @@ const codes=c=>c.map(x=>`${x.code}:${x.severity}`).sort();
  assert.equal(SP.serviceStatus({currentMeter:null,nextServiceMeter:250},null).overdue,false,'no reading, no claim');
  assert.equal(SP.serviceStatus({nextServiceDate:'2026-03-10'},null).datePassed,false,'no date to judge against');
  assert(SP.isDateOnly('2026-02-28')&&!SP.isDateOnly('2026-02-30')&&!SP.isDateOnly('2026-3-1')&&!SP.isDateOnly(null));
+ // Impossible dates are a validation failure, never an exception (new Date('2026-13-45').toISOString() would throw RangeError).
+ for(const bad of ['2026-13-01','2026-00-10','2026-01-00','2026-01-32','2026-04-31','2026-06-31','2026-02-29','2100-02-29','2026-99-99','0000-00-00','abcd-ef-gh','2026-1-01','','2026-12-31T00:00:00Z']){assert.doesNotThrow(()=>SP.isDateOnly(bad),'no throw for '+bad);assert.equal(SP.isDateOnly(bad),false,bad);}
+ for(const good of ['2024-02-29','2000-02-29','2026-12-31','2026-01-01','2026-04-30'])assert.equal(SP.isDateOnly(good),true,good);
+ assert.equal(SP.isDateOnly('2023-02-29'),false,'not a leap year');assert.equal(SP.isDateOnly('1900-02-29'),false,'century non-leap');assert.equal(SP.isDateOnly('2000-02-29'),true,'400-year leap');
+ for(const bad of ['2026-13-45',undefined,null,20260101,{}]){assert.equal(SP.serviceStatus({nextServiceDate:bad},'2026-03-10').datePassed,false,'an invalid stored date is never judged');}
+ assert.equal(SP.serviceStatus({nextServiceDate:'2026-03-10'},'2026-13-45').datePassed,false,'an invalid shift date is never judged');
+ // DECIMAL(15,2): at most two decimal places, so distinct values can never be stored as equal.
+ for(const ok of [0,100,100.5,100.25,0.01,123456789012.34,1e12])assert.equal(SP.isMeterValue(ok),true,String(ok));
+ for(const bad of [100.001,100.005,0.001,0.1+0.2,NaN,Infinity,'100',null,undefined])assert.equal(SP.isMeterValue(bad),false,String(bad));
  // organisation time zone decides the calendar date (an instant that is still 1 Oct in UTC is already 2 Oct in Sydney)
  assert.equal(SP.dateIn('Australia/Sydney','2026-10-01T14:30:00Z'),'2026-10-02');assert.equal(SP.dateIn('America/Los_Angeles','2026-10-01T05:30:00Z'),'2026-09-30');assert.equal(SP.dateIn('Not/AZone','2026-10-01T14:30:00Z'),'2026-10-02','invalid zone falls back to the default');
  assert(SP.isTimeZone('Pacific/Kiritimati')&&!SP.isTimeZone('nope')&&!SP.isTimeZone(''));

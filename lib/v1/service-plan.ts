@@ -7,7 +7,15 @@ export const DEFAULT_TIME_ZONE='Australia/Sydney';
 export type ServicePlan={meterType?:string|null;currentMeter?:number|null;nextServiceMeter?:number|null;nextServiceDate?:string|null};
 export type ServiceStatus={overdue:boolean;meterReached:boolean;datePassed:boolean};
 
-export const isDateOnly=(v:unknown):v is string=>typeof v==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(v)&&new Date(v+'T00:00:00Z').toISOString().slice(0,10)===v;
+export const isDateOnly=(v:unknown):v is string=>{
+ if(typeof v!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(v))return false;
+ const t=new Date(v+'T00:00:00Z').getTime();
+ // An impossible date (month 13, 30 Feb) parses to NaN or rolls over; toISOString on NaN would throw, so check first.
+ return Number.isFinite(t)&&new Date(t).toISOString().slice(0,10)===v;
+};
+/** Meter readings and thresholds are stored as DECIMAL(15,2): at most two decimal places, so two values that differ can never be stored as equal. */
+export const isMeterValue=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v)&&Number(v.toFixed(2))===v;
+export const METER_PRECISION_MESSAGE='Use at most 2 decimal places.';
 export const isTimeZone=(tz:unknown):tz is string=>{if(typeof tz!=='string'||!tz)return false;try{new Intl.DateTimeFormat('en-CA',{timeZone:tz}).format(new Date());return true;}catch{return false;}};
 /** The calendar date (YYYY-MM-DD) of an instant in an organisation's time zone. All date-only comparisons use this, never the server's zone. */
 export const dateIn=(timeZone:string,when:Date|string|number=new Date())=>new Intl.DateTimeFormat('en-CA',{timeZone:isTimeZone(timeZone)?timeZone:DEFAULT_TIME_ZONE,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(when));

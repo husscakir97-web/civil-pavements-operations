@@ -41,8 +41,9 @@ export async function idempotent<T>(kind:string,clientRequestId:string|null|unde
    return {result,replay:false};
   });
  }catch(e){
-  // Two deliveries of the same request raced: the loser rolled back; return the winner's result.
-  if((e as {code?:string})?.code==='ER_DUP_ENTRY'){const previous=await stored<T>(clientRequestId,kind,print);if(previous)return previous;}
+  // Two deliveries of the same request raced: the loser rolled back; return the winner's result. A loser blocked on a row lock
+  // wakes to a stale-revision conflict (409) after the winner committed: that is the same request, so replay the stored result.
+  if((e as {code?:string})?.code==='ER_DUP_ENTRY'||(e as {status?:number})?.status===409){const previous=await stored<T>(clientRequestId,kind,print);if(previous)return previous;}
   throw e;
  }
 }

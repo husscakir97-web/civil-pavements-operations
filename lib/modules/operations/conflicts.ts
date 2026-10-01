@@ -6,11 +6,12 @@
 // Severity: `block` conflicts stop a shift being saved as Planned / Ready / In Progress;
 // Draft shifts may be saved with blocks shown. `warn` conflicts never block.
 import type {Database} from '@/lib/platform/database';
+import {serviceStatus,dateIn,isTimeZone,DEFAULT_TIME_ZONE,type ServicePlan} from '@/lib/v1/service-plan';
 import {mapWorker,mapPlant,parseMeta,splitCompetencies,isActiveStatus,RESOURCE_CATEGORIES,type LegacyRow} from '@/lib/v1/resource-mapping';
 
 export type Severity='block'|'warn';
 export type Conflict={code:string;severity:Severity;resourceId?:string;message:string};
-export type ResourceInfo={id:string;type:string;name:string;status:string;active:boolean;complianceExpiry?:string|null;competencies?:Array<{type:string;expiryDate:string|null;status:string}>};
+export type ResourceInfo={id:string;type:string;name:string;status:string;active:boolean;complianceExpiry?:string|null;service?:ServicePlan;competencies?:Array<{type:string;expiryDate:string|null;status:string}>};
 export type ShiftWindow={id:string;name:string;status:string;date:string|null;start:string|null;finish:string|null;assignments:Array<{resourceType:string;resourceId:string}>};
 export type ShiftInput=ShiftWindow&{requiredCompetencies:string[];assignmentNames?:Record<string,string>};
 
@@ -26,7 +27,9 @@ export function window(s:{date:string|null;start:string|null;finish:string|null}
  return [start,finish];
 }
 
-export function evaluateShift(shift:ShiftInput,resources:Map<string,ResourceInfo>,others:ShiftWindow[]):Conflict[]{
+/** `today` is the organisation's local date; it is used only when the shift has no date of its own. */
+export type EvaluationContext={today?:string|null};
+export function evaluateShift(shift:ShiftInput,resources:Map<string,ResourceInfo>,others:ShiftWindow[],context:EvaluationContext={}):Conflict[]{
  if(IGNORED_STATUSES.includes(shift.status))return [];
  const out:Conflict[]=[];
  const w=window(shift),date=shift.date||'';
@@ -50,6 +53,13 @@ export function evaluateShift(shift:ShiftInput,resources:Map<string,ResourceInfo
   if(r.type==='plant'){
    if(!r.complianceExpiry)out.push({code:'PLANT_COMPLIANCE_UNKNOWN',severity:'warn',resourceId:r.id,message:`${label}: registration / compliance expiry not recorded.`});
    else if(date&&r.complianceExpiry<date)out.push({code:'PLANT_COMPLIANCE_EXPIRED',severity:'block',resourceId:r.id,message:`${label}: compliance expired ${r.complianceExpiry}.`});
+   // Service due is a WARNING (never a block): it does not assert the asset is unsafe. The date check uses the scheduled shift date,
+   // so a booking after the service deadline is flagged in advance; critical defects remain hard blocks through the safety hold.
+   if(r.service){
+    const onDate=date||context.today||null,st=serviceStatus(r.service,onDate);
+    if(st.datePassed)out.push({code:'PLANT_SERVICE_OVERDUE',severity:'warn',resourceId:r.id,message:`${label}: service is due by ${r.service.nextServiceDate}, before this booking on ${onDate}. Record the completed service or choose other plant.`});
+    else if(st.meterReached)out.push({code:'PLANT_SERVICE_OVERDUE',severity:'warn',resourceId:r.id,message:`${label}: next service at ${r.service.nextServiceMeter} ${r.service.meterType||''} has been reached (latest reading ${r.service.currentMeter}).`.replace('  ',' ')});
+   }
   }
   if(w&&(a.resourceType==='worker'||a.resourceType==='plant')){
    for(const o of others){
@@ -67,16 +77,16 @@ export function evaluateShift(shift:ShiftInput,resources:Map<string,ResourceInfo
 
 /** Availability of candidate resources for a shift window, before anything is saved: the same
  * engine evaluates a trial shift holding every candidate, grouped per resource. Read-only. */
-export function availability(shift:ShiftInput,candidates:Array<{resourceType:string;resourceId:string}>,resources:Map<string,ResourceInfo>,others:ShiftWindow[]):Record<string,Conflict[]>{
+export function availability(shift:ShiftInput,candidates:Array<{resourceType:string;resourceId:string}>,resources:Map<string,ResourceInfo>,others:ShiftWindow[],context:EvaluationContext={}):Record<string,Conflict[]>{
  const trial:ShiftInput={...shift,assignments:candidates};
  const out:Record<string,Conflict[]>=Object.fromEntries(candidates.map(c=>[c.resourceId,[]]));
- for(const c of evaluateShift(trial,resources,others))if(c.resourceId&&out[c.resourceId])out[c.resourceId].push(c);
+ for(const c of evaluateShift(trial,resources,others,context))if(c.resourceId&&out[c.resourceId])out[c.resourceId].push(c);
  return out;
 }
 
 export const blocking=(status:string,conflicts:Conflict[])=>ENFORCED_STATUSES.includes(status)?conflicts.filter(c=>c.severity==='block'):[];
 
-type Legacy=LegacyRow&{safety_hold?:number;active?:number|null;legacy_synced_at?:string|null;compliance_expiry?:string|null};
+type Legacy=LegacyRow&{current_meter?:string|number|null;meter_type?:string|null;next_service_meter?:string|number|null;next_service_date?:string|null;safety_hold?:number;active?:number|null;legacy_synced_at?:string|null;compliance_expiry?:string|null};
 /** Loads the resources referenced by `ids` (typed where synced, mapped where not). Portable SQL. */
 export async function loadResources(db:Database,org:string,ids:Array<{resourceType:string;resourceId:string}>){
  const out=new Map<string,ResourceInfo>();
@@ -99,6 +109,7 @@ export async function loadResources(db:Database,org:string,ids:Array<{resourceTy
     if(Number(r.safety_hold))info.status='Out of service';
     if(r.legacy_synced_at){info.active=Boolean(Number(r.active))&&info.active;info.complianceExpiry=r.compliance_expiry??null;}
     else info.complianceExpiry=mapPlant(r).columns.compliance_expiry;
+    info.service={meterType:r.meter_type??null,currentMeter:r.current_meter==null?null:Number(r.current_meter),nextServiceMeter:r.next_service_meter==null?null:Number(r.next_service_meter),nextServiceDate:r.next_service_date??null};
    }
    out.set(`${type}:${r.id}`,info);
   }
@@ -121,4 +132,11 @@ export async function loadNearbyShifts(db:Database,org:string,date:string|null):
  const day=Date.parse(`${date}T00:00:00Z`),iso=(d:number)=>new Date(d).toISOString().slice(0,10);
  const rows=(await db.prepare("SELECT id,name,status,metadata FROM shifts WHERE organisation_id=? AND (shift_date IN (?,?,?) OR (shift_date IS NULL AND legacy_synced_at IS NULL))").bind(org,iso(day-86400000),date,iso(day+86400000)).all<LegacyRow>()).results;
  return rows.map(shiftInput).filter(s=>s.date&&Math.abs(Date.parse(`${s.date}T00:00:00Z`)-day)<=86400000);
+}
+
+/** The organisation's local date for date-only comparisons (its configured time zone, else the default). */
+export async function organisationToday(db:Database,org:string,when=new Date()){
+ let zone=DEFAULT_TIME_ZONE;
+ try{const row=await db.prepare('SELECT timezone FROM organisation_profiles WHERE organisation_id=?').bind(org).first<{timezone:string|null}>();if(isTimeZone(row?.timezone))zone=row!.timezone!;}catch{/* legacy schemas without the column */}
+ return dateIn(zone,when);
 }

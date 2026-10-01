@@ -9,7 +9,7 @@ import { imsBlockers } from '@/lib/ims-readiness';
 import { requireActor } from '@/lib/authz';
 import { currentOrganisationId, currentOrganisationId as ORG, requireEstimateDb, safeJson, jsonError } from '@/lib/estimates-db';
 import { CHECKS, SHIFT_STATUSES, mergeJob, shiftWarnings, type DeliveryRecord, type Meta } from '@/lib/planning';
-import { evaluateShift, availability, blocking, loadResources, loadNearbyShifts, shiftInput, type Conflict } from '@/lib/modules/operations/conflicts';
+import { evaluateShift, availability, blocking, loadResources, loadNearbyShifts, shiftInput, organisationToday, type Conflict } from '@/lib/modules/operations/conflicts';
 import { RESOURCE_CATEGORIES } from '@/lib/v1/resource-mapping';
 import { shiftStatements } from '@/lib/v1/resource-sync';
 import { projectScope } from '@/lib/platform/project-access';
@@ -60,7 +60,8 @@ async function handlePOST(request:Request) {
       const candidates=(Array.isArray(body.candidates)?body.candidates:[]).slice(0,300).map(c=>({resourceType:(RESOURCE_CATEGORIES as Record<string,string>)[String(c.category)]||String(c.category),resourceId:String(c.resourceId||'')})).filter(c=>c.resourceId);
       const resources=await loadResources(db,ORG(),[...input.assignments,...candidates]);
       const others=await loadNearbyShifts(db,ORG(),input.date);
-      return Response.json({conflicts:evaluateShift(input,resources,others),availability:availability(input,candidates,resources,others)},{headers:{'Cache-Control':'private, no-store'}});
+      const today=await organisationToday(db,ORG());
+      return Response.json({conflicts:evaluateShift(input,resources,others,{today}),availability:availability(input,candidates,resources,others,{today})},{headers:{'Cache-Control':'private, no-store'}});
     }
     if (!record?.name?.trim()) return jsonError('Name is required.');
     const existing=record.id ? (await load(db,body.kind)).find(r=>r.id===record.id) : undefined;
@@ -123,7 +124,7 @@ async function handlePOST(request:Request) {
       // Deterministic conflict engine over typed resources (double-booking, inactive,
       // competencies, plant compliance). Blocks apply to Planned / Ready / In Progress.
       const input=shiftInput({...saved,metadata});
-      conflicts=evaluateShift(input,await loadResources(db,ORG(),input.assignments),await loadNearbyShifts(db,ORG(),input.date));
+      conflicts=evaluateShift(input,await loadResources(db,ORG(),input.assignments),await loadNearbyShifts(db,ORG(),input.date),{today:await organisationToday(db,ORG())});
       if(metadata.requirements!==undefined){
         const parsed=requirementsInput.safeParse(metadata.requirements);
         if(!parsed.success)return jsonError('Check resource requirements: choose a category and positive whole quantity.');

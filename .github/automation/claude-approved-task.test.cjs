@@ -7,7 +7,8 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { REPO, FINISH, issueHash, validateTask, approval, gate, checkTool, collectChanges,
   dockerArgs, runChecks, publish, finish, EXPECTED_ASSERTION, appendAudit, readAudit,
-  auditReport, verifyCompletion, preflight } = require('./claude-approved-task.cjs');
+  auditReport, verifyCompletion, preflight, NEGATIVE_TARGET, NEGATIVE_COMMAND, ACCEPTANCE_SEQUENCE,
+  isAcceptanceTask, writeNegativeFixture, acceptanceExpectations, approvedComment } = require('./claude-approved-task.cjs');
 
 test('preflight exercises real CLI paths and rejects missing interpreter or helper', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-preflight-'));
@@ -37,7 +38,7 @@ test('workflow and inert template use the same fixed executable and preflight be
     assert.match(yaml, /node_binary=.*realpath/);
     assert.match(yaml, /ln -s "\$node_binary" \/tmp\/claude-approved\/node/);
     assert.ok(yaml.indexOf('claude-approved-task.cjs preflight') < yaml.indexOf('uses: anthropics/'));
-    const modes = file.endsWith('.disabled') ? ['hook', 'finish'] : ['hook', 'finish', 'audit-export', 'verify-completion'];
+    const modes = file.endsWith('.disabled') ? ['hook', 'finish', 'negative-fixture'] : ['hook', 'finish', 'negative-fixture', 'audit-export', 'verify-completion'];
     for (const mode of modes)
       assert.ok(yaml.includes('/tmp/claude-approved/node /tmp/claude-approved/claude-approved-task.cjs ' + mode));
   }
@@ -73,25 +74,25 @@ const body = '\x60\x60\x60json\n' + JSON.stringify(task) + '\n\x60\x60\x60';
 const issue = { number: 4, title: '[claude-task] Correction', body, updated_at: '2026-09-30T10:00:00Z', state: 'open' };
 const state = { number: 4, approvedHash: issueHash(issue), actor: 'husscakir97-web', task,
   base: 'a'.repeat(40), branch: 'claude/task-4-' + issueHash(issue).slice(0, 16) };
-function mock() {
+function mock(taskIssue = issue, taskState = state, commitSha = 'commit') {
   const calls = [];
   let branch = null, pr = null, failPR = false;
   const api = async (method, suffix, data) => {
     calls.push({ method, suffix, data });
-    if (suffix === '/issues/4') return { ...issue };
-    if (suffix === '/branches/main') return { commit: { sha: state.base } };
-    if (suffix === '/git/commits/' + state.base) return { tree: { sha: 'base-tree' } };
+    if (suffix === '/issues/4') return { ...taskIssue };
+    if (suffix === '/branches/main') return { commit: { sha: taskState.base } };
+    if (suffix === '/git/commits/' + taskState.base) return { tree: { sha: 'base-tree' } };
     if (suffix === '/git/trees') return { sha: 'new-tree' };
-    if (suffix === '/git/commits' && method === 'POST') return { sha: 'commit' };
+    if (suffix === '/git/commits' && method === 'POST') return { sha: commitSha };
     if (suffix.startsWith('/git/ref/')) { if (branch) return branch; throw Object.assign(new Error('Missing'), { status: 404 }); }
     if (suffix === '/git/refs') { branch = { object: { sha: data.sha } }; return branch; }
-    if (suffix === '/git/commits/commit') return { tree: { sha: 'new-tree' },
-      parents: [{ sha: state.base }], message: '[claude-task] #4 ' + state.approvedHash };
+    if (suffix === '/git/commits/' + commitSha) return { tree: { sha: 'new-tree' },
+      parents: [{ sha: taskState.base }], message: '[claude-task] #4 ' + taskState.approvedHash };
     if (suffix.startsWith('/pulls?')) return pr ? [pr] : [];
     if (suffix === '/pulls' && method === 'POST') {
       if (failPR) throw new Error('Transient PR failure');
       pr = { number: 7, state: 'open', draft: true, base: { ref: 'main' },
-        head: { sha: 'commit', repo: { full_name: REPO } }, html_url: 'https://github.com/' + REPO + '/pull/7' };
+        head: { sha: commitSha, repo: { full_name: REPO } }, html_url: 'https://github.com/' + REPO + '/pull/7' };
       return pr;
     }
     throw new Error('Unexpected route: ' + method + ' ' + suffix);
@@ -410,4 +411,288 @@ test('completion rejects empty/skipped conclusions, missing receipts, failed out
   assert.throws(() => verifyCompletion('success', 'success', { ...report, publication: null }));
   assert.throws(() => verifyCompletion('success', 'success', { ...report, events: [] }));
   assert.throws(() => verifyCompletion('success', 'success', { ...report, publication: { ...receipt, secret: 'private' } }));
+});
+
+// ---- Strict acceptance sequence correction ---------------------------------------------------------------
+const crypto = require('node:crypto');
+const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
+const acceptanceTask = { summary: 'Verify scoped draft publication', request: 'Acceptance sequence',
+  acceptance: 'Inspect the audit receipt: scope_denied_probe, checks_started then checks_failed_expected_assertion ...',
+  acceptance_comment: '// Planning regression suite: exercises estimate approval, award, and shift readiness.',
+  allowed_paths: [NEGATIVE_TARGET] };
+const acceptanceIssue = { number: 4, title: '[claude-task] Acceptance', updated_at: '2026-09-30T10:00:00Z', state: 'open',
+  body: '\x60\x60\x60json\n' + JSON.stringify(acceptanceTask) + '\n\x60\x60\x60' };
+const acceptanceState = { number: 4, approvedHash: issueHash(acceptanceIssue), actor: 'husscakir97-web', task: acceptanceTask,
+  base: 'a'.repeat(40), branch: 'claude/task-4-' + issueHash(acceptanceIssue).slice(0, 16) };
+const ORIGINAL = '// Original planning suite\nmodule.exports = 1;\n';
+const COMMENT = '// Planning regression suite: exercises estimate approval, award, and shift readiness.\n';
+function acceptanceFixture(original = ORIGINAL) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-acceptance-'));
+  const git = args => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
+  fs.mkdirSync(path.join(root, 'scripts'));
+  fs.writeFileSync(path.join(root, NEGATIVE_TARGET), original);
+  git(['init', '-q']); git(['add', '-A']);
+  git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base']);
+  return { ...acceptanceState, root, tracked: [NEGATIVE_TARGET] };
+}
+const digestOf = content => sha256(JSON.stringify([{ path: NEGATIVE_TARGET, mode: '100644', type: 'blob', content }]));
+const receiptFor = () => ({ url: 'https://github.com/' + REPO + '/pull/7', sha: 'c'.repeat(40) });
+const goodReport = (negative, final) => {
+  const receipt = receiptFor();
+  return { publication: receipt, events: [{ event: 'scope_denied_probe', digest: null },
+    { event: 'checks_started', digest: negative }, { event: 'checks_failed_expected_assertion', digest: negative },
+    { event: 'checks_started', digest: final }, { event: 'checks_passed', digest: final },
+    { event: 'published', digest: sha256(JSON.stringify(receipt)) }] };
+};
+
+test('acceptance tasks are identified explicitly or by the receipt named in issue 48; ordinary tasks are not', () => {
+  assert.equal(isAcceptanceTask(acceptanceTask), true);
+  assert.equal(isAcceptanceTask({ ...task, acceptance_sequence: true }), true);
+  assert.equal(isAcceptanceTask(task), false);
+  assert.doesNotThrow(() => validateTask('\x60\x60\x60json\n' + JSON.stringify({ ...task, acceptance_sequence: true }) + '\n\x60\x60\x60'));
+  assert.throws(() => validateTask('\x60\x60\x60json\n' + JSON.stringify({ ...task, acceptance_sequence: 'yes' }) + '\n\x60\x60\x60'));
+});
+
+test('negative fixture is generated from EXPECTED_ASSERTION including its newline, once, after the confirmed probe denial', () => {
+  assert.ok(EXPECTED_ASSERTION.endsWith(';\n'));
+  const s = acceptanceFixture(); const file = path.join(s.root, NEGATIVE_TARGET);
+  const trusted = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-trusted-'));
+  try {
+    const probe = [{ event: 'scope_denied_probe', digest: null }];
+    for (const events of [[], [{ event: 'scope_denied', digest: null }], [...probe, ...probe], [...probe, { event: 'checks_started', digest: 'b'.repeat(64) }]])
+      assert.throws(() => writeNegativeFixture(s, events, trusted), /Negative fixture/);
+    assert.equal(fs.readFileSync(file, 'utf8'), ORIGINAL, 'nothing written before the denial evidence');
+    assert.throws(() => writeNegativeFixture({ ...s, task: task }, probe, trusted), /not available/);
+    assert.equal(fs.existsSync(path.join(trusted, 'negative-fixture.used')), false, 'rejections never consume the one use');
+    writeNegativeFixture(s, probe, trusted);
+    assert.equal(fs.readFileSync(file, 'utf8'), EXPECTED_ASSERTION + ORIGINAL);
+    assert.ok(fs.readFileSync(file, 'utf8').startsWith(EXPECTED_ASSERTION));
+    assert.throws(() => writeNegativeFixture(s, probe, trusted), /untouched/, 'cannot run twice on the modified file');
+    fs.writeFileSync(file, ORIGINAL); // restoring the original must NOT re-arm it
+    assert.throws(() => writeNegativeFixture(s, probe, trusted), error => error.code === 'EEXIST');
+    assert.equal(fs.readFileSync(file, 'utf8'), ORIGINAL, 'second use wrote nothing');
+    fs.writeFileSync(file, EXPECTED_ASSERTION + ORIGINAL);
+    assert.equal(acceptanceExpectations(s).negativeDigest, digestOf(EXPECTED_ASSERTION + ORIGINAL));
+    assert.equal(acceptanceExpectations(s).negativeDigest, sha256(JSON.stringify(collectChanges(s))), 'matches what finish digests');
+  } finally { fs.rmSync(s.root, { recursive: true, force: true }); fs.rmSync(trusted, { recursive: true, force: true }); }
+});
+
+test('hook permits only the exact finish and negative-fixture commands, in the foreground', () => {
+  const bash = (command, extra = {}) => ({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command, ...extra } });
+  assert.doesNotThrow(() => checkTool(bash(NEGATIVE_COMMAND), acceptanceState));
+  assert.doesNotThrow(() => checkTool(bash(FINISH), acceptanceState));
+  for (const command of [NEGATIVE_COMMAND + ' extra', NEGATIVE_COMMAND + '; echo x', NEGATIVE_COMMAND.replace('negative-fixture', 'hook'),
+    'node ' + NEGATIVE_COMMAND.split(' ').slice(1).join(' '), NEGATIVE_COMMAND.replace('/tmp/claude-approved/node', '/usr/bin/node'), 'cat scripts/test-planning.cjs'])
+    assert.throws(() => checkTool(bash(command), acceptanceState), command);
+  assert.throws(() => checkTool(bash(NEGATIVE_COMMAND, { run_in_background: true }), acceptanceState));
+  assert.throws(() => checkTool(bash(NEGATIVE_COMMAND, { timeout: 600001 }), acceptanceState));
+});
+
+test('completion accepts the complete acceptance sequence and rejects missing, extra or mismatched evidence', () => {
+  const negative = digestOf(EXPECTED_ASSERTION + ORIGINAL), final = digestOf(COMMENT + ORIGINAL);
+  const expected = { negativeDigest: negative, finalDigest: final };
+  const good = goodReport(negative, final);
+  verifyCompletion('success', 'success', good, expected);
+  const reject = (label, report, exp = expected) => assert.throws(() => verifyCompletion('success', 'success', report, exp), /acceptance evidence/, label);
+  // The run that was green but not acceptable: final events fine, earlier phases absent or wrong.
+  reject('only the last two events', { ...good, events: good.events.slice(-2) });
+  reject('no probe denial', { ...good, events: good.events.slice(1) });
+  reject('negative phase missing', { ...good, events: [good.events[0], ...good.events.slice(3)] });
+  reject('no failed phase', { ...good, events: good.events.filter((_, i) => i !== 2) });
+  reject('missing-newline counterexample audited as an ordinary failure', { ...good, events: good.events.map((e, i) => i === 2 ? { ...e, event: 'checks_failed' } : e) });
+  reject('missing-newline negative digest', goodReport(digestOf(EXPECTED_ASSERTION.trimEnd() + ORIGINAL), final));
+  reject('extra event', { ...good, events: [...good.events, { event: 'checks_passed', digest: final }] });
+  reject('extra denial', { ...good, events: [{ event: 'scope_denied', digest: null }, ...good.events] });
+  reject('wrong order', { ...good, events: [good.events[0], good.events[3], good.events[4], good.events[1], good.events[2], good.events[5]] });
+  reject('negative start/fail digests differ', { ...good, events: good.events.map((e, i) => i === 2 ? { ...e, digest: final } : e) });
+  reject('passed digest differs from started', { ...good, events: good.events.map((e, i) => i === 4 ? { ...e, digest: 'd'.repeat(64) } : e) });
+  reject('final digest is not the final tree', goodReport(negative, 'd'.repeat(64)));
+  reject('same digest both phases', goodReport(negative, negative), { negativeDigest: negative, finalDigest: negative });
+  reject('probe carries a digest', { ...good, events: good.events.map((e, i) => i === 0 ? { ...e, digest: negative } : e) });
+  reject('published does not match the receipt', { ...good, events: good.events.map((e, i) => i === 5 ? { ...e, digest: negative } : e) });
+  reject('missing expectations', good, { negativeDigest: negative });
+  assert.throws(() => verifyCompletion('success', 'success', { ...good, publication: null }, expected));
+  assert.throws(() => verifyCompletion('success', '', good, expected));
+  // Ordinary tasks keep the existing final-event rule.
+  verifyCompletion('success', 'success', { publication: good.publication, events: good.events.slice(-2) });
+});
+
+test('verify-completion CLI recomputes both digests from the base file and the final tree, and fails closed', () => {
+  const s = acceptanceFixture(); const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-acceptance-cli-'));
+  try {
+    const helper = path.join(dir, 'claude-approved-task.cjs');
+    fs.copyFileSync(path.join(__dirname, 'claude-approved-task.cjs'), helper);
+    fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(s));
+    const run = () => execFileSync(process.execPath, [helper, 'verify-completion'], { stdio: 'pipe', env: { CLAUDE_STEP_OUTCOME: 'success', CLAUDE_STEP_CONCLUSION: 'success' } });
+    const negative = digestOf(EXPECTED_ASSERTION + ORIGINAL);
+    const final = acceptanceExpectations(s).finalDigest;
+    assert.equal(final, digestOf(COMMENT + ORIGINAL), 'expected final bytes = approved comment + committed baseline');
+    const report = goodReport(negative, final);
+    fs.writeFileSync(path.join(dir, 'published.json'), JSON.stringify(report.publication));
+    const write = events => fs.writeFileSync(path.join(dir, 'audit.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n');
+    write(report.events); run();
+    write(report.events.slice(-2)); assert.throws(run, error => error.status === 1);
+    write(goodReport(digestOf(EXPECTED_ASSERTION.trimEnd() + ORIGINAL), final).events); assert.throws(run, error => error.status === 1);
+    write(goodReport(negative, digestOf(COMMENT + ORIGINAL + '// extra\n')).events); assert.throws(run, error => error.status === 1, 'a different passing edit is not the approved comment + baseline');
+    fs.writeFileSync(path.join(s.root, NEGATIVE_TARGET), COMMENT + ORIGINAL + '// extra\n');
+    write(report.events); run(); // expected digests never come from the candidate's current tree
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(s.root, { recursive: true, force: true }); }
+});
+
+
+// finish() validates the whole acceptance history and the independently expected bytes BEFORE any publishing API call.
+async function acceptanceScenario(steps) {
+  const s = acceptanceFixture(), trusted = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-scenario-'));
+  const m = mock(acceptanceIssue, acceptanceState, 'c'.repeat(40)), file = path.join(s.root, NEGATIVE_TARGET);
+  const audit = (event, digest) => appendAudit(trusted, event, digest), history = () => readAudit(trusted);
+  const ctx = { s, file, trusted, m, audit, history,
+    fixture: () => writeNegativeFixture(s, history(), trusted),
+    expectedFailure: () => finish(m.api, s, () => { throw Object.assign(new Error('x'), { expectedAssertion: true }); }, audit, history),
+    ordinaryFailure: () => finish(m.api, s, () => { throw Object.assign(new Error('x'), { expectedAssertion: false }); }, audit, history),
+    passing: () => finish(m.api, s, () => {}, audit, history) };
+  try { return { error: await steps(ctx).then(() => null, e => e), ctx, calls: m.calls, events: history() }; }
+  finally { fs.rmSync(s.root, { recursive: true, force: true }); fs.rmSync(trusted, { recursive: true, force: true }); }
+}
+const publishingCalls = calls => calls.filter(c => !(c.method === 'GET' && c.suffix === '/issues/4'));
+const rejectedScenarios = {
+  'no probe, no negative phase, otherwise correct final edit': async c => { fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'negative phase skipped after the probe': async c => { c.audit('scope_denied_probe'); fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'negative phase ended in an ordinary failure': async c => { c.audit('scope_denied_probe'); c.fixture(); await assert.rejects(c.ordinaryFailure()); fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'missing-newline counterexample audited as an ordinary failure': async c => {
+    c.audit('scope_denied_probe'); fs.writeFileSync(c.file, EXPECTED_ASSERTION.trimEnd() + ORIGINAL);
+    await assert.rejects(c.ordinaryFailure()); fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'a different expected-failure source than the generated fixture': async c => {
+    c.audit('scope_denied_probe'); fs.writeFileSync(c.file, EXPECTED_ASSERTION + EXPECTED_ASSERTION + ORIGINAL);
+    await assert.rejects(c.expectedFailure()); fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'extra earlier denial event': async c => { c.audit('scope_denied'); c.audit('scope_denied_probe'); assert.throws(() => c.fixture(), /confirmed probe/); fs.writeFileSync(c.file, EXPECTED_ASSERTION + ORIGINAL); await assert.rejects(c.expectedFailure()); fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'reordered history': async c => {
+    const negative = digestOf(EXPECTED_ASSERTION + ORIGINAL), final = digestOf(COMMENT + ORIGINAL);
+    for (const [event, digest] of [['scope_denied_probe', null], ['checks_started', final], ['checks_failed_expected_assertion', negative], ['checks_started', negative]]) c.audit(event, digest);
+    fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'repeated negative phase': async c => {
+    c.audit('scope_denied_probe'); c.fixture(); await assert.rejects(c.expectedFailure());
+    fs.writeFileSync(c.file, EXPECTED_ASSERTION + ORIGINAL); await assert.rejects(c.expectedFailure());
+    fs.writeFileSync(c.file, COMMENT + ORIGINAL); await c.passing(); },
+  'incorrect final edit: extra line after the approved comment': async c => {
+    c.audit('scope_denied_probe'); c.fixture(); await assert.rejects(c.expectedFailure()); fs.writeFileSync(c.file, COMMENT + ORIGINAL + '// extra\n'); await c.passing(); },
+  'incorrect final edit: different comment': async c => {
+    c.audit('scope_denied_probe'); c.fixture(); await assert.rejects(c.expectedFailure()); fs.writeFileSync(c.file, '// Some other comment.\n' + ORIGINAL); await c.passing(); },
+  'incorrect final edit: approved comment but baseline bytes changed': async c => {
+    c.audit('scope_denied_probe'); c.fixture(); await assert.rejects(c.expectedFailure()); fs.writeFileSync(c.file, COMMENT + ORIGINAL.replace('= 1', '= 2')); await c.passing(); },
+  'incorrect final edit: approved comment without its newline': async c => {
+    c.audit('scope_denied_probe'); c.fixture(); await assert.rejects(c.expectedFailure()); fs.writeFileSync(c.file, COMMENT.trimEnd() + ORIGINAL); await c.passing(); },
+  'incorrect final edit: original restored without the comment': async c => {
+    c.audit('scope_denied_probe'); c.fixture(); await assert.rejects(c.expectedFailure()); fs.writeFileSync(c.file, ORIGINAL + '// touched\n'); await c.passing(); },
+};
+for (const [label, steps] of Object.entries(rejectedScenarios)) {
+  test('finish() makes zero publication calls: ' + label, async () => {
+    const { error, calls, events } = await acceptanceScenario(steps);
+    assert.ok(error instanceof Error, 'must be rejected');
+    assert.match(error.message, /Incomplete or mismatched acceptance evidence|Isolated checks failed|No changes/, error.message);
+    assert.deepEqual(publishingCalls(calls), [], 'no branch, tree, commit, ref, pull-request or other publishing call');
+    assert.ok(!events.some(e => e.event === 'published'));
+  });
+}
+test('finish() requires the acceptance history callback and never publishes without it', async () => {
+  const s = acceptanceFixture(), m = mock(acceptanceIssue, acceptanceState, 'c'.repeat(40));
+  try {
+    fs.writeFileSync(path.join(s.root, NEGATIVE_TARGET), COMMENT + ORIGINAL);
+    await assert.rejects(finish(m.api, s, () => {}, () => {}), /history required/);
+    assert.deepEqual(m.calls, []);
+  } finally { fs.rmSync(s.root, { recursive: true, force: true }); }
+});
+test('finish() publishes the canonical complete acceptance sequence, then post-publication verification accepts it', async () => {
+  const { error, calls, events, ctx } = await acceptanceScenario(async c => {
+    c.audit('scope_denied_probe'); c.fixture();
+    await assert.rejects(c.expectedFailure(), /Isolated checks failed/);
+    assert.deepEqual(publishingCalls(c.m.calls), [], 'the expected failure makes zero publication calls');
+    fs.writeFileSync(c.file, COMMENT + ORIGINAL);
+    const pr = await c.passing();
+    c.receipt = { url: pr.html_url, sha: pr.head.sha };
+    c.expected = acceptanceExpectations(c.s);
+  });
+  assert.equal(error, null);
+  assert.deepEqual(events.map(e => e.event), ACCEPTANCE_SEQUENCE);
+  assert.ok(calls.some(c => c.method === 'POST' && c.suffix === '/pulls'));
+  verifyCompletion('success', 'success', { publication: ctx.receipt, events }, ctx.expected);
+});
+test('ordinary tasks still publish after passing checks without any acceptance history', async () => {
+  const s = fixture(), m = mock();
+  try {
+    fs.writeFileSync(path.join(s.root, 'components/example.tsx'), 'export default 2;');
+    const events = []; await finish(m.api, s, () => {}, (event, digest) => events.push({ event, digest }));
+    assert.deepEqual(events.map(e => e.event), ['checks_started', 'checks_passed', 'published']);
+  } finally { fs.rmSync(s.root, { recursive: true, force: true }); }
+});
+test('approved comment comes from the hash-bound task: explicit field, or the single issue-48 sentence; otherwise fail closed', () => {
+  assert.equal(approvedComment(acceptanceTask), COMMENT.trimEnd());
+  const legacy = { request: 'x. After the expected failure, remove only that temporary assertion and prepend exactly ' + COMMENT.trimEnd() + ' followed by a newline. Preserve every original byte.' };
+  assert.equal(approvedComment(legacy), COMMENT.trimEnd());
+  assert.throws(() => approvedComment({ request: 'no sentence' }), /identifiable/);
+  assert.throws(() => approvedComment({ request: legacy.request + ' ' + legacy.request }), /identifiable/);
+  assert.throws(() => validateTask('\x60\x60\x60json\n' + JSON.stringify({ ...task, acceptance_comment: 'not a comment' }) + '\n\x60\x60\x60'));
+});
+const dockerReady = () => {
+  if (process.platform !== 'linux' || (process.env.GITHUB_ACTIONS !== 'true' && process.env.CLAUDE_DOCKER_TESTS !== '1')) return false;
+  try { execFileSync('docker', ['info'], { stdio: 'pipe', timeout: 20000 }); return true; } catch { return false; }
+};
+test('Docker: real repository snapshot proves the expected failure makes zero publication calls, and the full sequence verifies', {
+  skip: !dockerReady(), timeout: 2400000
+}, async () => {
+  const repo = path.resolve(__dirname, '../..');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-acceptance-docker-'));
+  try {
+    // CLAUDE_TEST_IMAGE (a local immutable image ID with /deps/node_modules) lets a machine without npm registry access reuse a prebuilt image.
+    let image = process.env.CLAUDE_TEST_IMAGE;
+    if (!image) {
+      for (const p of ['package.json', 'package-lock.json']) fs.copyFileSync(path.join(repo, p), path.join(directory, p));
+      execFileSync('docker', ['pull', 'node:22-bookworm'], { stdio: 'pipe', timeout: 180000 });
+      const base = execFileSync('docker', ['image', 'inspect', 'node:22-bookworm', '--format', '{{index .RepoDigests 0}}'], { encoding: 'utf8' }).trim();
+      fs.writeFileSync(path.join(directory, 'Dockerfile'), 'FROM ' + base + '\nWORKDIR /deps\nCOPY package.json package-lock.json ./\nRUN npm ci --ignore-scripts --no-audit --no-fund\n');
+      execFileSync('docker', ['build', '--iidfile', path.join(directory, 'image-id'), directory], { stdio: 'pipe', timeout: 600000, maxBuffer: 8 * 1024 * 1024 });
+      image = fs.readFileSync(path.join(directory, 'image-id'), 'utf8').trim();
+    }
+    // Real tracked repository files, copied into a throwaway git checkout so the real tree is never edited.
+    const root = path.join(directory, 'snapshot'); fs.mkdirSync(root);
+    const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: repo, encoding: 'utf8' }).split('\0').filter(Boolean)
+      .filter(p => fs.existsSync(path.join(repo, p)));
+    for (const p of tracked) { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.copyFileSync(path.join(repo, p), path.join(root, p)); }
+    const git = args => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
+    git(['init', '-q']); git(['add', '-A']);
+    git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'snapshot']);
+    const s = { ...acceptanceState, root, tracked };
+    const target = path.join(root, NEGATIVE_TARGET), original = fs.readFileSync(target, 'utf8');
+    const checks = st => runChecks(st, execFileSync, image);
+    const attempt = async (label, prepare) => {
+      fs.writeFileSync(target, original);
+      const audit = fs.mkdtempSync(path.join(directory, 'audit-')), m = mock(acceptanceIssue, acceptanceState, 'c'.repeat(40));
+      appendAudit(audit, 'scope_denied_probe');
+      prepare(audit);
+      await assert.rejects(finish(m.api, s, checks, (event, digest) => appendAudit(audit, event, digest), () => readAudit(audit)), /Isolated checks failed/, label);
+      // Zero publication calls: only the approval read; no tree, commit, ref or pull request call of any kind.
+      assert.deepEqual(m.calls.filter(c => c.method !== 'GET' || !/^\/issues\/4$/.test(c.suffix)), [], label + ': publisher untouched');
+      return readAudit(audit);
+    };
+    // (a) deterministic negative fixture: expected assertion failure, audited as such.
+    const good = await attempt('expected failure', audit => writeNegativeFixture(s, readAudit(audit), audit));
+    assert.deepEqual(good.map(e => e.event), ['scope_denied_probe', 'checks_started', 'checks_failed_expected_assertion']);
+    assert.equal(good[1].digest, acceptanceExpectations(s).negativeDigest);
+    // (b) the missing-newline counterexample is NOT the expected failure.
+    const bad = await attempt('missing newline', () => fs.writeFileSync(target, EXPECTED_ASSERTION.trimEnd() + original));
+    assert.deepEqual(bad.map(e => e.event), ['scope_denied_probe', 'checks_started', 'checks_failed']);
+    // (c) corrected passing checks and checked publication through the recording publisher.
+    fs.writeFileSync(target, COMMENT + original);
+    const audit = fs.mkdtempSync(path.join(directory, 'audit-')), m = mock(acceptanceIssue, acceptanceState, 'c'.repeat(40));
+    for (const row of good) appendAudit(audit, row.event, row.digest);
+    const pr = await finish(m.api, s, checks, (event, digest) => appendAudit(audit, event, digest), () => readAudit(audit));
+    assert.ok(m.calls.some(c => c.suffix === '/pulls' && c.method === 'POST'));
+    const receipt = { url: pr.html_url, sha: pr.head.sha };
+    const report = { publication: receipt, events: readAudit(audit) };
+    const expected = acceptanceExpectations(s);
+    verifyCompletion('success', 'success', report, expected);
+    // Counterexample and incomplete sequences are rejected against the same real evidence.
+    assert.throws(() => verifyCompletion('success', 'success', { ...report, events: [...bad, ...report.events.slice(3)] }, expected), /acceptance evidence/);
+    assert.throws(() => verifyCompletion('success', 'success', { ...report, events: report.events.slice(-2) }, expected), /acceptance evidence/);
+    assert.throws(() => verifyCompletion('success', 'success', { ...report, events: report.events.filter(e => e.event !== 'checks_failed_expected_assertion') }, expected), /acceptance evidence/);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

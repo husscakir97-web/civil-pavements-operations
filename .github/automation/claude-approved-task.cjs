@@ -12,6 +12,10 @@ const FINISH = '/tmp/claude-approved/node ' + HELPER + ' finish';
 const GUARD_ERROR = 'Approved task guard failed. Check scope, current approval and deterministic checks.';
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const EXPECTED_ASSERTION = "require('node:assert/strict').fail('CLAUDE_ACCEPTANCE_EXPECTED_FAILURE');\n";
+const NEGATIVE_TARGET = 'scripts/test-planning.cjs';
+const NEGATIVE_COMMAND = '/tmp/claude-approved/node ' + HELPER + ' negative-fixture';
+const ACCEPTANCE_SEQUENCE = ['scope_denied_probe', 'checks_started', 'checks_failed_expected_assertion',
+  'checks_started', 'checks_passed', 'published'];
 const AUDIT_EVENTS = new Set(['scope_denied', 'scope_denied_probe', 'checks_started',
   'checks_failed', 'checks_failed_expected_assertion', 'checks_passed', 'published']);
 function readAudit(directory) {
@@ -41,12 +45,31 @@ function auditReport(directory, state) {
   return { schema: 1, issue_number: state.number, approval_hash: state.approvedHash, base_sha: state.base,
     events: readAudit(directory), publication: fs.existsSync(file) ? publicationReceipt(JSON.parse(fs.readFileSync(file, 'utf8'))) : null };
 }
-function verifyCompletion(outcome, conclusion, report) {
+// An acceptance task exercises the full denial -> expected failure -> corrected publication sequence.
+// It is declared with "acceptance_sequence": true, or (for tasks written before that field) by naming the
+// scope_denied_probe receipt in its acceptance text. Ordinary tasks are unaffected.
+function isAcceptanceTask(task) {
+  return Boolean(task) && (task.acceptance_sequence === true || /scope_denied_probe/.test(String(task.acceptance || '')));
+}
+const sha = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+function verifyCompletion(outcome, conclusion, report, acceptance) {
   if (outcome !== 'success' || conclusion !== 'success') throw new Error('Claude did not conclude successfully');
   const receipt = publicationReceipt(report.publication);
-  const last = report.events.slice(-2);
-  if (last.length !== 2 || last[0].event !== 'checks_passed' || last[1].event !== 'published' ||
-      last[1].digest !== hash(JSON.stringify(receipt))) throw new Error('Missing checked publication evidence');
+  const receiptDigest = hash(JSON.stringify(receipt));
+  if (acceptance === undefined || acceptance === null) {
+    const last = report.events.slice(-2);
+    if (last.length !== 2 || last[0].event !== 'checks_passed' || last[1].event !== 'published' ||
+        last[1].digest !== receiptDigest) throw new Error('Missing checked publication evidence');
+    return;
+  }
+  // Acceptance: the COMPLETE ordered sequence with matching source digests; anything missing, extra or mismatched fails closed.
+  const { negativeDigest, finalDigest } = acceptance;
+  const events = report.events;
+  if (!sha(negativeDigest) || !sha(finalDigest) || negativeDigest === finalDigest ||
+      events.length !== ACCEPTANCE_SEQUENCE.length || ACCEPTANCE_SEQUENCE.some((name, i) => events[i].event !== name) ||
+      events[0].digest !== null || events[1].digest !== negativeDigest || events[2].digest !== negativeDigest ||
+      events[3].digest !== finalDigest || events[4].digest !== finalDigest || events[5].digest !== receiptDigest)
+    throw new Error('Incomplete or mismatched acceptance evidence');
 }
 function issueHash(issue) {
   return hash(JSON.stringify({ repository: REPO, number: issue.number, title: issue.title,
@@ -67,6 +90,8 @@ function validateTask(body) {
     if (!(product || regression) || p.split('/').some(s => !s || s === '.' || s === '..' ||
         /^(CLAUDE(?:\.local)?\.md|AGENTS\.md|SKILL\.md|\..*|.*\.(pem|key))$/i.test(s))) throw new Error('Forbidden path: ' + p);
   }
+  if (task.acceptance_sequence !== undefined && typeof task.acceptance_sequence !== 'boolean') throw new Error('Invalid acceptance_sequence');
+  if (task.acceptance_comment !== undefined && !/^\/\/ [^\r\n]{1,200}$/.test(task.acceptance_comment)) throw new Error('Invalid acceptance_comment');
   return task;
 }
 function git(root, args) {
@@ -123,7 +148,7 @@ function checkTool(input, state, finished = false) {
   const tool = input.tool_name;
   const args = input.tool_input || {};
   if (tool === 'Bash') {
-    if (args.command !== FINISH || args.run_in_background || (args.timeout && args.timeout > 600000)) throw new Error('Only exact trusted finish command permitted');
+    if (![FINISH, NEGATIVE_COMMAND].includes(args.command) || args.run_in_background || (args.timeout && args.timeout > 600000)) throw new Error('Only exact trusted finish command permitted');
     return;
   }
   if (!['Read', 'Edit', 'Write'].includes(tool)) throw new Error('Tool not permitted');
@@ -151,6 +176,46 @@ function collectChanges(state) {
     if (content.includes(0) || !Buffer.from(content.toString('utf8')).equals(content)) throw new Error('UTF-8 text only');
     return { path: p, mode: '100644', type: 'blob', content: content.toString('utf8') };
   });
+}
+// The negative fixture is generated by trusted code from EXPECTED_ASSERTION (including its newline) and the committed file;
+// the model never types it. Only after a confirmed probe denial, once, and only on an otherwise untouched target.
+function negativeSource(original) { return EXPECTED_ASSERTION + original; }
+function writeNegativeFixture(state, events, directory) {
+  if (!isAcceptanceTask(state.task) || !state.task.allowed_paths.includes(NEGATIVE_TARGET) ||
+      !state.tracked.includes(NEGATIVE_TARGET)) throw new Error('Negative fixture not available');
+  if (events.length !== 1 || events[0].event !== 'scope_denied_probe') throw new Error('Negative fixture requires the confirmed probe denial first');
+  const file = safeFile(state.root, NEGATIVE_TARGET);
+  const original = git(state.root, ['show', 'HEAD:' + NEGATIVE_TARGET]);
+  if (fs.readFileSync(file, 'utf8') !== original) throw new Error('Negative fixture requires the untouched target');
+  // One use, recorded in trusted state the model cannot touch: restoring the original file never re-arms it.
+  fs.writeFileSync(path.join(directory, 'negative-fixture.used'), '', { flag: 'wx', mode: 0o600 });
+  fs.writeFileSync(file, negativeSource(original));
+}
+// The approved comment: the owner-approved (hash-bound) "acceptance_comment" field or, for tasks written before that field,
+// the single "prepend exactly // ... followed by a newline" sentence of the approved request. Never read from the candidate.
+function approvedComment(task) {
+  if (typeof task.acceptance_comment === 'string') return task.acceptance_comment;
+  const found = [...String(task.request || '').matchAll(/prepend exactly (\/\/ [^\r\n]+?) followed by a newline/g)];
+  if (found.length !== 1) throw new Error('Approved comment not identifiable');
+  return found[0][1];
+}
+const blobDigest = content => hash(JSON.stringify([{ path: NEGATIVE_TARGET, mode: '100644', type: 'blob', content }]));
+// Both expected digests come from independent bytes: EXPECTED_ASSERTION / the approved comment plus the committed baseline file.
+function acceptanceExpectations(state) {
+  if (JSON.stringify(state.task.allowed_paths) !== JSON.stringify([NEGATIVE_TARGET])) throw new Error('Acceptance scope must be exactly the planning suite');
+  const original = git(state.root, ['show', 'HEAD:' + NEGATIVE_TARGET]);
+  return { negativeDigest: blobDigest(negativeSource(original)), finalDigest: blobDigest(approvedComment(state.task) + '\n' + original) };
+}
+// Runs inside finish() before publish(): the history must be exactly the canonical five events so far and the candidate
+// being published must be the independently expected bytes. Any deviation rejects before any publishing API call.
+function assertAcceptanceBeforePublication(state, events, candidateDigest) {
+  const expected = acceptanceExpectations(state);
+  const wanted = ACCEPTANCE_SEQUENCE.slice(0, 5);
+  if (!Array.isArray(events) || events.length !== wanted.length || wanted.some((name, i) => events[i].event !== name) ||
+      expected.negativeDigest === expected.finalDigest || events[0].digest !== null ||
+      events[1].digest !== expected.negativeDigest || events[2].digest !== expected.negativeDigest ||
+      events[3].digest !== expected.finalDigest || events[4].digest !== expected.finalDigest ||
+      candidateDigest !== expected.finalDigest) throw new Error('Incomplete or mismatched acceptance evidence');
 }
 function dockerArgs(snapshot, image) {
   if (!/^sha256:[a-f0-9]{64}$/.test(image)) throw new Error('Require locally resolved immutable test image ID');
@@ -240,7 +305,9 @@ async function publish(api, state, changes) {
   }
   return pr;
 }
-async function finish(api, state, checks = runChecks, audit = () => {}) {
+async function finish(api, state, checks = runChecks, audit = () => {}, history = null) {
+  const acceptance = isAcceptanceTask(state.task);
+  if (acceptance && typeof history !== 'function') throw new Error('Acceptance history required');
   await approval(api, state.number, state.approvedHash, state.actor);
   const changes = collectChanges(state);
   const digest = hash(JSON.stringify(changes));
@@ -252,6 +319,7 @@ async function finish(api, state, checks = runChecks, audit = () => {}) {
   const after = collectChanges(state);
   if (JSON.stringify(changes) !== JSON.stringify(after)) throw new Error('Source changed during checks');
   audit('checks_passed', digest);
+  if (acceptance) assertAcceptanceBeforePublication(state, history(), digest);
   const pr = await publish(api, state, changes);
   audit('published', hash(JSON.stringify({ url: pr.html_url, sha: pr.head.sha })));
   return pr;
@@ -298,7 +366,8 @@ function preflight(executable = '/tmp/claude-approved/node', helper = HELPER) {
   const completion = invoke('verify-completion', undefined,
     { CLAUDE_STEP_OUTCOME: 'success', CLAUDE_STEP_CONCLUSION: 'success' });
   const finishResult = invoke('finish');
-  for (const result of [completion, finishResult]) {
+  const negativeResult = invoke('negative-fixture');
+  for (const result of [completion, finishResult, negativeResult]) {
     if (result.status !== 1 || result.stderr.trim() !== GUARD_ERROR)
       throw new Error('Trusted entry point did not fail closed');
   }
@@ -325,15 +394,19 @@ async function main() {
     }
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } }));
   } else if (mode === 'finish') {
-    const pr = await finish(githubApi(process.env.GH_TOKEN), state, runChecks, (event, digest) => appendAudit(__dirname, event, digest));
+    const pr = await finish(githubApi(process.env.GH_TOKEN), state, runChecks, (event, digest) => appendAudit(__dirname, event, digest), () => readAudit(__dirname));
     fs.writeFileSync(path.join(__dirname, 'published.json'), JSON.stringify({ url: pr.html_url, sha: pr.head.sha }));
     console.log('Draft PR: ' + pr.html_url);
+  } else if (mode === 'negative-fixture') {
+    writeNegativeFixture(state, readAudit(__dirname), __dirname);
+    console.log('Negative fixture written from the trusted expected assertion.');
   } else if (mode === 'audit-export') {
     const report = JSON.stringify(auditReport(__dirname, state));
     console.log('CLAUDE_APPROVED_AUDIT=' + report);
     if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '\n```json\n' + report + '\n```\n');
   } else if (mode === 'verify-completion') {
-    verifyCompletion(process.env.CLAUDE_STEP_OUTCOME, process.env.CLAUDE_STEP_CONCLUSION, auditReport(__dirname, state));
+    verifyCompletion(process.env.CLAUDE_STEP_OUTCOME, process.env.CLAUDE_STEP_CONCLUSION, auditReport(__dirname, state),
+      isAcceptanceTask(state.task) ? acceptanceExpectations(state) : undefined);
   } else throw new Error('Unknown helper mode');
 }
 if (require.main === module) main().catch(() => {
@@ -342,5 +415,6 @@ if (require.main === module) main().catch(() => {
   process.exitCode = process.argv[2] === 'hook' ? 2 : 1;
 });
 module.exports = { REPO, FINISH, issueHash, validateTask, safeFile, gate, approval, checkTool,
-  collectChanges, dockerArgs, runChecks, publish, finish, EXPECTED_ASSERTION,
+  collectChanges, dockerArgs, runChecks, publish, finish, EXPECTED_ASSERTION, NEGATIVE_TARGET, NEGATIVE_COMMAND,
+  ACCEPTANCE_SEQUENCE, isAcceptanceTask, approvedComment, assertAcceptanceBeforePublication, writeNegativeFixture, acceptanceExpectations,
   readAudit, appendAudit, auditReport, publicationReceipt, verifyCompletion, preflight };

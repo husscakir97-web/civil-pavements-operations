@@ -7,7 +7,66 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { REPO, FINISH, issueHash, validateTask, approval, gate, checkTool, collectChanges,
   dockerArgs, runChecks, publish, finish, EXPECTED_ASSERTION, appendAudit, readAudit,
-  auditReport, verifyCompletion } = require('./claude-approved-task.cjs');
+  auditReport, verifyCompletion, preflight } = require('./claude-approved-task.cjs');
+
+test('preflight exercises real CLI paths and rejects missing interpreter or helper', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-preflight-'));
+  const helper = path.join(dir, 'claude-approved-task.cjs');
+  try {
+    fs.copyFileSync(path.join(__dirname, 'claude-approved-task.cjs'), helper);
+    fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(state));
+    preflight(process.execPath, helper);
+    assert.equal(fs.existsSync(path.join(dir, 'audit.jsonl')), false);
+    assert.equal(fs.existsSync(path.join(dir, 'published.json')), false);
+    assert.throws(() => preflight(path.join(dir, 'missing-node'), helper), /unavailable/);
+    assert.throws(() => preflight(process.execPath, path.join(dir, 'missing.cjs')), /unavailable/);
+    fs.writeFileSync(path.join(dir, 'published.json'), JSON.stringify({
+      url: 'https://github.com/' + REPO + '/pull/7', sha: 'c'.repeat(40)
+    }));
+    assert.throws(() => preflight(process.execPath, helper), /fresh unpublished/);
+    fs.unlinkSync(path.join(dir, 'published.json'));
+    fs.writeFileSync(helper, 'process.exit(0);');
+    assert.throws(() => preflight(process.execPath, helper));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('workflow and inert template use the same fixed executable and preflight before Claude', () => {
+  for (const file of ['.github/workflows/claude-approved-task.yml', 'docs/automation/claude-approved-task.yml.disabled']) {
+    const yaml = fs.readFileSync(path.join(__dirname, '../..', file), 'utf8');
+    assert.doesNotMatch(yaml, /\/usr\/bin\/node/);
+    assert.match(yaml, /node_binary=.*realpath/);
+    assert.match(yaml, /ln -s "\$node_binary" \/tmp\/claude-approved\/node/);
+    assert.ok(yaml.indexOf('claude-approved-task.cjs preflight') < yaml.indexOf('uses: anthropics/'));
+    const modes = file.endsWith('.disabled') ? ['hook', 'finish'] : ['hook', 'finish', 'audit-export', 'verify-completion'];
+    for (const mode of modes)
+      assert.ok(yaml.includes('/tmp/claude-approved/node /tmp/claude-approved/claude-approved-task.cjs ' + mode));
+  }
+  for (const command of ['node ' + FINISH.split(' ').slice(1).join(' '),
+    FINISH.replace('/tmp/claude-approved/node', '/usr/bin/node')]) {
+    assert.throws(() => checkTool({ hook_event_name: 'PreToolUse', tool_name: 'Bash',
+      tool_input: { command } }, state));
+  }
+});
+
+test('Linux CI: exact workflow binding and preflight entry point execute before any model', {
+  skip: process.platform !== 'linux' || process.env.GITHUB_ACTIONS !== 'true'
+}, () => {
+  const yaml = fs.readFileSync(path.join(__dirname, '../workflows/claude-approved-task.yml'), 'utf8');
+  const block = yaml.split('      - name: Bind verified Node 22 before trusted helper execution\n')[1]
+    .split('      - name: Freeze helper')[0].split('        run: |\n')[1];
+  const script = block.split('\n').map(line => line.replace(/^          /, '')).join('\n');
+  const dir = '/tmp/claude-approved';
+  assert.equal(fs.existsSync(dir), false, 'never reuse or remove another trusted directory');
+  try {
+    execFileSync('/bin/bash', ['-e', '-c', script], { stdio: 'pipe' });
+    fs.copyFileSync(path.join(__dirname, 'claude-approved-task.cjs'), path.join(dir, 'claude-approved-task.cjs'));
+    fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(state));
+    execFileSync(path.join(dir, 'node'), [path.join(dir, 'claude-approved-task.cjs'), 'preflight'],
+      { env: {}, stdio: 'pipe' });
+    assert.equal(fs.existsSync(path.join(dir, 'audit.jsonl')), false);
+    assert.equal(fs.existsSync(path.join(dir, 'published.json')), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
 const task = { summary: 'Scoped correction', request: 'Fix the message', acceptance: 'Regressions pass',
   allowed_paths: ['components/example.tsx', 'scripts/test-example.cjs'] };
 const body = '\x60\x60\x60json\n' + JSON.stringify(task) + '\n\x60\x60\x60';

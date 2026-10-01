@@ -1,6 +1,7 @@
 'use client';
 import {useApi,ErrorState,Loading,PageHeader,Section,Stat,money,pct,EmptyState,Btn,StatusBadge} from './kit';
 import {stateLabel} from '@/lib/platform/workflow';
+import {DivisionalPnlPanel} from './divisional-pnl';
 
 type R={generatedAt:string;commercialVisible:boolean;
  pipeline?:{opportunities:Array<{stage:string;count:number;value?:number;weighted?:number}>;tenders:Array<{stage:string;count:number;value?:number}>;conversionPct:number|null;decided:number};
@@ -16,6 +17,7 @@ export function ReportsV1(){
  return <div className="grid gap-4">
   <PageHeader title="Reports" subtitle={data?`Derived from your records · generated ${new Date(data.generatedAt).toLocaleString('en-AU')}`:'Derived from your records'} actions={<Btn variant="secondary" onClick={refresh}>Refresh</Btn>}/>
   <ErrorState error={error} onRetry={refresh}/>
+  <DivisionalPnlPanel/>
   {loading&&!data?<Loading/>:data&&<>
    {data.pipeline&&<Section title="Pipeline"><div className="grid gap-3 sm:grid-cols-3"><Stat label="Tender conversion" value={pct(data.pipeline.conversionPct)} hint={`${data.pipeline.decided} tender(s) decided`}/>{data.pipeline.tenders.map(t=><Stat key={t.stage} label={`Tenders · ${stateLabel('tender',t.stage)}`} value={t.count} hint={t.value!=null?money(t.value):undefined}/>)}</div>
     {data.pipeline.opportunities.length?<table className="mt-4 w-full text-sm"><thead className="text-left text-xs text-slate-500"><tr><th className="py-1">Opportunity stage</th><th>Count</th>{data.commercialVisible&&<><th>Value</th><th>Weighted</th></>}</tr></thead><tbody className="divide-y">{data.pipeline.opportunities.map(o=><tr key={o.stage}><td className="py-1.5">{stateLabel('opportunity',o.stage)}</td><td>{o.count}</td>{data.commercialVisible&&<><td>{money(o.value)}</td><td>{money(o.weighted)}</td></>}</tr>)}</tbody></table>:<EmptyState title="No opportunities recorded."/>}</Section>}

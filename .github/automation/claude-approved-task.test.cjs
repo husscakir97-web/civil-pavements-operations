@@ -541,12 +541,16 @@ test('Docker: real repository snapshot proves the expected failure makes zero pu
   const repo = path.resolve(__dirname, '../..');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-acceptance-docker-'));
   try {
-    for (const p of ['package.json', 'package-lock.json']) fs.copyFileSync(path.join(repo, p), path.join(directory, p));
-    execFileSync('docker', ['pull', 'node:22-bookworm'], { stdio: 'pipe', timeout: 180000 });
-    const base = execFileSync('docker', ['image', 'inspect', 'node:22-bookworm', '--format', '{{index .RepoDigests 0}}'], { encoding: 'utf8' }).trim();
-    fs.writeFileSync(path.join(directory, 'Dockerfile'), 'FROM ' + base + '\nWORKDIR /deps\nCOPY package.json package-lock.json ./\nRUN npm ci --ignore-scripts --no-audit --no-fund\n');
-    execFileSync('docker', ['build', '--iidfile', path.join(directory, 'image-id'), directory], { stdio: 'pipe', timeout: 600000, maxBuffer: 8 * 1024 * 1024 });
-    const image = fs.readFileSync(path.join(directory, 'image-id'), 'utf8').trim();
+    // CLAUDE_TEST_IMAGE (a local immutable image ID with /deps/node_modules) lets a machine without npm registry access reuse a prebuilt image.
+    let image = process.env.CLAUDE_TEST_IMAGE;
+    if (!image) {
+      for (const p of ['package.json', 'package-lock.json']) fs.copyFileSync(path.join(repo, p), path.join(directory, p));
+      execFileSync('docker', ['pull', 'node:22-bookworm'], { stdio: 'pipe', timeout: 180000 });
+      const base = execFileSync('docker', ['image', 'inspect', 'node:22-bookworm', '--format', '{{index .RepoDigests 0}}'], { encoding: 'utf8' }).trim();
+      fs.writeFileSync(path.join(directory, 'Dockerfile'), 'FROM ' + base + '\nWORKDIR /deps\nCOPY package.json package-lock.json ./\nRUN npm ci --ignore-scripts --no-audit --no-fund\n');
+      execFileSync('docker', ['build', '--iidfile', path.join(directory, 'image-id'), directory], { stdio: 'pipe', timeout: 600000, maxBuffer: 8 * 1024 * 1024 });
+      image = fs.readFileSync(path.join(directory, 'image-id'), 'utf8').trim();
+    }
     // Real tracked repository files, copied into a throwaway git checkout so the real tree is never edited.
     const root = path.join(directory, 'snapshot'); fs.mkdirSync(root);
     const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: repo, encoding: 'utf8' }).split('\0').filter(Boolean)

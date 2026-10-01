@@ -31,6 +31,7 @@ export async function idempotent<T>(kind:string,clientRequestId:string|null|unde
  if(!clientRequestId)return {result:await tx(run),replay:false};
  if(!CLIENT_REQUEST_ID.test(clientRequestId))fail(400,'Invalid request id.');
  const a=actorContext.getStore()!,print=payload===undefined?null:fingerprint(payload);
+ for(let attempt=1;;attempt++){
  try{
   return await tx(async conn=>{
    const previous=await stored<T>(clientRequestId,kind,print,conn);
@@ -44,6 +45,9 @@ export async function idempotent<T>(kind:string,clientRequestId:string|null|unde
   // Two deliveries of the same request raced: the loser rolled back; return the winner's result. A loser blocked on a row lock
   // wakes to a stale-revision conflict (409) after the winner committed: that is the same request, so replay the stored result.
   if((e as {code?:string})?.code==='ER_DUP_ENTRY'||(e as {status?:number})?.status===409){const previous=await stored<T>(clientRequestId,kind,print);if(previous)return previous;}
+  // Two deliveries can deadlock on the request-id lock; the loser is rolled back whole, so running it again is safe and replays the winner.
+  if((e as {code?:string})?.code==='ER_LOCK_DEADLOCK'&&attempt<3)continue;
   throw e;
+ }
  }
 }

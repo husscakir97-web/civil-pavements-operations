@@ -161,7 +161,7 @@ try{
   assert.equal(ev.kind,'completed');assert.equal(ev.actor_id,A.user.id);assert.equal(ev.performed_on,today);assert(ev.recorded_at);assert.equal(Number(ev.meter_reading),125);assert.equal(Number(ev.previous_next_service_meter),90);assert.equal(Number(ev.new_next_service_meter),9000);
   assert.equal(await count('asset_meter_readings',"asset_id=? AND reading=125 AND note LIKE 'Service completed%'",[wa.id]),1,'meter history written');
   assert.equal(await count('audit_log',"entity_id=? AND event_type='asset.service_completed'",[wa.id]),1);assert.equal(await count('domain_events',"entity_id=? AND event_type='workshop.service.recorded'",[wa.id]),1);
-  const afterSvc=await row();assert.equal(Number(afterSvc.safety_hold),1,'recording a service never clears a safety hold');assert.equal(afterSvc.status,'Out of service');
+  const afterSvc=await row();assert.equal(Number(afterSvc.safety_hold),1,'recording a service never clears a safety hold');assert.equal(afterSvc.status,holdBefore.status,'status column untouched');assert.equal((await asset()).status,'Out of service','effective status still out of service');
   assert(!(await shiftCheck(addDays(today,5))).conflicts.some(c=>c.code==='PLANT_SERVICE_OVERDUE'),'warning gone after the completed service');
   // Retries and concurrency.
   const retry=await json(await workshop(svcBody({revision:done.revision-1,current_meter:125},{clientRequestId:R1,meterReading:125})),200,'retry replays');assert.equal(retry.replay,true);assert.equal(retry.id,done.id);
@@ -198,7 +198,7 @@ try{
   await json(await fix({revision:a.revision,nextServiceMeter:9500,reason:'Corrected threshold: wrong unit entered'}),200);a=await asset();assert.equal(a.service.overdue,false,'an authorised correction can clear it, recorded as a correction');
   assert.equal(await count('asset_service_events',"asset_id=? AND kind='completed'",[wa.id]),serviceEvents,'corrections never create "Service completed"');assert.equal(await count('asset_meter_readings','asset_id=?',[wa.id]),readingCount);
   assert.equal(await count('asset_service_events',"asset_id=? AND kind='plan_corrected'",[wa.id]),2);assert.equal(await count('domain_events',"entity_id=? AND event_type='workshop.plan.corrected'",[wa.id]),2);
-  const afterFix=await row();assert.equal(Number(afterFix.safety_hold),1,'a plan correction never clears a safety hold');assert.equal(afterFix.status,'Out of service');
+  const afterFix=await row();assert.equal(Number(afterFix.safety_hold),1,'a plan correction never clears a safety hold');assert.equal(afterFix.status,holdBefore.status,'status column untouched');assert.equal((await asset()).status,'Out of service');
   const view=await workshopGet();assert.equal(view.canCorrect,true);assert(view.services.some(e=>e.kind==='plan_corrected'&&e.actor_name),'history carries the actor');
   const officeView=await json(await call('/api/workshop','GET',undefined,W.cookie),200);assert.equal(officeView.canCorrect,false);
   // Other write paths cannot bypass the rules.

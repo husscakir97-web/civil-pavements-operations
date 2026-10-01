@@ -199,7 +199,7 @@ try{
   assert.equal(await count('asset_service_events',"asset_id=? AND kind='completed'",[wa.id]),serviceEvents,'corrections never create "Service completed"');assert.equal(await count('asset_meter_readings','asset_id=?',[wa.id]),readingCount);
   assert.equal(await count('asset_service_events',"asset_id=? AND kind='plan_corrected'",[wa.id]),2);assert.equal(await count('domain_events',"entity_id=? AND event_type='workshop.plan.corrected'",[wa.id]),2);
   const afterFix=await row();assert.equal(Number(afterFix.safety_hold),1,'a plan correction never clears a safety hold');assert.equal(afterFix.status,holdBefore.status,'status column untouched');assert.equal((await asset()).status,'Out of service');
-  const view=await workshopGet();assert.equal(view.canCorrect,true);assert(view.services.some(e=>e.kind==='plan_corrected'&&e.actor_name),'history carries the actor');
+  const view=await workshopGet();assert.equal(view.canCorrect,true);const corrHist=await json(await call('/api/workshop?assetId='+wa.id+'&limit=100','GET',undefined,A.cookie),200);assert(corrHist.events.some(e=>e.kind==='plan_corrected'&&e.actor_name),'history carries the actor');
   const officeView=await json(await call('/api/workshop','GET',undefined,W.cookie),200);assert.equal(officeView.canCorrect,false);
   // Other write paths cannot bypass the rules.
   await json(await workshop({action:'asset',name:'QA Roller',number:'QA-02',category:'Roller',registration:'ROLL1',nextServiceMeter:1,nextServiceDate:'2020-01-01'}),200);

@@ -22,6 +22,8 @@ export const CAPABILITIES=[
  'org.admin','team.admin','entitlements.manage','rates.edit','audit.view',
  'commercial.view','pipeline.view','pipeline.edit','tender.approve','tender.submit','tender.award',
  'workshop.view','workshop.edit','workshop.verify',
+ // Administrator-only correction of a plant item's service plan (mandatory reason, immutable history). Never a completed service.
+ 'workshop.plan.correct',
  // Report a plant/asset defect into Workshop (e.g. from a Form). Grants no repair, verify or asset admin.
  'workshop.defect.report',
  'estimate.edit','estimate.approve',
@@ -49,7 +51,7 @@ export const CAPABILITIES=[
 export type Capability=typeof CAPABILITIES[number];
 
 const FIELD:Capability[]=['swms.acknowledge','itp.complete','hseq.report','field.capture','docket.submit','document.upload','communication.view','communication.send','forms.view','forms.submit','workshop.defect.report'];
-const ADMIN_ONLY:Capability[]=['org.admin','team.admin','entitlements.manage','rates.edit'];
+const ADMIN_ONLY:Capability[]=['org.admin','team.admin','entitlements.manage','rates.edit','workshop.plan.correct'];
 const OFFICE:Capability[]=CAPABILITIES.filter(c=>!ADMIN_ONLY.includes(c));
 const READ:Capability[]=['pipeline.view','project.view','project.all.view','hseq.view','schedule.view','reports.view','commercial.view','knowledge.view','communication.view','forms.view'];
 

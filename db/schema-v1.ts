@@ -70,6 +70,7 @@ export const organisationProfiles=mysqlTable('organisation_profiles',{
  businessActivities:text('business_activities'),
  disciplines:text('disciplines'),
  operatingRegions:text('operating_regions'),
+ timezone:varchar('timezone',{length:80}),
  workforceSize:varchar('workforce_size',{length:40}),
  typicalProjectSize:varchar('typical_project_size',{length:60}),
  plantSummary:text('plant_summary'),
@@ -914,9 +915,20 @@ export const shiftRequirements=mysqlTable('shift_requirements',{
  role:varchar('role',{length:100}).notNull(),quantity:int('quantity').notNull(),status:varchar('status',{length:20}).notNull().default('active'),...lifecycle(),
 },t=>[index('shift_requirements_org_idx').on(t.organisationId),index('shift_requirements_shift_idx').on(t.organisationId,t.shiftId)]);
 
+// Immutable service-plan history for plant (migration 0024). 'completed' = a service was performed; 'plan_set' = initial plan on an asset
+// with none; 'plan_corrected' = administrator correction (mandatory reason). Rows are only ever inserted.
+export const assetServiceEvents=mysqlTable('asset_service_events',{
+ id:id(),organisationId:org(),assetId:ref('asset_id').notNull(),kind:varchar('kind',{length:20}).notNull(),
+ actorId:ref('actor_id').notNull(),performedOn:day('performed_on'),recordedAt:stamp('recorded_at').notNull(),
+ meterType:varchar('meter_type',{length:20}),meterReading:decimal('meter_reading',{precision:15,scale:2}),
+ previousNextServiceMeter:decimal('previous_next_service_meter',{precision:15,scale:2}),previousNextServiceDate:day('previous_next_service_date'),
+ newNextServiceMeter:decimal('new_next_service_meter',{precision:15,scale:2}),newNextServiceDate:day('new_next_service_date'),
+ note:text('note'),reason:text('reason'),assetRevision:int('asset_revision').notNull(),
+},t=>[index('asset_service_events_org_idx').on(t.organisationId),index('asset_service_events_asset_idx').on(t.organisationId,t.assetId,t.recordedAt)]);
+
 export const assetMeterReadings=mysqlTable('asset_meter_readings',{
  id:id(),organisationId:org(),assetId:ref('asset_id').notNull(),meterType:varchar('meter_type',{length:20}).notNull(),
- reading:decimal('reading',{precision:15,scale:2}).notNull(),nextService:decimal('next_service',{precision:15,scale:2}).notNull(),
+ reading:decimal('reading',{precision:15,scale:2}).notNull(),nextService:decimal('next_service',{precision:15,scale:2}),
  note:text('note').notNull(),actorId:ref('actor_id').notNull(),createdAt:stamp('created_at').notNull(),
 },t=>[index('asset_meter_readings_org_idx').on(t.organisationId),index('asset_meter_readings_asset_idx').on(t.organisationId,t.assetId)]);
 

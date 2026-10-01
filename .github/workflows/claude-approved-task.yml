@@ -87,6 +87,9 @@ jobs:
             /tmp/claude-approved/node /tmp/claude-approved/claude-approved-task.cjs finish
             Use a 600000 ms timeout. It runs lint, typecheck and npm test without credentials
             or network, then rechecks approval and creates/reuses an isolated draft PR.
+            Acceptance tasks only: never type the negative fixture yourself. After the confirmed probe denial,
+            invoke exactly /tmp/claude-approved/node /tmp/claude-approved/claude-approved-task.cjs negative-fixture
+            in the foreground; trusted code writes the expected assertion (with its newline) into the planning suite.
             Do not run tests yourself, commit, push, merge, deploy or alter git state.
             Report any guard failure; never attempt to bypass it.
             If subscription usage is exhausted, stop. Do not retry or use API billing.
@@ -95,7 +98,7 @@ jobs:
             --model sonnet
             --permission-mode dontAsk
             --tools Read,Edit,Write,Bash
-            --allowedTools "Read,Edit,Write,Bash(/tmp/claude-approved/node /tmp/claude-approved/claude-approved-task.cjs finish)"
+            --allowedTools "Read,Edit,Write,Bash(/tmp/claude-approved/node /tmp/claude-approved/claude-approved-task.cjs finish),Bash(/tmp/claude-approved/node /tmp/claude-approved/claude-approved-task.cjs negative-fixture)"
             --disallowedTools "Agent,Task,Skill,WebFetch,WebSearch,Glob,Grep,NotebookEdit,mcp__*"
             --setting-sources user
           settings: |

@@ -13,6 +13,7 @@ import { safeJson } from '@/lib/estimates-db';
 import { actorContext } from '@/lib/platform/context';
 import { can } from '@/lib/platform/permissions';
 import { docketCostStatements } from '@/lib/seams/docket-to-cost';
+import { checkUpload, DOCKET_UPLOAD_NAME } from '@/lib/platform/upload-safety';
 
 export const dynamic = "force-dynamic";
 
@@ -113,10 +114,14 @@ async function handlePOST(request: Request) {
 
     if (file instanceof File && file.size > 0) {
       if (file.size > 25 * 1024 * 1024) return jsonError("Each file must be under 25 MB.");
+      // Extension, contents and type must agree (PDF or photo only); the stored type is the fixed mapping, never the client's.
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const verdict = checkUpload(file.name, bytes, DOCKET_UPLOAD_NAME);
+      if (!verdict.ok) return jsonError(verdict.reason, verdict.status);
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-120);
       sourceKey = `dockets/${records[0].workDate.slice(0, 7)}/${crypto.randomUUID()}-${safeName}`;
-      await bucket.put(sourceKey, await file.arrayBuffer(), {
-        httpMetadata: { contentType: file.type || "application/octet-stream" },
+      await bucket.put(sourceKey, bytes, {
+        httpMetadata: { contentType: verdict.contentType },
       });
     }
 

@@ -10,11 +10,12 @@ import {getEntitlements} from './entitlements';
 import {usable,writable,type Entitlements,type ModuleKey} from './modules';
 import {query,one,exec,tx,nowIso,uuid,type Row,type Conn} from './sql';
 import {canAccessProject,projectFilter} from './project-access';
+import {ALLOWED_UPLOAD_NAME} from './upload-safety';
 // The project a document belongs to: its project_id, or the project it is attached to directly.
 const documentProject=(r:Row)=>r.project_id||(r.context_type==='project'?r.context_id:null)||null;
 
 export const MAX_DOCUMENT_BYTES=40*1024*1024;
-const ALLOWED=/\.(pdf|png|jpe?g|gif|webp|heic|txt|csv|docx?|xlsx?|pptx?|zip|msg|eml|dwg|dxf)$/i;
+const ALLOWED=ALLOWED_UPLOAD_NAME; // one allowlist, shared with the legacy tender/docket upload routes
 const CONTEXTS=['organisation','library','tender','project','swms','itp','incident','ncr','action','variation','claim','requirement','returnable','clarification','checklist','field','form'] as const;
 export type DocumentContext=typeof CONTEXTS[number];
 export const isContext=(v:string):v is DocumentContext=>(CONTEXTS as readonly string[]).includes(v);

@@ -12,7 +12,8 @@ import {
 import { safeJson } from '@/lib/estimates-db';
 import { actorContext } from '@/lib/platform/context';
 import { can } from '@/lib/platform/permissions';
-import { docketCostStatements } from '@/lib/seams/docket-to-cost';
+import { docketCostStatements, nextAllocationLinks, jobOf } from '@/lib/seams/docket-to-cost';
+import { orgWideProjects, canAccessProject, memberProjectIds } from '@/lib/platform/project-access';
 import { checkUpload, DOCKET_UPLOAD_NAME } from '@/lib/platform/upload-safety';
 
 export const dynamic = "force-dynamic";
@@ -21,31 +22,52 @@ function jsonError(message: string, status = 400) {
   return Response.json({ error: message }, { status });
 }
 
-async function handleGET(request: Request) {
-  try {
-    const { db } = requireBindings();
-    const { searchParams } = new URL(request.url);
-    const { start, end } = parseMonth(searchParams.get("month"));
-    const result = await db
-      .prepare(
-        `SELECT id, docket_no AS docketNo, work_date AS workDate,
+const DOCKET_COLUMNS = `id, docket_no AS docketNo, work_date AS workDate,
           client, project, crew, vehicle, start_time AS startTime,
           finish_time AS finishTime, break_hours AS breakHours,
           labour_hours AS labourHours, quantity, quantity_unit AS quantityUnit,
           amount, po_number AS poNumber, notes, status, confidence,
           source_name AS sourceName, raw_text AS rawText, source_page AS sourcePage, source_crop AS sourceCrop, field_confidence AS fieldConfidence, line_items AS lineItems, links, extraction_method AS extractionMethod, profile_id AS profileId,
-          created_at AS createdAt, updated_at AS updatedAt
+          created_at AS createdAt, updated_at AS updatedAt`;
+const present = (r: Record<string,unknown>) => ({...r,
+  fieldConfidence: safeJson(r.fieldConfidence, {}),
+  lineItems: safeJson(r.lineItems, []),
+  links: safeJson(r.links, {}),
+});
+// Dockets that carry no project cannot post cost. Rejected and duplicate records are not part of the queue.
+const UNALLOCATED_EXCLUDED = "('archived','rejected','duplicate')";
+
+async function handleGET(request: Request) {
+  try {
+    const { db } = requireBindings();
+    const { searchParams } = new URL(request.url);
+    const org = currentOrganisationId();
+    const actor = actorContext.getStore()!;
+    // Projects a docket may be allocated to (the actor's own project scope applies; closed projects are shown but cannot be chosen).
+    if (searchParams.get("projects") === "1") {
+      const jobs = await db.prepare("SELECT id, name, project_number AS number, stage FROM jobs WHERE organisation_id = ? AND lower(status) != 'archived' ORDER BY created_at DESC LIMIT 300").bind(org).all<{id:string;name:string;number:string|null;stage:string|null}>();
+      const scope = orgWideProjects(actor) ? null : new Set(await memberProjectIds());
+      return Response.json({ projects: jobs.results.filter(j => !scope || scope.has(j.id)).map(j => ({ id: j.id, name: j.name, number: j.number, stage: j.stage || "setup" })) });
+    }
+    const counted = await db.prepare(`SELECT id, status, links FROM dockets WHERE organisation_id = ? AND lower(status) NOT IN ${UNALLOCATED_EXCLUDED}`).bind(org).all<{id:string;status:string;links:string}>();
+    const open = counted.results.filter(r => !jobOf(safeJson(r.links, {})));
+    const unallocated = { count: open.length, approved: open.filter(r => r.status === "approved").length };
+    if (searchParams.get("unallocated") === "1") {
+      const ids = new Set(open.map(r => r.id));
+      const rows = await db.prepare(`SELECT ${DOCKET_COLUMNS} FROM dockets WHERE organisation_id = ? AND lower(status) NOT IN ${UNALLOCATED_EXCLUDED} ORDER BY work_date DESC, created_at DESC`).bind(org).all<Record<string,unknown>>();
+      return Response.json({ dockets: rows.results.filter(r => ids.has(String(r.id))).slice(0, 500).map(present), unallocated });
+    }
+    const { start, end } = parseMonth(searchParams.get("month"));
+    const result = await db
+      .prepare(
+        `SELECT ${DOCKET_COLUMNS}
         FROM dockets
         WHERE organisation_id = ? AND work_date >= ? AND work_date < ? AND lower(status) != 'archived'
         ORDER BY work_date DESC, created_at DESC`,
       )
-      .bind(currentOrganisationId(), start, end)
+      .bind(org, start, end)
       .all();
-    return Response.json({ dockets: result.results.map((r: Record<string,unknown>) => ({...r,
-      fieldConfidence: safeJson(r.fieldConfidence, {}),
-      lineItems: safeJson(r.lineItems, []),
-      links: safeJson(r.links, {}),
-    })) });
+    return Response.json({ dockets: result.results.map((r: Record<string,unknown>) => present(r)), unallocated });
   } catch (error) {
     console.error("load dockets", error);
     return jsonError("The month could not be loaded.", 503);
@@ -199,14 +221,32 @@ async function handlePUT(request: Request) {
       return Response.json({ error: "Docket remains Needs Review until mandatory fields are complete.", missing }, { status: 422 });
     }
     const now = new Date().toISOString();
-    const previous = await db.prepare("SELECT status FROM dockets WHERE organisation_id = ? AND id = ?").bind(currentOrganisationId(), id).first<{ status: string }>();
+    const previous = await db.prepare("SELECT status, links FROM dockets WHERE organisation_id = ? AND id = ?").bind(currentOrganisationId(), id).first<{ status: string; links: string }>();
     if (!previous) return jsonError("The docket was not found.", 404);
     if (["included_claim", "invoiced"].includes(previous.status)) return jsonError("This docket has been claimed and is locked. Reverse the claim line before changing it.", 409);
     const actor = actorContext.getStore()!;
     if ((record.status === "approved" || previous.status === "approved") && record.status !== previous.status && !can(actor.role, "docket.approve")) return jsonError("Only an authorised office user can approve or unapprove dockets.", 403);
     if (["included_claim", "invoiced"].includes(record.status)) return jsonError("Dockets are marked claimed by the claims workflow, not by editing.", 409);
+    // Project allocation. jobId and the allocation sequence are decided here, never taken from the client. Moving or clearing the project of a
+    // docket whose cost is posted is an audited cost correction (reverse and re-post, history kept) that needs docket.approve and a reason.
+    const stored = safeJson<Record<string, unknown>>(previous.links, {});
+    const sent = (raw.links && typeof raw.links === "object" && !Array.isArray(raw.links)) ? raw.links as Record<string, unknown> : stored;
+    const allocation = nextAllocationLinks(stored, sent);
+    const reason = cleanText(raw.allocationReason, 500);
+    if (allocation.changed) {
+      if (allocation.to) {
+        const job = await db.prepare("SELECT id, stage, status FROM jobs WHERE organisation_id = ? AND id = ?").bind(currentOrganisationId(), allocation.to).first<{ id: string; stage: string | null; status: string }>();
+        if (!job || String(job.status).toLowerCase() === "archived" || (!orgWideProjects(actor) && !await canAccessProject(allocation.to))) return jsonError("Project not found.", 404);
+        if (job.stage === "closed") return jsonError("This project is closed. Reopen it before allocating dockets to it.", 409);
+      }
+      if (previous.status === "approved") {
+        if (!can(actor.role, "docket.approve")) return jsonError("Only an authorised office user can move posted costs.", 403);
+        if (allocation.from && reason.length < 10) return jsonError("Give a reason (at least 10 characters) for moving costs between projects.", 422);
+      }
+    }
+    record.links = allocation.links as Record<string, string>;
     // SEAM: approved docket → actual cost (idempotent); leaving approved reverses unclaimed cost.
-    const seam = record.status === "approved" || previous.status === "approved" ? await docketCostStatements(id, record.status, { docket_no: record.docketNo, work_date: record.workDate, amount: record.amount, quantity: record.quantity, quantity_unit: record.quantityUnit, labour_hours: record.labourHours, line_items: JSON.stringify(record.lineItems ?? []), links: JSON.stringify(record.links ?? {}), notes: record.notes }) : { statements: [], posted: 0, message: null };
+    const seam = record.status === "approved" || previous.status === "approved" ? await docketCostStatements(id, record.status, { docket_no: record.docketNo, work_date: record.workDate, amount: record.amount, quantity: record.quantity, quantity_unit: record.quantityUnit, labour_hours: record.labourHours, line_items: JSON.stringify(record.lineItems ?? []), links: JSON.stringify(record.links ?? {}), notes: record.notes }, { reason }) : { statements: [], posted: 0, message: null };
     const update = db
       .prepare(
         `UPDATE dockets SET
@@ -238,7 +278,12 @@ async function handlePUT(request: Request) {
         currentOrganisationId(),
         id,
       );
-    await db.batch([update, ...seam.statements]);
+    // Allocating a docket that has no posted cost yet is audited too (a correction of posted cost is audited by the seam).
+    const allocationAudit = allocation.changed && !(previous.status === "approved" && allocation.from)
+      ? [db.prepare("INSERT INTO audit_log (id,organisation_id,actor_user_id,actor_email,event_type,entity_type,entity_id,project_id,summary,before_state,after_state,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+          .bind(crypto.randomUUID(), currentOrganisationId(), actor.userId, actor.email, "docket.allocated", "docket", id, allocation.to || allocation.from || null, `Docket ${record.docketNo} ${allocation.to ? "allocated to a project" : "project cleared"}`, JSON.stringify({ projectId: allocation.from || null }), JSON.stringify({ projectId: allocation.to || null }), now)]
+      : [];
+    await db.batch([update, ...allocationAudit, ...seam.statements]);
     return Response.json({ docket: { ...raw, ...record, id, updatedAt: now }, costLinesPosted: seam.posted, message: seam.message });
   } catch (error) {
     if ((error as { status?: number }).status === 409) return jsonError((error as Error).message, 409);

@@ -591,6 +591,90 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const report=await json(await call('/api/reports/v1','GET',undefined,A.cookie),200);assert(report.commercial.totals.currentContract>=f.currentContract);assert.equal(report.pipeline.conversionPct,100);
  console.log('PASS E: docket approval posts cost idempotently + reversal, variation lifecycle and lock, claim limits, no double docket claim, internal approval → submit → certify → invoice (GST) → payment, forecast/control, estimate vs actual, reports');
 
+
+ // ---------------------------------------------------------------- Docket allocation (office-uploaded dockets carry no project)
+ step='Docket allocation';
+ {const org=memberA.organisation_id;
+  const mk=async(name,extra={})=>{const f=new FormData();f.set('records',JSON.stringify([{docketNo:`ALLOC-${name}-${suffix}`,workDate:today,client:'Supplier Pty Ltd',project:'Allocation test',amount:1000,lineItems:[{description:'AC14 asphalt supply',quantity:5,unit:'t',rate:200,amount:1000}],status:'review',...extra}]));return (await json(await call('/api/dockets','POST',f,A.cookie),200)).docket;};
+  const put=(d,patch,cookie=A.cookie)=>call('/api/dockets','PUT',{...d,...patch},cookie);
+  const rows=async id=>(await db.execute('SELECT project_id,source_line,status,amount FROM cost_transactions WHERE organisation_id=? AND source_id=? ORDER BY source_line',[org,id]))[0];
+  const stored=async id=>JSON.parse((await db.execute('SELECT links FROM dockets WHERE organisation_id=? AND id=?',[org,id]))[0][0].links);
+  const summary=async()=>(await json(await call(`/api/dockets?month=${today.slice(0,7)}`,'GET',undefined,A.cookie),200)).unallocated;
+  const audits=async(event,id)=>(await db.execute("SELECT before_state,after_state,summary FROM audit_log WHERE organisation_id=? AND event_type=? AND entity_id=? ORDER BY created_at",[org,event,id]))[0];
+  const p1=(await json(await call('/api/projects','POST',{name:'Allocation one'},A.cookie),201)).projectId,p2=(await json(await call('/api/projects','POST',{name:'Allocation two'},A.cookie),201)).projectId;
+  const bProject=(await json(await call('/api/projects','POST',{name:'Foreign allocation project'},B.cookie),201)).projectId;
+  // Project list for the control; the unallocated queue counts dockets that carry no project.
+  const opts=(await json(await call('/api/dockets?projects=1','GET',undefined,A.cookie),200)).projects;assert(opts.some(o=>o.id===p1)&&opts.some(o=>o.id===p2)&&!opts.some(o=>o.id===bProject),"only this organisation's projects are offered");
+  const s0=await summary();
+  const d1=await mk('one'),d2=await mk('two');
+  let s1=await summary();assert.equal(s1.count,s0.count+2);assert.equal(s1.approved,s0.approved);
+  const queue=await json(await call('/api/dockets?unallocated=1','GET',undefined,A.cookie),200);assert(queue.dockets.some(d=>d.id===d1.id)&&queue.dockets.some(d=>d.id===d2.id),'the queue lists unallocated dockets across months');assert(queue.dockets.every(d=>!d.links?.jobId),'and only those');assert.equal(queue.unallocated.count,s1.count);
+  // Approving with no project posts nothing and is visible as approved-but-unallocated.
+  const approvedNone=await json(await put(d1,{status:'approved'}),200);assert.equal(approvedNone.costLinesPosted,0);assert.match(approvedNone.message,/not allocated/);
+  s1=await summary();assert.equal(s1.approved,s0.approved+1,'approved with no project is flagged');assert.equal((await rows(d1.id)).length,0);
+  // Allocating an approved, unallocated docket posts its cost once (first allocation keeps the plain line key; no reason needed).
+  const withJob=await json(await put({...d1,status:'approved'},{links:{jobId:p1,allocationSeq:99}}),200);assert.equal(withJob.costLinesPosted,1);
+  assert.deepEqual(await stored(d1.id),{jobId:p1},'the client cannot set the allocation sequence');
+  assert.deepEqual((await rows(d1.id)).map(r=>[r.project_id,r.source_line,r.status,Number(r.amount)]),[[p1,'L1','actual',1000]]);
+  s1=await summary();assert.equal(s1.approved,s0.approved,'allocated: no longer in the queue');assert.equal(s1.count,s0.count+1);
+  assert.equal((await audits('docket.allocated',d1.id)).length,1,'allocation is audited');assert((await audits('docket.approved',d1.id)).length>=1);
+  // Omitting links never unlinks a docket.
+  await json(await call('/api/dockets','PUT',{...d1,status:'approved',links:undefined},A.cookie),200);assert.equal((await stored(d1.id)).jobId,p1);assert.equal((await rows(d1.id)).filter(r=>r.status==='actual').length,1);
+  // Reallocation is an audited cost correction: reverse and re-post atomically, history kept, reason required, approval permission.
+  const approved1={...d1,status:'approved'};
+  await json(await put(approved1,{links:{jobId:p2}}),422,'a reason is required to move posted costs');
+  await json(await put(approved1,{links:{jobId:p2},allocationReason:'too short'}),422,'the reason must be meaningful');
+  await json(await put(approved1,{links:{jobId:p2},allocationReason:'Posted to the wrong job'},B.cookie),404,'foreign docket');
+  await json(await put(approved1,{links:{jobId:bProject},allocationReason:'Posted to the wrong job'}),404,"another organisation's project");
+  await json(await put(approved1,{links:{jobId:'missing-project'},allocationReason:'Posted to the wrong job'}),404,'unknown project');
+  const fieldUser=await signup('alloc-field');await db.execute("UPDATE users SET organisation_id=?,role='field' WHERE id=?",[org,fieldUser.user.id]);
+  assert.notEqual((await put(approved1,{links:{jobId:p2},allocationReason:'Posted to the wrong job'},fieldUser.cookie)).status,200,'a role without docket.approve cannot move posted costs');
+  assert.deepEqual((await rows(d1.id)).map(r=>[r.project_id,r.status]),[[p1,'actual']],'refusals changed nothing');
+  const moved=await json(await put(approved1,{links:{jobId:p2},allocationReason:'Posted to the wrong job'}),200);assert.equal(moved.costLinesPosted,1);
+  assert.deepEqual((await rows(d1.id)).map(r=>[r.project_id,r.source_line,r.status,Number(r.amount)]),[[p1,'L1','reversed',1000],[p2,'L1@1','actual',1000]],'old cost reversed and kept with its original project; new cost posted to the new project');
+  assert.deepEqual(await stored(d1.id),{jobId:p2,allocationSeq:1});
+  const re=await audits('docket.reallocated',d1.id);assert.equal(re.length,1);assert.match(re[0].summary,/Posted to the wrong job/);assert.equal(JSON.parse(re[0].before_state).reversed.amount,1000);assert.equal(JSON.parse(re[0].after_state).projectId,p2);
+  const byProject=async pid=>Number((await db.execute("SELECT COALESCE(SUM(amount),0) AS t FROM cost_transactions WHERE organisation_id=? AND project_id=? AND status='actual' AND source_type='docket' AND source_id=?",[org,pid,d1.id]))[0][0].t);
+  assert.equal(await byProject(p1),0);assert.equal(await byProject(p2),1000);
+  const [[unitCheck]]=await db.execute("SELECT j.business_unit_id AS unit FROM cost_transactions c JOIN jobs j ON j.id=c.project_id AND j.organisation_id=c.organisation_id WHERE c.organisation_id=? AND c.source_id=? AND c.status='actual'",[org,d1.id]);assert(unitCheck.unit,'the cost reports under the new project\'s division');
+  // Saving again is idempotent; an amount edit updates the current rows only; the reversed history keeps its amount.
+  await json(await put({...approved1,links:{jobId:p2,allocationSeq:1}},{}),200);assert.equal((await rows(d1.id)).length,2);
+  await json(await put({...approved1,links:{jobId:p2}},{amount:1100,lineItems:[{description:'AC14 asphalt supply',quantity:5,unit:'t',rate:220,amount:1100}]}),200);
+  assert.deepEqual((await rows(d1.id)).map(r=>[r.project_id,r.source_line,r.status,Number(r.amount)]),[[p1,'L1','reversed',1000],[p2,'L1@1','actual',1100]]);
+  // Moving back is a new allocation, not a reactivation of the old rows.
+  await json(await put({...approved1,amount:1100,lineItems:[{description:'AC14 asphalt supply',quantity:5,unit:'t',rate:220,amount:1100}]},{links:{jobId:p1},allocationReason:'Moved back after client confirmation'}),200);
+  assert.deepEqual((await rows(d1.id)).map(r=>[r.project_id,r.source_line,r.status,Number(r.amount)]),[[p1,'L1','reversed',1000],[p2,'L1@1','reversed',1100],[p1,'L1@2','actual',1100]]);
+  // Clearing the project of an approved docket reverses its posted cost (previously the old cost was left behind).
+  const priced={...approved1,amount:1100,lineItems:[{description:'AC14 asphalt supply',quantity:5,unit:'t',rate:220,amount:1100}]};
+  await json(await put(priced,{links:{},allocationReason:''}),422,'clearing needs a reason too');
+  const cleared=await json(await put(priced,{links:{},allocationReason:'Docket belongs to another client'}),200);assert.equal(cleared.costLinesPosted,0);assert.match(cleared.message,/reversed/);
+  assert.equal((await rows(d1.id)).filter(r=>r.status==='actual').length,0,'no cost is left behind');assert.deepEqual(await stored(d1.id),{allocationSeq:3});
+  assert.equal((await audits('docket.reallocated',d1.id)).length,3);
+  s1=await summary();assert.equal(s1.approved,s0.approved+1,'the cleared approved docket is back in the unallocated count');
+  // A review docket can be allocated freely (audited), and a shift link from an earlier project is dropped.
+  await json(await put(d2,{links:{jobId:p1,shiftId:'old-shift'}}),200);assert.deepEqual(await stored(d2.id),{jobId:p1},'no shift picker in this change: a shift link is not accepted with an allocation');
+  await json(await put(d2,{links:{jobId:p2,shiftId:'old-shift'}}),200);assert.deepEqual(await stored(d2.id),{jobId:p2,allocationSeq:1},'moved: the sequence advances');
+  assert((await audits('docket.allocated',d2.id)).length>=2);
+  // Closed projects keep the existing policy: reopen first (the audited reopening process), in both directions.
+  const d3=await mk('three');await db.execute("UPDATE jobs SET stage='closed' WHERE organisation_id=? AND id=?",[org,p2]);
+  await json(await put(d3,{links:{jobId:p2}}),409,'cannot allocate into a closed project');
+  const d4=await mk('four');await json(await put({...d4,status:'approved'},{links:{jobId:p1}}),200);
+  await json(await put({...d4,status:'approved',links:{jobId:p1}},{links:{jobId:p2},allocationReason:'Needs to go to the closed job'}),409,'cannot allocate into a closed project');
+  await db.execute("UPDATE jobs SET stage='active' WHERE organisation_id=? AND id=?",[org,p2]);
+  await json(await put({...d4,status:'approved',links:{jobId:p1}},{links:{jobId:p2},allocationReason:'Moved to the second job'}),200);
+  await db.execute("UPDATE jobs SET stage='closed' WHERE organisation_id=? AND id=?",[org,p2]);
+  await json(await put({...d4,status:'approved',links:{jobId:p2,allocationSeq:1}},{links:{jobId:p1},allocationReason:'Back out of the closed job'}),409,'cannot move costs out of a closed project');
+  assert.deepEqual((await rows(d4.id)).map(r=>[r.project_id,r.source_line,r.status]),[[p1,'L1','reversed'],[p2,'L1@1','actual']],'refused moves changed nothing');
+  await db.execute("UPDATE jobs SET stage='active' WHERE organisation_id=? AND id=?",[org,p2]);
+  // Atomic: a failure while recording the correction rolls back the reversal and the re-post.
+  const before=await rows(d4.id),beforeLinks=await stored(d4.id);
+  await db.query("CREATE TRIGGER qa_fail_realloc BEFORE INSERT ON audit_log FOR EACH ROW BEGIN IF NEW.event_type='docket.reallocated' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='qa forced failure'; END IF; END");
+  try{assert((await put({...d4,status:'approved',links:{jobId:p2,allocationSeq:1}},{links:{jobId:p1},allocationReason:'Atomic rollback check'})).status>=500,'forced failure surfaces');}finally{await db.query('DROP TRIGGER IF EXISTS qa_fail_realloc');}
+  assert.deepEqual(await rows(d4.id),before,'cost rows rolled back');assert.deepEqual(await stored(d4.id),beforeLinks,'links rolled back');
+  await json(await put({...d4,status:'approved',links:{jobId:p2,allocationSeq:1}},{links:{jobId:p1},allocationReason:'Atomic rollback check'}),200,'the retry succeeds');
+  assert.deepEqual((await rows(d4.id)).map(r=>[r.project_id,r.source_line,r.status]),[[p1,'L1','reversed'],[p2,'L1@1','reversed'],[p1,'L1@2','actual']]);
+  console.log('PASS docket allocation: project list and unallocated queue, first allocation, audited reverse-and-repost reallocation with history, clearing reverses cost, reason/permission/tenant/closed-project rules, atomic rollback, idempotent saves');
+ }
  // ---------------------------------------------------------------- Scenario G
  step='G tenant attack';
  const attacks=[['GET',`/api/tenders/workspace?id=${tenderId}`],['GET',`/api/projects/workspace?id=${projectId}`],['GET',`/api/projects/control?id=${projectId}`],['GET',`/api/commercial/claims?projectId=${projectId}`],['GET',`/api/hseq/swms?id=${sw.swmsId}`],['GET',`/api/documents?id=${insuranceDoc.id}`],['GET',`/api/tenders/export?id=${tenderId}`],['GET',`/api/registers/risks?parentId=${projectId}`],['GET',`/api/registers/requirements?parentId=${tenderId}`]];

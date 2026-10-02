@@ -953,6 +953,7 @@ export function matchReprocessedDocket(found: DocketRecord[], saved: { docketNo?
 /** The supplier as printed on a docket (ABN and first plain line), for telling otherwise identical options apart. */
 export function issuerDetails(text: string) {
   const abn = text.match(/\bABN[ \t:]*([\d ]{11,14})/i)?.[1]?.replace(/\s+/g, " ").trim() ?? "";
-  const key = issuerKey(text);
-  return { abn, name: key.startsWith("name:") ? text.split("\n").map((line) => line.trim()).filter(Boolean).find((line) => !isTitleLine(line) && !/^\[(?:page|inherited)/i.test(line) && !/^page\b/i.test(line)) ?? "" : "" };
+  const first = text.split("\n").map((line) => line.trim()).filter(Boolean).find((line) => !isTitleLine(line) && !/^\[(?:page|inherited)/i.test(line) && !/^page\b/i.test(line)) ?? "";
+  const name = /^[A-Za-z][A-Za-z0-9 &.'()-]{2,60}$/.test(first) && !HEADER_LINE.test(first) ? first : "";
+  return { abn, name };
 }

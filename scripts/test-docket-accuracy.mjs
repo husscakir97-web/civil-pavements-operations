@@ -261,7 +261,7 @@ const supplierB=works.replace('Example Traffic Services','Other Supplier Pty Ltd
  const named=parseDocketDocument([page(noAbn(works),1,1)],'x.pdf');
  assert.equal(matchReprocessedDocket(named,{docketNo:'9042',sourcePage:1,sourceCrop:'full-page',rawText:noAbn(supplierB)}).conflict,true);
  // the chooser can tell otherwise identical options apart
- assert.deepEqual(issuerDetails(works),{abn:'00 000 000 000',name:''});assert.equal(issuerDetails(supplierB).abn,'11 111 111 111');assert.equal(issuerDetails(noAbn(works)).name,'Example Traffic Services');
+ assert.deepEqual(issuerDetails(works),{abn:'00 000 000 000',name:'Example Traffic Services'});assert.equal(issuerDetails('garbled').abn,'');assert.equal(issuerDetails(supplierB).abn,'11 111 111 111');assert.equal(issuerDetails(noAbn(works)).name,'Example Traffic Services');
  const source=readFileSync(new URL('../components/docket-dashboard.tsx',import.meta.url),'utf8');
  assert(source.includes('data-testid="candidate-supplier"')&&source.includes('ABN ${supplier.abn}')&&source.includes('section ${candidate.sourceCrop'),'the chooser shows supplier, ABN and section');
  assert(source.includes('conflict:Boolean(matched.conflict)'));

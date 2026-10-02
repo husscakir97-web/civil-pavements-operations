@@ -54,6 +54,7 @@ import {
   parseDocket,
   parseDocketDocument,
   matchReprocessedDocket,
+  issuerDetails,
   isReadablePdfText,
   docketCandidateScore,
   type DocketCandidate,
@@ -385,7 +386,7 @@ export function DocketDashboard() {
   // The dockets actually created by this upload (as returned by the server), shown for review.
   const [uploadedRecords, setUploadedRecords] = useState<Docket[]>([]);
   // After "Run OCR" on a PDF with readable text: the native text and what each read produced, for side-by-side review.
-  const [reprocessChoice, setReprocessChoice] = useState<{ record: Docket; candidates: Docket[]; forceOcr: boolean; nativeText: string; nativeFound: Docket[] } | null>(null);
+  const [reprocessChoice, setReprocessChoice] = useState<{ record: Docket; candidates: Docket[]; forceOcr: boolean; nativeText: string; nativeFound: Docket[]; conflict: boolean } | null>(null);
   const [compare, setCompare] = useState<{ nativeText: string; native?: Docket; ocr: Docket } | null>(null);
   const [editing, setEditing] = useState<Docket | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -741,7 +742,7 @@ export function DocketDashboard() {
       const nativePages=pages.filter(p=>p.nativeText);
       const nativeFound=nativePages.length?parseDocketDocument(nativePages.map(p=>({text:p.nativeText as string,confidence:99,pageNumber:p.pageNumber,pageCount:p.pageCount,method:'pdf-text'})),record.sourceName):[];
       const nativeText=nativePages.map(p=>`[page ${p.pageNumber}]\n${p.nativeText}`).join('\n');
-      if(matched.ambiguous){setReprocessChoice({record,candidates:matched.candidates,forceOcr,nativeText,nativeFound});toast.info('More than one docket in the file fits this record. Choose which one to use; nothing has been changed.');return;}
+      if(matched.ambiguous){setReprocessChoice({record,candidates:matched.candidates,forceOcr,nativeText,nativeFound,conflict:Boolean(matched.conflict)});toast.info(matched.conflict?'The docket at this position is from a different supplier than the saved record. Choose which one to use; nothing has been changed.':'More than one docket in the file fits this record. Choose which one to use; nothing has been changed.');return;}
       finishReprocess(record,matched.match as Docket,forceOcr,nativeText,nativeFound);
     } catch(e) { toast.error(e instanceof Error?e.message:'Reprocessing failed. Saved data is unchanged.'); }
     finally { if(worker)await (worker as OcrWorker).terminate(); }
@@ -1104,13 +1105,14 @@ export function DocketDashboard() {
         <DialogContent className="sm:max-w-lg" data-testid="reprocess-choice">
           <DialogHeader>
             <DialogTitle>Which docket is this record?</DialogTitle>
-            <DialogDescription>The file holds more than one docket that could be this one. Choose the one to open as a review draft; the saved record is not changed until you save it.</DialogDescription>
+            <DialogDescription>{reprocessChoice?.conflict ? "The docket at this record's position is from a different supplier than the saved record (or the saved supplier was not found in the file). Choose deliberately; nothing is loaded until you do." : "The file holds more than one docket that could be this one."} The chosen docket opens as a review draft; the saved record is not changed until you save it.</DialogDescription>
           </DialogHeader>
           <ul className="space-y-2">
             {(reprocessChoice?.candidates ?? []).map((candidate, index) => (
               <li key={index} className="flex items-center justify-between gap-3 rounded-lg border p-3 text-sm">
                 <div className="min-w-0">
-                  <p className="font-medium">Docket {candidate.docketNo} · {candidate.sourceCrop?.startsWith("pages-") ? `pages ${candidate.sourceCrop.replace("pages-", "").split("+").join(", ")}` : `page ${candidate.sourcePage ?? "?"}`}</p>
+                  <p className="font-medium">Docket {candidate.docketNo} · {candidate.sourceCrop?.startsWith("pages-") ? `pages ${candidate.sourceCrop.replace("pages-", "").split("+").join(", ")}` : `page ${candidate.sourcePage ?? "?"}`}{candidate.sourceCrop?.startsWith("section-") ? ` · section ${candidate.sourceCrop.replace("section-", "").replace("-of-", " of ")}` : ""}</p>
+                  {(() => { const supplier = issuerDetails(candidate.rawText); return <p className="truncate text-xs text-slate-600" data-testid="candidate-supplier">Supplier: {supplier.name || "not read"}{supplier.abn ? ` · ABN ${supplier.abn}` : " · ABN not read"}</p>; })()}
                   <p className="truncate text-xs text-slate-500">{[candidate.client, candidate.project].filter(Boolean).join(" — ") || "Client and project not read"}{candidate.labourHours ? ` · ${candidate.labourHours} labour hrs` : ""}</p>
                 </div>
                 <Button size="xs" variant="outline" onClick={() => { const choice = reprocessChoice; setReprocessChoice(null); if (choice) finishReprocess(choice.record, candidate, choice.forceOcr, choice.nativeText, choice.nativeFound); }}>Use this one</Button>

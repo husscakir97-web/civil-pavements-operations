@@ -929,9 +929,16 @@ export function matchReprocessedDocket(found: DocketRecord[], saved: { docketNo?
   const samePage = found.filter((d) => saved.sourcePage != null && d.sourcePage === saved.sourcePage);
   const coversPage = found.filter((d) => saved.sourcePage != null && (d.pages ?? [d.sourcePage]).includes(saved.sourcePage));
   let pool = sameSection.length ? sameSection : samePage.length ? samePage : coversPage.length ? coversPage : found;
-  if (saved.rawText && pool.length > 1) {
-    const mine = issuerKey(saved.rawText);
+  // Supplier identity applies even to a single positional match: a unique page/section hit whose supplier contradicts the saved docket is not
+  // trusted (stale section numbers, or OCR missing the expected supplier). Unknown supplier evidence on either side is not a contradiction.
+  const mine = saved.rawText ? issuerKey(saved.rawText) : "";
+  if (mine) {
     const compatible = pool.filter((d) => compareIssuers(mine, issuerKey(d.rawText)) !== "different");
+    if (!compatible.length && pool.length) {
+      // Everything at that position contradicts the saved supplier: offer the positional docket(s) and any other docket that fits the supplier, and make the user choose.
+      const others = found.filter((d) => !pool.includes(d) && compareIssuers(mine, issuerKey(d.rawText)) !== "different");
+      return { match: undefined, candidates: [...pool, ...others], ambiguous: true, conflict: true };
+    }
     if (compatible.length) pool = compatible;
     const same = pool.filter((d) => compareIssuers(mine, issuerKey(d.rawText)) === "same");
     if (same.length) pool = same;
@@ -940,5 +947,12 @@ export function matchReprocessedDocket(found: DocketRecord[], saved: { docketNo?
     const byNumber = pool.filter((d) => d.docketNo.toUpperCase() === saved.docketNo!.toUpperCase());
     if (byNumber.length) pool = byNumber;
   }
-  return { match: pool.length === 1 ? pool[0] : undefined, candidates: pool, ambiguous: pool.length > 1 };
+  return { match: pool.length === 1 ? pool[0] : undefined, candidates: pool, ambiguous: pool.length > 1, conflict: false };
+}
+
+/** The supplier as printed on a docket (ABN and first plain line), for telling otherwise identical options apart. */
+export function issuerDetails(text: string) {
+  const abn = text.match(/\bABN[ \t:]*([\d ]{11,14})/i)?.[1]?.replace(/\s+/g, " ").trim() ?? "";
+  const key = issuerKey(text);
+  return { abn, name: key.startsWith("name:") ? text.split("\n").map((line) => line.trim()).filter(Boolean).find((line) => !isTitleLine(line) && !/^\[(?:page|inherited)/i.test(line) && !/^page\b/i.test(line)) ?? "" : "" };
 }

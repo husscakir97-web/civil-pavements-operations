@@ -6,7 +6,7 @@ import ts from 'typescript';
 
 const load=file=>ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;
 const parser=await import(`data:text/javascript;base64,${Buffer.from(load('../lib/docket-parser.ts')).toString('base64')}`);
-const {parseDocket,splitDocketText,parseDocketDocument,parseDocketPage,isReadablePdfText,docketIdentities,matchReprocessedDocket}=parser;
+const {parseDocket,splitDocketText,parseDocketDocument,parseDocketPage,isReadablePdfText,docketIdentities,matchReprocessedDocket,issuerDetails}=parser;
 const works=readFileSync(new URL('./fixtures/dockets/works-docket-1p.txt',import.meta.url),'utf8').trim();
 const lines=works.split('\n');
 
@@ -242,6 +242,29 @@ const supplierB=works.replace('Example Traffic Services','Other Supplier Pty Ltd
  assert(source.includes('matchReprocessedDocket(found,record)')&&source.includes('if(matched.ambiguous){setReprocessChoice('),'Reprocess uses provenance and asks when ambiguous');
  assert(!/found\.find\(d=>d\.docketNo\.toUpperCase\(\)===record\.docketNo\.toUpperCase\(\)\)/.test(source),'no number-first selection remains');
  assert(source.includes('data-testid="reprocess-choice"'));
+}
+
+{// 2b. A unique positional match must still agree on the supplier: stale section provenance, or OCR missing the expected supplier
+ const both=parseDocketDocument([page(`${works}\n${supplierB}`,1,1)],'x.pdf');
+ const stale=matchReprocessedDocket(both,{docketNo:'9042',sourcePage:1,sourceCrop:'section-1-of-2',rawText:supplierB});
+ assert.equal(stale.match,undefined,'stale section 1 would select supplier A: it must not load silently');assert.equal(stale.ambiguous,true);assert.equal(stale.conflict,true);
+ assert.deepEqual(stale.candidates.map(d=>d.client).sort(),['Example Builder Group','Other Builder Group'],'both are offered so the user can choose');
+ const onlyA=parseDocketDocument([page(works,1,1)],'x.pdf');
+ const omitted=matchReprocessedDocket(onlyA,{docketNo:'9042',sourcePage:1,sourceCrop:'full-page',rawText:supplierB});
+ assert.equal(omitted.match,undefined,'OCR missing supplier B must not load supplier A');assert.equal(omitted.ambiguous,true);assert.equal(omitted.conflict,true);assert.equal(omitted.candidates.length,1,'the only docket found is offered, not chosen');
+ // agreement and unknown evidence are not contradictions
+ assert.equal(matchReprocessedDocket(onlyA,{docketNo:'9042',sourcePage:1,sourceCrop:'full-page',rawText:works}).match.client,'Example Builder Group');
+ assert.equal(matchReprocessedDocket(onlyA,{docketNo:'UNREAD',sourcePage:1,sourceCrop:'full-page',rawText:'garbled text'}).match.client,'Example Builder Group','no supplier evidence on the saved record: positional match stands');
+ assert.equal(matchReprocessedDocket(onlyA,{docketNo:'9042',sourcePage:1,sourceCrop:'full-page'}).match.client,'Example Builder Group','no saved raw text: positional match stands');
+ // supplier names without an ABN contradict too
+ const noAbn=t=>t.replace(/^ABN .*\n/m,'');
+ const named=parseDocketDocument([page(noAbn(works),1,1)],'x.pdf');
+ assert.equal(matchReprocessedDocket(named,{docketNo:'9042',sourcePage:1,sourceCrop:'full-page',rawText:noAbn(supplierB)}).conflict,true);
+ // the chooser can tell otherwise identical options apart
+ assert.deepEqual(issuerDetails(works),{abn:'00 000 000 000',name:''});assert.equal(issuerDetails(supplierB).abn,'11 111 111 111');assert.equal(issuerDetails(noAbn(works)).name,'Example Traffic Services');
+ const source=readFileSync(new URL('../components/docket-dashboard.tsx',import.meta.url),'utf8');
+ assert(source.includes('data-testid="candidate-supplier"')&&source.includes('ABN ${supplier.abn}')&&source.includes('section ${candidate.sourceCrop'),'the chooser shows supplier, ABN and section');
+ assert(source.includes('conflict:Boolean(matched.conflict)'));
 }
 
 {// 3. Run OCR: native text is comparison-only; quantitative evidence is never discarded silently

@@ -366,6 +366,12 @@ export function DocketDashboard() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "ready" | "flagged">("all");
+  // Unallocated queue: every docket that carries no project (any month). Dockets without a project cannot post cost.
+  const [queue, setQueue] = useState(false);
+  const [unallocated, setUnallocated] = useState<{ count: number; approved: number }>({ count: 0, approved: 0 });
+  const [projects, setProjects] = useState<Array<{ id: string; name: string; number: string | null; stage: string }> | null>(null);
+  const [allocReason, setAllocReason] = useState<{ id: string; text: string }>({ id: "", text: "" });
+  const [reloadTick, setReloadTick] = useState(0);
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -376,13 +382,14 @@ export function DocketDashboard() {
 
   useEffect(() => {
     let active = true;
-    fetch(`/api/dockets?month=${selectedMonth}`, { cache: "no-store" })
+    fetch(queue ? "/api/dockets?unallocated=1" : `/api/dockets?month=${selectedMonth}`, { cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) throw new Error("load failed");
-        return (await response.json()) as { dockets: Docket[] };
+        return (await response.json()) as { dockets: Docket[]; unallocated?: { count: number; approved: number } };
       })
-      .then(({ dockets }) => {
+      .then(({ dockets, unallocated: summary }) => {
         if (!active) return;
+        if (summary) setUnallocated(summary);
         setLoadError("");
         if (dockets.length) {
           setRecords(dockets);
@@ -400,7 +407,18 @@ export function DocketDashboard() {
       })
       .finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, [selectedMonth]);
+  }, [selectedMonth, queue, reloadTick]);
+
+  // Projects for the allocation control, loaded once when a docket is opened.
+  useEffect(() => {
+    if (!editing || projects) return;
+    let active = true;
+    fetch("/api/dockets?projects=1", { cache: "no-store" })
+      .then(async (response) => response.ok ? (await response.json()) as { projects: NonNullable<typeof projects> } : { projects: [] })
+      .then((body) => { if (active) setProjects(body.projects); })
+      .catch(() => { if (active) setProjects([]); });
+    return () => { active = false; };
+  }, [editing, projects]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -605,12 +623,14 @@ export function DocketDashboard() {
       const response = await fetch("/api/dockets", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editing),
+        body: JSON.stringify({ ...editing, expectedUpdatedAt: (records.find((item) => item.id === editing.id) ?? editing).updatedAt, allocationReason: allocReason.id === editing.id ? allocReason.text : "" }),
       });
       if (!response.ok) { const problem=await response.json().catch(()=>({})) as {error?:string}; throw new Error(problem.error || 'Changes could not be saved.'); }
       const { docket } = (await response.json()) as { docket: Docket };
       window.dispatchEvent(new Event('records-changed'));
-      setRecords((items) => items.map((item) => item.id === docket.id ? docket : item).filter((item) => item.workDate.startsWith(selectedMonth)));
+      setRecords((items) => items.map((item) => item.id === docket.id ? docket : item).filter((item) => queue ? !item.links?.jobId : item.workDate.startsWith(selectedMonth)));
+      setAllocReason({ id: "", text: "" });
+      setReloadTick((tick) => tick + 1);
       setEditing(null);
       toast.success("Docket updated.");
     } catch (error) {
@@ -822,8 +842,23 @@ export function DocketDashboard() {
                     </Button>
                   ))}
                 </div>
+                <Button
+                  size="sm"
+                  variant={queue ? "default" : "outline"}
+                  aria-pressed={queue}
+                  onClick={() => { setQueue((value) => !value); setLoading(true); }}
+                  title="Dockets with no project post no cost to any job"
+                >
+                  Unallocated ({unallocated.count})
+                </Button>
               </div>
             </div>
+
+            {unallocated.approved > 0 && (
+              <p role="status" className="mx-4 mb-2 rounded-md bg-amber-50 p-2 text-sm font-medium text-amber-800" data-testid="no-cost-banner">
+                {unallocated.approved} approved docket{unallocated.approved === 1 ? " is" : "s are"} not allocated to a project, so no cost is posted for {unallocated.approved === 1 ? "it" : "them"}. Open the Unallocated queue to allocate.
+              </p>
+            )}
 
             {loading ? (
               <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-slate-500">
@@ -833,7 +868,7 @@ export function DocketDashboard() {
               <EmptyState onUpload={upload} />
             ) : (
               <>
-              <div className="space-y-3 p-3 md:hidden">{filtered.map(record => <article key={record.id} className="space-y-3 rounded-lg border p-4"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-semibold">Docket {record.docketNo || 'number missing'}</p><p className="text-sm text-slate-600">{displayDate(record.workDate)}</p></div><StatusBadge status={record.status}/></div><div><p className="font-semibold">{record.client || 'Client not read'}</p><p className="text-sm">{record.project || 'Project not read'}</p></div><dl className="grid grid-cols-2 gap-3 text-sm"><div><dt className="text-slate-500">Hours</dt><dd>{record.labourHours ? decimal.format(record.labourHours) : '—'}</dd></div><div><dt className="text-slate-500">Amount</dt><dd>{record.amount ? money.format(record.amount) : '—'}</dd></div><div><dt className="text-slate-500">Quantity</dt><dd>{record.quantity ? `${decimal.format(record.quantity)} ${record.quantityUnit}` : '—'}</dd></div><div><dt className="text-slate-500">Recognition confidence</dt><dd>{record.confidence}%</dd></div></dl><div className="flex flex-wrap gap-2"><Button disabled={isSample} onClick={() => setEditing({...record})}>Review docket</Button><Button variant="outline" disabled={isSample || !!deletingId} onClick={() => void deleteDocket(record)}>Delete</Button></div></article>)}</div>
+              <div className="space-y-3 p-3 md:hidden">{filtered.map(record => <article key={record.id} className="space-y-3 rounded-lg border p-4"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-semibold">Docket {record.docketNo || 'number missing'}</p><p className="text-sm text-slate-600">{displayDate(record.workDate)}</p></div><StatusBadge status={record.status}/></div><div><p className="font-semibold">{record.client || 'Client not read'}</p><p className="text-sm">{record.project || 'Project not read'}</p>{!record.links?.jobId&&<p className="text-xs font-medium text-amber-700">Not allocated to a project{record.status==='approved'?' — no cost posted':''}</p>}</div><dl className="grid grid-cols-2 gap-3 text-sm"><div><dt className="text-slate-500">Hours</dt><dd>{record.labourHours ? decimal.format(record.labourHours) : '—'}</dd></div><div><dt className="text-slate-500">Amount</dt><dd>{record.amount ? money.format(record.amount) : '—'}</dd></div><div><dt className="text-slate-500">Quantity</dt><dd>{record.quantity ? `${decimal.format(record.quantity)} ${record.quantityUnit}` : '—'}</dd></div><div><dt className="text-slate-500">Recognition confidence</dt><dd>{record.confidence}%</dd></div></dl><div className="flex flex-wrap gap-2"><Button disabled={isSample} onClick={() => setEditing({...record})}>Review docket</Button><Button variant="outline" disabled={isSample || !!deletingId} onClick={() => void deleteDocket(record)}>Delete</Button></div></article>)}</div>
               <div className="hidden md:block"><Table>
                 <TableHeader className="bg-slate-50/90">
                   <TableRow className="hover:bg-slate-50/90">
@@ -862,6 +897,7 @@ export function DocketDashboard() {
                       <TableCell className="max-w-[260px]">
                         <p className="truncate font-semibold text-slate-900">{record.client || "Client not read"}</p>
                         <p className="mt-0.5 truncate text-xs text-slate-500">{record.project || "Project not read"}</p>
+                        {!record.links?.jobId && <p className="mt-0.5 text-xs font-medium text-amber-700">Not allocated to a project{record.status === "approved" ? " — no cost posted" : ""}</p>}
                       </TableCell>
                       <TableCell>
                         <p className="max-w-40 truncate text-slate-700">{record.crew || "—"}</p>
@@ -1114,6 +1150,54 @@ export function DocketDashboard() {
                 </div>
               <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm sm:col-span-2"><p className="font-semibold text-orange-900">Source and boundary review</p><p className="mt-1 text-orange-800">Page {editing.sourcePage || "Source page not captured"} · {editing.sourceCrop || "full-page"} · {editing.extractionMethod || "local-ocr"} · Profile {editing.profileId || "generic"}</p><div className="mt-2 flex flex-wrap gap-2"><Button type="button" variant="outline" size="sm" onClick={() => docketAction("split", editing).catch((e) => toast.error(e.message))}>Split record</Button><Button type="button" variant="outline" size="sm" onClick={() => docketAction("merge", editing).catch((e) => toast.error(e.message))}>Merge adjacent</Button><Button type="button" variant="outline" size="sm" onClick={() => docketAction("reprocess", editing).catch((e) => toast.error(e.message))}>Reprocess</Button></div></div>
               {!!editing.fieldConfidence && <div className="rounded-lg border p-3 text-sm sm:col-span-2"><p className="font-semibold">Uncertain fields</p><div className="mt-2 flex flex-wrap gap-2">{Object.entries(editing.fieldConfidence).filter(([,v])=>Number(v)<78).map(([k,v])=><span key={k} className="rounded-full bg-amber-100 px-2 py-1 text-amber-900">{k}: {v}%</span>)}</div></div>}
+              {(() => {
+                const stored = records.find((item) => item.id === editing.id);
+                const originalJob = stored?.links?.jobId || "";
+                const currentJob = editing.links?.jobId || "";
+                const changed = originalJob !== currentJob;
+                const locked = ["included_claim", "invoiced"].includes(stored?.status || editing.status);
+                const costPosted = stored?.status === "approved";
+                const needsReason = costPosted && Boolean(originalJob) && changed;
+                return (
+                  <div className="space-y-2 rounded-lg border p-3 text-sm sm:col-span-2" data-testid="docket-allocation">
+                    <Label htmlFor="docket-project" className="font-semibold">Project (where the cost is posted)</Label>
+                    <NativeSelect
+                      id="docket-project"
+                      aria-label="Allocate to project"
+                      value={currentJob}
+                      disabled={locked || projects === null}
+                      onChange={(event) => {
+                        const next = { ...(editing.links || {}) } as Record<string, string>;
+                        if (event.target.value) next.jobId = event.target.value; else delete next.jobId;
+                        setEditing({ ...editing, links: next });
+                      }}
+                    >
+                      <NativeSelectOption value="">Not allocated</NativeSelectOption>
+                      {(projects || []).map((project) => (
+                        <NativeSelectOption key={project.id} value={project.id} disabled={project.stage === "closed" && project.id !== originalJob}>
+                          {[project.number, project.name].filter(Boolean).join(" · ")}{project.stage === "closed" ? " (closed: reopen it first)" : ""}
+                        </NativeSelectOption>
+                      ))}
+                      {currentJob && !(projects || []).some((project) => project.id === currentJob) && <NativeSelectOption value={currentJob}>Project not available to you</NativeSelectOption>}
+                    </NativeSelect>
+                    <p className="text-xs text-slate-500">
+                      {locked ? "This docket is in a progress claim and is locked."
+                        : !currentJob ? "No project is chosen, so approving this docket posts no cost to any job."
+                        : costPosted ? "Changing the project reverses the cost posted to the old project and posts it to the new one. Both steps are audited and the old entries are kept."
+                        : "Approving posts the priced amount to this project."}
+                    </p>
+                    {!currentJob && (editing.status === "approved" || stored?.status === "approved") && !locked && (
+                      <p role="alert" className="rounded-md bg-amber-50 p-2 text-xs font-medium text-amber-800" data-testid="docket-no-cost-warning">No cost is posted for this approved docket because it is not allocated to a project. It will not appear in any project&apos;s actual cost.</p>
+                    )}
+                    {needsReason && (
+                      <div className="space-y-1">
+                        <Label htmlFor="docket-allocation-reason">Reason for moving posted costs (required)</Label>
+                        <Textarea id="docket-allocation-reason" value={allocReason.id === editing.id ? allocReason.text : ""} minLength={10} onChange={(event) => setAllocReason({ id: editing.id, text: event.target.value })} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               <div className="rounded-lg border bg-slate-50 p-3 text-sm sm:col-span-2"><p className="font-semibold">Suggested OS links</p><p className="mt-1 text-slate-600">Client {editing.client||"confirm"} · Job {editing.project||"confirm"} · Shift {editing.startTime||"suggest"} · PO/WOL {editing.poNumber||"confirm"} · Vehicle {editing.vehicle||"confirm"} · Claim {editing.workDate.slice(0,7)}</p><p className="mt-1 text-amber-800">Confirm uncertain matches before Matched or Approved.</p></div>
               {!!editing.lineItems?.length && <div className="rounded-lg border p-3 text-sm sm:col-span-2"><p className="font-semibold">Line items</p>{editing.lineItems.map((item,i)=><div key={i} className="flex justify-between border-b py-2"><span>{String(item.description||"Item")}</span><span>{String(item.quantity||0)} {String(item.unit||"")} · {item.valueSource === "document" ? "document" : "system rate pending"}</span></div>)}</div>}
                 <Button asChild variant="outline" size="sm">

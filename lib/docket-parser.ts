@@ -2,6 +2,7 @@ export type DocketStatus = "uploaded" | "processing" | "review" | "matched" | "a
 
 export type DocketRecord = {
   id: string;
+  updatedAt?: string;
   docketNo: string;
   workDate: string;
   client: string;

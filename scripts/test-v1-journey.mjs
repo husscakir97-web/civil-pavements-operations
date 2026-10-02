@@ -596,7 +596,9 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  step='Docket allocation';
  {const org=memberA.organisation_id;
   const mk=async(name,extra={})=>{const f=new FormData();f.set('records',JSON.stringify([{docketNo:`ALLOC-${name}-${suffix}`,workDate:today,client:'Supplier Pty Ltd',project:'Allocation test',amount:1000,lineItems:[{description:'AC14 asphalt supply',quantity:5,unit:'t',rate:200,amount:1000}],status:'review',...extra}]));return (await json(await call('/api/dockets','POST',f,A.cookie),200)).docket;};
-  const put=(d,patch,cookie=A.cookie)=>call('/api/dockets','PUT',{...d,...patch},cookie);
+  // Edits carry the version they were made against; by default the current stored version (stale-edit tests pass their own).
+  const version=async id=>(await db.execute('SELECT updated_at FROM dockets WHERE id=?',[id]))[0][0]?.updated_at;
+  const put=async(d,patch,cookie=A.cookie)=>call('/api/dockets','PUT',{...d,expectedUpdatedAt:await version(d.id),...patch},cookie);
   const rows=async id=>(await db.execute('SELECT project_id,source_line,status,amount FROM cost_transactions WHERE organisation_id=? AND source_id=? ORDER BY source_line',[org,id]))[0];
   const stored=async id=>JSON.parse((await db.execute('SELECT links FROM dockets WHERE organisation_id=? AND id=?',[org,id]))[0][0].links);
   const summary=async()=>(await json(await call(`/api/dockets?month=${today.slice(0,7)}`,'GET',undefined,A.cookie),200)).unallocated;
@@ -619,7 +621,7 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
   s1=await summary();assert.equal(s1.approved,s0.approved,'allocated: no longer in the queue');assert.equal(s1.count,s0.count+1);
   assert.equal((await audits('docket.allocated',d1.id)).length,1,'allocation is audited');assert((await audits('docket.approved',d1.id)).length>=1);
   // Omitting links never unlinks a docket.
-  await json(await call('/api/dockets','PUT',{...d1,status:'approved',links:undefined},A.cookie),200);assert.equal((await stored(d1.id)).jobId,p1);assert.equal((await rows(d1.id)).filter(r=>r.status==='actual').length,1);
+  await json(await put(d1,{status:'approved',links:undefined}),200);assert.equal((await stored(d1.id)).jobId,p1);assert.equal((await rows(d1.id)).filter(r=>r.status==='actual').length,1);
   // Reallocation is an audited cost correction: reverse and re-post atomically, history kept, reason required, approval permission.
   const approved1={...d1,status:'approved'};
   await json(await put(approved1,{links:{jobId:p2}}),422,'a reason is required to move posted costs');
@@ -675,6 +677,83 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
   await json(await put({...d4,status:'approved',links:{jobId:p2,allocationSeq:1}},{links:{jobId:p1},allocationReason:'Atomic rollback check'}),200,'the retry succeeds');
   assert.deepEqual((await rows(d4.id)).map(r=>[r.project_id,r.source_line,r.status]),[[p1,'L1','reversed'],[p2,'L1@1','reversed'],[p1,'L1@2','actual']]);
   console.log('PASS docket allocation: project list and unallocated queue, first allocation, audited reverse-and-repost reallocation with history, clearing reverses cost, reason/permission/tenant/closed-project rules, atomic rollback, idempotent saves');
+
+  // ---- Coordinated, transactional reallocation: stale edits, concurrent writes, claims, closure, approval round trips, Projects off.
+  const mkApproved=async(name,job,extra={})=>{const d=await mk(name,extra);await json(await put({...d,status:'approved'},{links:{jobId:job}}),200);return {...d,status:'approved',links:{jobId:job}};};
+  const actual=async id=>(await rows(id)).filter(r=>r.status==='actual').map(r=>[r.project_id,r.source_line]);
+  const p3=(await json(await call('/api/projects','POST',{name:'Allocation three'},A.cookie),201)).projectId;
+  // A change of project or status needs the version it was made against, and a stale one cannot overwrite a newer allocation.
+  {const d=await mkApproved('stale',p1);const seen=await version(d.id);
+   await json(await call('/api/dockets','PUT',{...d,links:{jobId:p2},allocationReason:'No version supplied here'},A.cookie),422,'the version is required to change the project');
+   await json(await put(d,{links:{jobId:p2},allocationReason:'First user moves it',expectedUpdatedAt:seen}),200);
+   const afterFirst=await rows(d.id),linksFirst=await stored(d.id),auditsFirst=(await audits('docket.reallocated',d.id)).length;
+   await json(await put(d,{links:{jobId:p3},allocationReason:'Second user from a stale form',expectedUpdatedAt:seen}),409,'a stale reallocation is refused');
+   await json(await put(d,{links:{jobId:p1},status:'review',allocationReason:'Stale return to review',expectedUpdatedAt:seen}),409,'a stale status change is refused');
+   assert.deepEqual(await rows(d.id),afterFirst,'the stale edits left the ledger alone');assert.deepEqual(await stored(d.id),linksFirst);assert.equal((await audits('docket.reallocated',d.id)).length,auditsFirst,'no history was added or overwritten');}
+  // Two reallocations of the same docket at once: exactly one wins, the history has one step, the ledger stays consistent.
+  for(let round=0;round<3;round++){const d=await mkApproved('race'+round,p1),seen=await version(d.id);
+   const results=await Promise.all([p2,p3].map(target=>put(d,{links:{jobId:target},allocationReason:'Concurrent move to '+target,expectedUpdatedAt:seen})));
+   const codes=results.map(r=>r.status).sort();assert.deepEqual(codes,[200,409],'one winner, one refused: '+codes);
+   const winner=(await stored(d.id)).jobId;assert([p2,p3].includes(winner));assert.equal((await stored(d.id)).allocationSeq,1);
+   assert.deepEqual(await actual(d.id),[[winner,'L1@1']],'one actual row, in the winning project');assert.equal((await rows(d.id)).length,2,'original reversed row kept, one new row');
+   assert.equal((await audits('docket.reallocated',d.id)).length,1);}
+  // Claims: a docket in a claim cannot be moved or returned to review, and a claim cannot take a docket that moved. Deterministic via the project lock a claim holds.
+  {const d=await mkApproved('claimlock',p1);const holder=await connect();
+   try{await holder.query('START TRANSACTION');await holder.query('SELECT id FROM jobs WHERE organisation_id=? AND id=? FOR UPDATE',[org,p1]);
+    let settled=false;const moving=put(d,{links:{jobId:p2},allocationReason:'Moving while a claim is being prepared'}).then(r=>{settled=true;return r;});
+    await new Promise(r=>setTimeout(r,800));assert.equal(settled,false,'the reallocation waits for the project lock instead of interleaving');
+    await holder.query("UPDATE dockets SET status='included_claim',updated_at=? WHERE organisation_id=? AND id=?",[new Date().toISOString(),org,d.id]);await holder.query('COMMIT');
+    assert.equal((await moving).status,409,'once the claim committed the move is refused');}finally{await holder.end();}
+   assert.equal((await stored(d.id)).jobId,p1);assert.deepEqual(await actual(d.id),[[p1,'L1']]);assert.equal((await db.execute('SELECT status FROM dockets WHERE id=?',[d.id]))[0][0].status,'included_claim','claim status was not overwritten');
+   await db.execute("UPDATE dockets SET status='approved' WHERE id=?",[d.id]);}
+  // A real claim racing a reallocation never ends with a claimed docket outside its claim's project.
+  for(let round=0;round<3;round++){const pc=(await json(await call('/api/projects','POST',{name:'Claim race '+round},A.cookie),201)).projectId;const d=await mkApproved('claimrace'+round,pc);
+   const [claimRes,moveRes]=await Promise.all([call('/api/commercial/claims','POST',{action:'create',projectId:pc,period:today.slice(0,7),lines:[{lineType:'docket',sourceId:d.id,thisClaim:1000}]},A.cookie),put(d,{links:{jobId:p3},allocationReason:'Racing the claim'})]);
+   const final=(await db.execute('SELECT status,links FROM dockets WHERE id=?',[d.id]))[0][0],job=JSON.parse(final.links).jobId,[claimLines]=await db.execute("SELECT project_id FROM claim_lines WHERE source_id=? AND line_type='docket'",[d.id]);
+   if(final.status==='included_claim'){assert.equal(job,pc,'a claimed docket stays in the claim project');assert.equal(claimLines.length,1);assert.equal(moveRes.status,409);assert.deepEqual(await actual(d.id),[[pc,'L1']]);}
+   else{assert.equal(job,p3,'the move won');assert.equal(claimLines.length,0,'no claim line for a docket that moved');assert.notEqual(claimRes.status,200);assert.deepEqual(await actual(d.id),[[p3,'L1@1']]);}}
+  // Closure: allocation into a project that is closing waits for the project lock and then sees it closed.
+  {const d=await mk('closing');const holder=await connect();
+   try{await holder.query('START TRANSACTION');await holder.query('SELECT id FROM jobs WHERE organisation_id=? AND id=? FOR UPDATE',[org,p3]);
+    let settled=false;const allocating=put(d,{links:{jobId:p3}}).then(r=>{settled=true;return r;});
+    await new Promise(r=>setTimeout(r,800));assert.equal(settled,false,'allocation waits for the project lock');
+    await holder.query("UPDATE jobs SET stage='closed' WHERE organisation_id=? AND id=?",[org,p3]);await holder.query('COMMIT');
+    assert.equal((await allocating).status,409,'allocation after closure is refused');}finally{await holder.end();}
+   assert.deepEqual(await stored(d.id),{},'the docket was not allocated');await db.execute("UPDATE jobs SET stage='active' WHERE organisation_id=? AND id=?",[org,p3]);}
+  // Approved → Review combined with moving or clearing the project keeps the allocation audit, reason and closed-project rules.
+  {const d=await mkApproved('roundtrip',p1);
+   await json(await put(d,{status:'review',links:{jobId:p2}}),422,'a reason is still required');
+   const r=await json(await put(d,{status:'review',links:{jobId:p2},allocationReason:'Returned to review and moved to Bravo'}),200);assert.equal(r.costLinesPosted,0);
+   assert.deepEqual(await actual(d.id),[],'no cost stays posted');assert.deepEqual((await rows(d.id)).map(x=>[x.project_id,x.source_line,x.status]),[[p1,'L1','reversed']],'history kept under the original project');
+   assert.deepEqual(await stored(d.id),{jobId:p2,allocationSeq:1});const a=await audits('docket.reallocated',d.id);assert.equal(a.length,1,'the allocation correction is audited');
+   assert.match(a[0].summary,/returned to review/);assert.match(a[0].summary,/Returned to review and moved to Bravo/);assert.equal(JSON.parse(a[0].after_state).reason,'Returned to review and moved to Bravo');assert.equal(JSON.parse(a[0].before_state).projectId,p1);
+   // Approving again posts under the new project with the next line key, once.
+   await json(await put({...d,links:{jobId:p2,allocationSeq:1}},{status:'approved'}),200);assert.deepEqual(await actual(d.id),[[p2,'L1@1']]);
+   // Clearing while returning to review.
+   await json(await put({...d,links:{jobId:p2}},{status:'review',links:{},allocationReason:''}),422);
+   await json(await put({...d,links:{jobId:p2}},{status:'review',links:{},allocationReason:'Not our docket after all'}),200);assert.deepEqual(await actual(d.id),[]);assert.equal((await audits('docket.reallocated',d.id)).length,2);
+   // The closed-project rule applies to the combined change too, and refuses without changing anything.
+   const c=await mkApproved('roundtrip-closed',p1);await db.execute("UPDATE jobs SET stage='closed' WHERE organisation_id=? AND id=?",[org,p1]);
+   const snap=await rows(c.id);await json(await put(c,{status:'review',links:{jobId:p2},allocationReason:'Closed project must be reopened'}),409);await json(await put(c,{status:'review',links:{},allocationReason:'Closed project must be reopened'}),409);
+   assert.deepEqual(await rows(c.id),snap);assert.deepEqual(await stored(c.id),{jobId:p1});assert.equal((await db.execute('SELECT status FROM dockets WHERE id=?',[c.id]))[0][0].status,'approved');await db.execute("UPDATE jobs SET stage='active' WHERE organisation_id=? AND id=?",[org,p1]);}
+  // Projects disabled or read-only: posted allocations cannot change, and nothing is altered.
+  {const d=await mkApproved('entitlement',p1);
+   for(const status of ['read_only','disabled']){
+    await json(await call('/api/platform/entitlements','PUT',{module:'projects',status},A.cookie),200);
+    const snap={rows:await rows(d.id),links:await stored(d.id),row:(await db.execute('SELECT status,updated_at FROM dockets WHERE id=?',[d.id]))[0][0],audit:(await db.execute('SELECT COUNT(*) AS n FROM audit_log WHERE entity_id=?',[d.id]))[0][0].n};
+    for(const change of [{links:{jobId:p2}},{links:{}},{status:'review',links:{jobId:p2}},{status:'review',links:{}}]){
+     const res=await put(d,{...change,allocationReason:'Attempt while Projects is '+status});assert.equal(res.status,409,status+' '+JSON.stringify(change));}
+    assert.deepEqual({rows:await rows(d.id),links:await stored(d.id),row:(await db.execute('SELECT status,updated_at FROM dockets WHERE id=?',[d.id]))[0][0],audit:(await db.execute('SELECT COUNT(*) AS n FROM audit_log WHERE entity_id=?',[d.id]))[0][0].n},snap,'docket, ledger and audit untouched while '+status);}
+   await json(await call('/api/platform/entitlements','PUT',{module:'projects',status:'active'},A.cookie),200);
+   await json(await put(d,{links:{jobId:p2},allocationReason:'Allowed again once Projects is active'}),200);}
+  // Office view: an older-month unallocated docket is in the queue, and an Accounts user can allocate it.
+  {const old=new Date(Date.now()-75*86400000).toISOString().slice(0,10);const d=await mk('older',{workDate:old});
+   assert(!old.startsWith(today.slice(0,7)));const month=await json(await call('/api/dockets?month='+today.slice(0,7),'GET',undefined,A.cookie),200);assert(!month.dockets.some(x=>x.id===d.id),'not in the current month');
+   const q=await json(await call('/api/dockets?unallocated=1','GET',undefined,A.cookie),200);assert(q.dockets.some(x=>x.id===d.id),'older-month docket is in the queue');
+   const accounts=await signup('alloc-accounts');await db.execute("UPDATE users SET organisation_id=?,role='accounts' WHERE id=?",[org,accounts.user.id]);
+   const ok=await json(await put(d,{links:{jobId:p1}},accounts.cookie),200);assert.deepEqual(await stored(d.id),{jobId:p1});
+   const q2=await json(await call('/api/dockets?unallocated=1','GET',undefined,accounts.cookie),200);assert(!q2.dockets.some(x=>x.id===d.id),'allocated: gone from the queue');
+   const au=await audits('docket.allocated',d.id);assert.equal(au.length,1);}
  }
  // ---------------------------------------------------------------- Scenario G
  step='G tenant attack';

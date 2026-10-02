@@ -619,7 +619,7 @@ export function DocketDashboard() {
       const response = await fetch("/api/dockets", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...editing, allocationReason: allocReason.id === editing.id ? allocReason.text : "" }),
+        body: JSON.stringify({ ...editing, expectedUpdatedAt: (records.find((item) => item.id === editing.id) ?? editing).updatedAt, allocationReason: allocReason.id === editing.id ? allocReason.text : "" }),
       });
       if (!response.ok) { const problem=await response.json().catch(()=>({})) as {error?:string}; throw new Error(problem.error || 'Changes could not be saved.'); }
       const { docket } = (await response.json()) as { docket: Docket };
@@ -845,6 +845,12 @@ export function DocketDashboard() {
                 </Button>
               </div>
             </div>
+
+            {unallocated.approved > 0 && (
+              <p role="status" className="mx-4 mb-2 rounded-md bg-amber-50 p-2 text-sm font-medium text-amber-800" data-testid="no-cost-banner">
+                {unallocated.approved} approved docket{unallocated.approved === 1 ? " is" : "s are"} not allocated to a project, so no cost is posted for {unallocated.approved === 1 ? "it" : "them"}. Open the Unallocated queue to allocate.
+              </p>
+            )}
 
             {loading ? (
               <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-slate-500">
@@ -1172,6 +1178,9 @@ export function DocketDashboard() {
                         : costPosted ? "Changing the project reverses the cost posted to the old project and posts it to the new one. Both steps are audited and the old entries are kept."
                         : "Approving posts the priced amount to this project."}
                     </p>
+                    {!currentJob && (editing.status === "approved" || stored?.status === "approved") && !locked && (
+                      <p role="alert" className="rounded-md bg-amber-50 p-2 text-xs font-medium text-amber-800" data-testid="docket-no-cost-warning">No cost is posted for this approved docket because it is not allocated to a project. It will not appear in any project&apos;s actual cost.</p>
+                    )}
                     {needsReason && (
                       <div className="space-y-1">
                         <Label htmlFor="docket-allocation-reason">Reason for moving posted costs (required)</Label>

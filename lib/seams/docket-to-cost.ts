@@ -3,7 +3,8 @@
 // Re-approval or re-processing updates the same rows; it never duplicates.
 // Returning a docket to review reverses (status='reversed') unclaimed costs.
 // Downstream off (projects not entitled): docket stays approved and exportable.
-import {database,type Statement} from '@/lib/platform/database';
+import {database,type Statement,type QueryResult} from '@/lib/platform/database';
+import type {Pool,PoolConnection} from 'mysql2/promise';
 import {actorContext} from '@/lib/platform/context';
 import {requireSeam} from '@/lib/platform/entitlements';
 import {domainEventStatement} from '@/lib/platform/domain-events';
@@ -52,34 +53,35 @@ export function docketCostLines(d:Docket){
 }
 
 /** Returns statements to run in the same transaction as the docket status change. */
-export async function docketCostStatements(docketId:string,nextStatus:string,next:Partial<Docket>={},meta:{reason?:string}={}):Promise<{statements:Statement[];posted:number;message:string|null}>{
+export async function docketCostStatements(docketId:string,nextStatus:string,next:Partial<Docket>={},meta:{reason?:string}={},conn?:Pool|PoolConnection):Promise<{statements:Statement[];posted:number;message:string|null}>{
  const actor=actorContext.getStore()!,org=actor.organisationId,now=new Date().toISOString();
- const stored=await database.prepare('SELECT id,docket_no,work_date,amount,quantity,quantity_unit,labour_hours,line_items,links,status,notes FROM dockets WHERE organisation_id=? AND id=?').bind(org,docketId).first<Docket>();
+ // Reads run on the caller's connection, so inside its transaction they see the rows it has locked.
+ const read=async<T>(sql:string,...values:unknown[])=>(await database.prepare(sql).bind(...values).execute<T>(conn) as QueryResult<T>).results;
+ const first=async<T>(sql:string,...values:unknown[])=>(await read<T>(sql,...values))[0]??null;
+ const stored=await first<Docket>('SELECT id,docket_no,work_date,amount,quantity,quantity_unit,labour_hours,line_items,links,status,notes FROM dockets WHERE organisation_id=? AND id=?',org,docketId);
  if(!stored)return {statements:[],posted:0,message:null};
  // Cost lines reflect the values being saved in this same transaction.
  const d:Docket={...stored,...next,status:stored.status};
  const claimed=['included_claim','invoiced'].includes(d.status);
- if(nextStatus!=='approved'){
-  if(claimed)return {statements:[],posted:0,message:null};
-  const reversed=database.prepare("UPDATE cost_transactions SET status='reversed',updated_at=? WHERE organisation_id=? AND source_type='docket' AND source_id=? AND status<>'reversed'").bind(now,org,docketId);
-  return {statements:[reversed],posted:0,message:null};
- }
- const event=await domainEventStatement('docket.approved',docketId,crypto.randomUUID());
  const storedLinks=safeJson<Record<string,unknown>>(stored.links,{}),nextLinks=safeJson<Record<string,unknown>>(d.links,{});
  const from=jobOf(storedLinks),jobId=jobOf(nextLinks),seq=allocationSeq(nextLinks),moved=stored.status==='approved'&&Boolean(from)&&from!==jobId;
- // Every cost row currently counted for this docket is reversed (kept, with its original project) before anything is re-posted.
  const reverseAll=database.prepare("UPDATE cost_transactions SET status='reversed',updated_at=? WHERE organisation_id=? AND source_type='docket' AND source_id=? AND status<>'reversed'").bind(now,org,docketId);
- const posted=await database.prepare("SELECT COUNT(*) AS n,COALESCE(SUM(amount),0) AS amount FROM cost_transactions WHERE organisation_id=? AND source_type='docket' AND source_id=? AND status='actual'").bind(org,docketId).first<{n:number;amount:number}>();
- const reallocationAudit=(to:string,lines:unknown[])=>database.prepare('INSERT INTO audit_log (id,organisation_id,actor_user_id,actor_email,event_type,entity_type,entity_id,project_id,summary,before_state,after_state,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),org,actor.userId,actor.email,'docket.reallocated','docket',docketId,to||from,`Docket ${d.docket_no}: posted costs moved ${to?'to another project':'out of the project (cleared)'}${meta.reason?` — ${meta.reason}`:''}`.slice(0,500),JSON.stringify({projectId:from,reversed:{lines:Number(posted?.n||0),amount:r2(posted?.amount)}}),JSON.stringify({projectId:to||null,allocationSeq:seq,reason:meta.reason||null,reposted:lines}),now);
- const projectStage=async(id:string)=>(await database.prepare('SELECT stage FROM jobs WHERE organisation_id=? AND id=?').bind(org,id).first<{stage:string|null}>())?.stage;
- // Moving posted cost out of a closed project is as much a change to it as posting into one: reopen it first (the existing audited process).
+ const posted=await first<{n:number;amount:number}>("SELECT COUNT(*) AS n,COALESCE(SUM(amount),0) AS amount FROM cost_transactions WHERE organisation_id=? AND source_type='docket' AND source_id=? AND status='actual'",org,docketId);
+ const reallocationAudit=(to:string,lines:unknown[])=>database.prepare('INSERT INTO audit_log (id,organisation_id,actor_user_id,actor_email,event_type,entity_type,entity_id,project_id,summary,before_state,after_state,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),org,actor.userId,actor.email,'docket.reallocated','docket',docketId,to||from,`Docket ${d.docket_no}: posted costs moved ${to?'to another project':'out of the project (cleared)'}${nextStatus!=='approved'?' and the docket returned to review':''}${meta.reason?` — ${meta.reason}`:''}`.slice(0,500),JSON.stringify({projectId:from,reversed:{lines:Number(posted?.n||0),amount:r2(posted?.amount)}}),JSON.stringify({projectId:to||null,allocationSeq:seq,status:nextStatus,reason:meta.reason||null,reposted:lines}),now);
+ const projectStage=async(id:string)=>(await first<{stage:string|null}>('SELECT stage FROM jobs WHERE organisation_id=? AND id=?',org,id))?.stage;
+ // Moving posted cost out of a closed project is as much a change to it as posting into one, whatever status the docket ends in: reopen it first (the existing audited process).
  if(moved&&await projectStage(from)==='closed')throw Object.assign(new Error('The project these costs were posted to is closed. Reopen it before moving costs out of it.'),{status:409});
+ if(nextStatus!=='approved'){
+  if(claimed)return {statements:[],posted:0,message:null};
+  return {statements:[reverseAll,...(moved?[reallocationAudit(jobId,[])]:[])],posted:0,message:null};
+ }
+ const event=await domainEventStatement('docket.approved',docketId,crypto.randomUUID());
  if(!jobId)return {statements:[event,reverseAll,...(moved?[reallocationAudit('',[])]:[])],posted:0,message:'Approved. This docket is not allocated to a project, so no cost is posted'+(Number(posted?.n)?' and the cost previously posted was reversed.':'.')};
  if(!await requireSeam('docket.cost'))return {statements:[event],posted:0,message:'Approved. Projects is not enabled, so costs were not posted; the docket remains exportable.'};
- const job=await database.prepare('SELECT id,stage,status FROM jobs WHERE organisation_id=? AND id=?').bind(org,jobId).first<{id:string;stage:string|null;status:string}>();
+ const job=await first<{id:string;stage:string|null;status:string}>('SELECT id,stage,status FROM jobs WHERE organisation_id=? AND id=?',org,jobId);
  if(!job)return {statements:[event,reverseAll,...(moved?[reallocationAudit('',[])]:[])],posted:0,message:'Approved. The allocated project no longer exists; no cost was posted'+(Number(posted?.n)?' and the cost previously posted was reversed.':'.')};
  if(job.stage==='closed')throw Object.assign(new Error('This project is closed. Reopen it before approving dockets against it.'),{status:409});
- const codes=(await database.prepare("SELECT code,category FROM project_cost_codes WHERE organisation_id=? AND project_id=? AND status='active'").bind(org,jobId).all<{code:string;category:string}>()).results;
+ const codes=await read<{code:string;category:string}>("SELECT code,category FROM project_cost_codes WHERE organisation_id=? AND project_id=? AND status='active'",org,jobId);
  const lines=docketCostLines(d);
  const statements:Statement[]=[event,
   // Lines that no longer exist after an edit are reversed rather than deleted (rows already reversed keep their original timestamps).

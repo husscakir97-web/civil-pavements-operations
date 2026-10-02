@@ -21,6 +21,12 @@ import { checkUpload, DOCKET_UPLOAD_NAME } from '@/lib/platform/upload-safety';
 export const dynamic = "force-dynamic";
 
 class Refusal extends Error { constructor(message: string, readonly status: number) { super(message); } }
+// The checks that must pass before a docket may be marked ready or approved. Approval posts cost against the work date, so it needs a real one.
+function approvalGate(record: DocketInput) {
+  if (record.status === "ready") return mandatoryMissing(record);
+  if (record.status === "approved" && !/^\d{4}-\d{2}-\d{2}$/.test(record.workDate)) return ["Work date"];
+  return [] as string[];
+}
 // Projects must be active (not disabled or read-only) for posted costs to be corrected.
 async function projectsWritable() { try { return await requireSeam('docket.cost'); } catch { return false; } }
 
@@ -49,6 +55,13 @@ async function handleGET(request: Request) {
     const { searchParams } = new URL(request.url);
     const org = currentOrganisationId();
     const actor = actorContext.getStore()!;
+    // One current record by id (own organisation only): the review dialog reloads from here so it never edits an old upload snapshot.
+    const byId = cleanText(searchParams.get("id"), 80);
+    if (byId) {
+      const row = await db.prepare(`SELECT ${DOCKET_COLUMNS} FROM dockets WHERE organisation_id = ? AND id = ? AND lower(status) != 'archived'`).bind(org, byId).first<Record<string, unknown>>();
+      if (!row) return jsonError("The docket was not found.", 404);
+      return Response.json({ docket: present(row) });
+    }
     // Projects a docket may be allocated to (the actor's own project scope applies; closed projects are shown but cannot be chosen).
     if (searchParams.get("projects") === "1") {
       const jobs = await db.prepare("SELECT id, name, project_number AS number, stage FROM jobs WHERE organisation_id = ? AND lower(status) != 'archived' ORDER BY created_at DESC LIMIT 300").bind(org).all<{id:string;name:string;number:string|null;stage:string|null}>();
@@ -68,7 +81,7 @@ async function handleGET(request: Request) {
       .prepare(
         `SELECT ${DOCKET_COLUMNS}
         FROM dockets
-        WHERE organisation_id = ? AND work_date >= ? AND work_date < ? AND lower(status) != 'archived'
+        WHERE organisation_id = ? AND ((work_date >= ? AND work_date < ?) OR work_date = '') AND lower(status) != 'archived'
         ORDER BY work_date DESC, created_at DESC`,
       )
       .bind(org, start, end)
@@ -88,9 +101,8 @@ function parseRecord(value: FormDataEntryValue | Record<string, unknown> | null)
       : value ?? {};
   return {
     docketNo: cleanText(raw.docketNo, 80) || "UNREAD",
-    workDate: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.workDate ?? ""))
-      ? String(raw.workDate)
-      : new Date().toISOString().slice(0, 10),
+    // An unknown work date stays unknown: never today's date. Undated dockets are listed in every month for review.
+    workDate: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.workDate ?? "")) ? String(raw.workDate) : "",
     client: cleanText(raw.client, 160),
     project: cleanText(raw.project, 200),
     crew: cleanText(raw.crew, 160),
@@ -123,7 +135,7 @@ async function handlePOST(request: Request) {
       return jsonError("Upload between 1 and 200 dockets at a time.");
     }
     const records = values.map((value) => parseRecord(value as Record<string, unknown>));
-    const invalid = records.flatMap((record, index) => record.status === "ready" ? mandatoryMissing(record).map(field => ({ index, field })) : []);
+    const invalid = records.flatMap((record, index) => approvalGate(record).map(field => ({ index, field })));
     if (invalid.length) {
       const now = new Date().toISOString();
       await db.prepare("INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)")
@@ -147,7 +159,7 @@ async function handlePOST(request: Request) {
       const verdict = checkUpload(file.name, bytes, DOCKET_UPLOAD_NAME);
       if (!verdict.ok) return jsonError(verdict.reason, verdict.status);
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-120);
-      sourceKey = `dockets/${records[0].workDate.slice(0, 7)}/${crypto.randomUUID()}-${safeName}`;
+      sourceKey = `dockets/${records[0].workDate.slice(0, 7) || "undated"}/${crypto.randomUUID()}-${safeName}`;
       await bucket.put(sourceKey, bytes, {
         httpMetadata: { contentType: verdict.contentType },
       });
@@ -219,7 +231,7 @@ async function handlePUT(request: Request) {
     const id = cleanText(raw.id, 80);
     if (!id) return jsonError("A docket ID is required.");
     const record = parseRecord(raw);
-    const missing = record.status === "ready" ? mandatoryMissing(record) : [];
+    const missing = approvalGate(record);
     if (missing.length) {
       const now = new Date().toISOString();
       await db.prepare("INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)")
@@ -317,7 +329,7 @@ async function handlePUT(request: Request) {
     return Response.json({ docket: { ...raw, ...record, id, updatedAt: now }, costLinesPosted: outcome.posted, message: outcome.message });
   } catch (error) {
     if (error instanceof Refusal) return jsonError(error.message, error.status);
-    if ((error as { status?: number }).status === 409) return jsonError((error as Error).message, 409);
+    if ([409, 422].includes((error as { status?: number }).status ?? 0)) return jsonError((error as Error).message, (error as { status: number }).status);
     console.error("update docket", error);
     return jsonError("Changes could not be saved.", 503);
   }

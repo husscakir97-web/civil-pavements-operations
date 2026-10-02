@@ -84,8 +84,8 @@ async function dockets() {
   const functions=ast.statements.filter(n=>ts.isFunctionDeclaration(n)&&['readPdf','hasUsefulPdfText','textFromPdfItems'].includes(n.name?.text)).map(n=>n.getText(ast)).join('\n');
   for(const scanned of [false,true]) {
     const e=pdfEnvironment(scanned?'':'Docket No: ABC-1234\nDate: 09/09/2026\nClient: Example Civil\nJob Location: Test Road\nOrder No: PO-123\nQuantity: 18.4 tonnes');let requested=0;
-    const {parseDocket}=moduleIn(fs.readFileSync('lib/docket-parser.ts','utf8'),{crypto:globalThis.crypto});
-    const context={...e.context,...e.readers,parseDocket,recogniseDocketCanvas:async()=>({text:'scanned',confidence:60})};
+    const {parseDocket,isReadablePdfText}=moduleIn(fs.readFileSync('lib/docket-parser.ts','utf8'),{crypto:globalThis.crypto});
+    const context={...e.context,...e.readers,parseDocket,isReadablePdfText,recogniseDocketCanvas:async()=>({text:'scanned',confidence:60})};
     const {readPdf}=moduleIn(functions+'\nexport {readPdf};',context);
     const pages=await readPdf(new File(['synthetic'],'test.pdf'),async()=>{requested++;return {};},()=>{},()=>{});
     assert.equal(requested,Number(scanned));assert.equal(e.renders(),Number(scanned));assert.equal(pages[0].confidence,scanned?60:99);

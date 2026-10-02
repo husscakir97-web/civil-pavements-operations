@@ -65,6 +65,22 @@ install/build/start settings and environment variables, then redeploy.
    CREATE TABLE, CREATE INDEX, ADD CONSTRAINT and ADD COLUMN; 0003 and 0004 contain only these. A checksum mismatch or an untracked object
    stops startup without changing data.
 
+   **Interrupted `ALTER TABLE … MODIFY` (migration 0024 only).** The runner journals its intent, runs the
+   DDL, then marks the step complete. If it stopped in between, the next start reads the live definition of
+   `asset_meter_readings.next_service` from `information_schema` and decides:
+
+   | Live column | Meaning | Next start |
+   |---|---|---|
+   | `decimal(15,2) NOT NULL`, no default, no comment | DDL never ran | runs the `MODIFY`, marks the step complete |
+   | `decimal(15,2) NULL`, no default, no comment | DDL ran, completion not recorded | logs `Recovered 0024_workshop_service_due.sql step 2: already applied`, marks the step complete, does not run it again |
+   | anything else (other type or size, a default, extra attributes, a non-empty column comment in either state, column missing) | unexpected schema | stops with `Unexpected schema for asset_meter_readings.next_service … nothing was changed`; no DDL is run and the step stays incomplete |
+
+   A column comment is refused because the `MODIFY` would silently discard it. Only that one statement is recognised; any other interrupted `MODIFY` still stops with "manual database
+   recovery required". Checksums are always verified first, and the check never marks a step complete
+   unless the column already has the target definition. An unexpected-schema stop needs a person to compare the
+   column with the table above and restore it (or contact the maintainers); do not edit the journal tables.
+   Covered by `npm run test:migration-recovery`, which uses disposable `*_test` databases.
+
 ## 4. Verify (about 10 minutes)
 
 Record the deployed commit from Hostinger's deployment history and check it matches the merge commit.

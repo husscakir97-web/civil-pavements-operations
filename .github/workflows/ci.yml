@@ -43,6 +43,7 @@ jobs:
           MYSQL_PASSWORD: integration-only
         run: |
           npm run test:fresh
+          npm run test:migration-recovery
           npm run db:migrate
           npm run knowledge:import-platform -- knowledge/platform/example.synthetic.json
           npm run test:backfill

@@ -11,7 +11,8 @@ import {assertLinks,bump,canSeePlanRates,copyDocument,loadDocument,loadPlan,load
 export const dynamic='force-dynamic';
 
 const id=z.string().regex(ID_PATTERN);
-const amount=z.number().finite().min(0).max(1e9).nullable();
+// Transport-level bounds only: precision, scale and per-field ranges are enforced by validatePlan (lib/v1/planning.ts), the one contract shared with the browser and with migration 0026.
+const amount=z.number().finite().min(0).max(999_999_999).nullable();
 const text=(max:number)=>z.string().max(max);
 const unit=z.string().trim().max(20).nullable();
 const activity=z.object({

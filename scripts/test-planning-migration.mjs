@@ -23,6 +23,10 @@ try{
  // money and quantity columns are nullable decimals: unknown is NULL, never a default of zero
  const [cols]=await db.query("SELECT TABLE_NAME,COLUMN_NAME,IS_NULLABLE,COLUMN_DEFAULT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND ((TABLE_NAME='planning_requirements' AND COLUMN_NAME IN ('quantity','rate')) OR (TABLE_NAME='planning_cost_items' AND COLUMN_NAME='amount') OR (TABLE_NAME='planning_activities' AND COLUMN_NAME IN ('quantity','productivity','duration_days','hours_per_day')))");
  assert.equal(cols.length,7);for(const c of cols){assert.equal(c.IS_NULLABLE,'YES',c.TABLE_NAME+'.'+c.COLUMN_NAME);assert([null,'NULL'].includes(c.COLUMN_DEFAULT),c.TABLE_NAME+'.'+c.COLUMN_NAME+' has no default');}
+ // storage matches lib/v1/planning.ts FIELDS (precision and scale), so nothing is rounded when a value is saved
+ const spec={'planning_activities.quantity':'decimal(15,3)','planning_activities.productivity':'decimal(15,6)','planning_activities.duration_days':'decimal(9,3)','planning_activities.hours_per_day':'decimal(5,2)','planning_requirements.quantity':'decimal(15,3)','planning_requirements.rate':'decimal(15,4)','planning_cost_items.amount':'decimal(15,2)'};
+ const [types]=await db.query("SELECT CONCAT(TABLE_NAME,'.',COLUMN_NAME) AS k,COLUMN_TYPE AS t FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE 'planning\\_%'");
+ for(const [k,t] of Object.entries(spec))assert.equal(types.find(x=>x.k===k)?.t,t,k);
  // the pair/position uniqueness the service relies on
  await db.query("INSERT INTO planning_canvas_positions(id,organisation_id,scenario_id,activity_id,x,y) VALUES ('p1','o','s','a',1,2)");
  await assert.rejects(db.query("INSERT INTO planning_canvas_positions(id,organisation_id,scenario_id,activity_id,x,y) VALUES ('p2','o','s','a',3,4)"),/Duplicate/);

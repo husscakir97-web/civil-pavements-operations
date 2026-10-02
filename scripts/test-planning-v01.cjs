@@ -66,4 +66,22 @@ ok('redaction strips rates and amounts');
 const dd=doc([mill,prep,pave],[{from:'act-mill',to:'act-pave'},{from:'act-prep',to:'act-pave'}]),de=doc([mill,prep,pave],[{from:'act-prep',to:'act-pave'},{from:'act-mill',to:'act-pave'}]);
 assert.deepEqual(P.calculatePlan(dd,{rates:true}),P.calculatePlan(de,{rates:true}));
 ok('deterministic calculation');
+// Precision and range: validation, preview and storage (migration 0026) share one contract; nothing is rounded on save.
+const priced=(rate,extra={})=>act('act-prec1',{durationDays:2,hoursPerDay:8,requirements:[{id:'rq000090',kind:'labour',name:'Crew',quantity:1,rate,rateBasis:'hour',resourceRef:null}],...extra});
+assert.deepEqual(P.validatePlan(doc([priced(95.125)])),[],'a rate keeps 4 decimal places');
+assert.equal(P.calculatePlan(doc([priced(95.125)]),{rates:true}).activities['act-prec1'].cost.total,P.money(95.125*8*2));
+assert.ok(P.validatePlan(doc([priced(95.12345)])).some(i=>/at most 4 decimal places/.test(i.message)),'a fifth decimal place is rejected, not rounded');
+assert.equal(P.calculatePlan(doc([priced(95.12345)]),{rates:true}).activities['act-prec1'].cost.total,null,'an unstorable value previews as unknown, never as a rounded or exact total');
+const withSetup=amount=>act('act-prec2',{durationDays:1,costItems:[{id:'ci000090',label:'Setup',amount}]});
+assert.ok(P.validatePlan(doc([withSetup(95.125)])).some(i=>/at most 2 decimal places/.test(i.message)),'a dollar amount keeps cents');
+assert.deepEqual(P.validatePlan(doc([withSetup(95.12)])),[]);
+const slow=p=>act('act-prec3',{durationMode:'derived',quantity:1,unit:'m',productivity:p,productivityUnit:'m',hoursPerDay:8});
+assert.deepEqual(P.validatePlan(doc([slow(0.0004)])),[],'very small positive productivity is storable');
+assert.equal(P.activityDuration(slow(0.0004)).days,312.5);
+assert.ok(P.validatePlan(doc([slow(0.0000004)])).some(i=>/at most 6 decimal places/.test(i.message)),'productivity below the stored precision is rejected, not stored as zero');
+assert.ok(P.validatePlan(doc([slow(0)])).length,'zero productivity is invalid');
+assert.ok(P.validatePlan(doc([act('act-prec4',{durationDays:1e9})])).some(i=>/between 0 and/.test(i.message)),'ranges match the column');
+assert.ok(P.validatePlan(doc([act('act-prec5',{quantity:1e9+1})])).length);
+for(const [k,spec] of Object.entries(P.FIELDS)){assert.ok(P.fits(spec.max,spec)&&!P.fits(spec.max+1,spec),k+' range');assert.ok(!P.fits(-1,spec),k+' negative');}
+ok('precision and range contract shared by validation and preview');
 console.log(`Planning engine: ${n} groups passed`);

@@ -973,7 +973,7 @@ export const planningScenarios=mysqlTable('planning_scenarios',{
 export const planningActivities=mysqlTable('planning_activities',{
  id:id(),organisationId:org(),scenarioId:planningRef('scenario_id').notNull(),kind:varchar('kind',{length:20}).notNull().default('activity'),
  name:varchar('name',{length:180}).notNull(),notes:text('notes'),sort:int('sort').notNull().default(0),
- quantity:decimal('quantity',{precision:15,scale:3}),unit:varchar('unit',{length:20}),productivity:decimal('productivity',{precision:15,scale:3}),productivityUnit:varchar('productivity_unit',{length:20}),
+ quantity:decimal('quantity',{precision:15,scale:3}),unit:varchar('unit',{length:20}),productivity:decimal('productivity',{precision:15,scale:6}),productivityUnit:varchar('productivity_unit',{length:20}),
  durationMode:varchar('duration_mode',{length:10}).notNull().default('entered'),durationDays:decimal('duration_days',{precision:9,scale:3}),hoursPerDay:decimal('hours_per_day',{precision:5,scale:2}),plannedStart:day('planned_start'),
 },t=>[index('planning_activities_org_idx').on(t.organisationId),index('planning_activities_scenario_idx').on(t.organisationId,t.scenarioId)]);
 export const planningDependencies=mysqlTable('planning_dependencies',{
@@ -981,7 +981,7 @@ export const planningDependencies=mysqlTable('planning_dependencies',{
 },t=>[index('planning_dependencies_org_idx').on(t.organisationId),index('planning_dependencies_scenario_idx').on(t.organisationId,t.scenarioId),uniqueIndex('planning_dependencies_pair_uq').on(t.scenarioId,t.predecessorId,t.successorId)]);
 export const planningRequirements=mysqlTable('planning_requirements',{
  id:id(),organisationId:org(),scenarioId:planningRef('scenario_id').notNull(),activityId:planningRef('activity_id').notNull(),kind:varchar('kind',{length:10}).notNull(),
- name:varchar('name',{length:180}).notNull(),sort:int('sort').notNull().default(0),quantity:decimal('quantity',{precision:15,scale:3}),rate:money('rate'),
+ name:varchar('name',{length:180}).notNull(),sort:int('sort').notNull().default(0),quantity:decimal('quantity',{precision:15,scale:3}),rate:decimal('rate',{precision:15,scale:4}),
  rateBasis:varchar('rate_basis',{length:10}).notNull().default('hour'),resourceRefType:varchar('resource_ref_type',{length:10}),resourceRefId:planningRef('resource_ref_id'),
 },t=>[index('planning_requirements_org_idx').on(t.organisationId),index('planning_requirements_scenario_idx').on(t.organisationId,t.scenarioId)]);
 export const planningCostItems=mysqlTable('planning_cost_items',{

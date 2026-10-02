@@ -272,6 +272,68 @@ try{
  const estimateAfter=await estimateSnapshot();
  check('Scenarios and the estimate link leave the approved estimate, its revisions, projects, schedule bookings and programme untouched',estimateBefore===estimateAfter);
 
+ // ================= Save robustness: removed activities and a failed layout save =================
+ const savedOk=async()=>{await page.getByRole('status').filter({hasText:'Saved.'}).waitFor();return !(await page.locator('main').innerText()).match(/could not be saved|changed elsewhere/);};
+ const saveBtn=()=>page.getByRole('button',{name:'Save',exact:true});
+ const scenarioRow=async()=>(await db.query('SELECT revision FROM planning_scenarios WHERE id=?',[mainScenario]))[0][0];
+ const orphanPositions=async()=>(await db.query('SELECT COUNT(*) AS n FROM planning_canvas_positions p LEFT JOIN planning_activities a ON a.id=p.activity_id AND a.scenario_id=p.scenario_id WHERE p.scenario_id=? AND a.id IS NULL',[mainScenario]))[0][0].n;
+ const nodesBefore=await page.getByTestId('plan-node').count();
+ const revA=(await scenarioRow()).revision;
+ await page.getByRole('button',{name:'Add activity'}).click();await dlg().waitFor();
+ await dlg().getByRole('button',{name:'Remove activity'}).click();await dlg().waitFor({state:'detached'});
+ await saveBtn().click();
+ check('Add then remove then save succeeds (no stale position sent for the removed activity)',await savedOk()&&await page.getByTestId('plan-node').count()===nodesBefore&&Number((await scenarioRow()).revision)===Number(revA)+1&&Number(await orphanPositions())===0);
+ // drag a new activity, remove it, save
+ await page.getByRole('button',{name:'Add activity'}).click();await dlg().waitFor();await closeDrawer();
+ const fresh2=page.getByTestId('plan-node').last();const fb=await fresh2.boundingBox();
+ await page.mouse.move(fb.x+30,fb.y+14);await page.mouse.down();await page.mouse.move(fb.x+120,fb.y+80,{steps:6});await page.mouse.up();
+ const freshId=await fresh2.getAttribute('data-activity-id');
+ await fresh2.getByRole('button',{name:'Edit'}).click();await dlg().waitFor();await dlg().getByRole('button',{name:'Remove activity'}).click();await dlg().waitFor({state:'detached'});
+ await saveBtn().click();
+ check('Drag then remove then save succeeds and leaves no orphan canvas position',await savedOk()&&await page.getByTestId('plan-node').count()===nodesBefore&&Number(await orphanPositions())===0&&(await db.query('SELECT COUNT(*) AS n FROM planning_canvas_positions WHERE activity_id=?',[freshId]))[0][0].n===0);
+ // business save succeeds, layout save fails once: revision is retained and a retry saves only the layout
+ let failLayout=true;
+ await page.route('**/api/planning',async route=>{const r=route.request();if(failLayout&&r.method()==='POST'&&/"action":"positions"/.test(r.postData()||''))return route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Layout service unavailable.'})});return route.continue();});
+ const revB=Number((await scenarioRow()).revision);
+ await openNode('Preparation');await dlg().getByLabel('Activity name').fill('Preparation (renamed)');await closeDrawer();
+ const mover=page.getByRole('group',{name:/^Paving,/});const mb=await mover.boundingBox();const mx0=Number(await mover.getAttribute('data-x'));
+ await page.mouse.move(mb.x+30,mb.y+14);await page.mouse.down();await page.mouse.move(mb.x+90,mb.y+60,{steps:6});await page.mouse.up();
+ const mx1=Number(await mover.getAttribute('data-x'));
+ await saveBtn().click();await page.getByText(/Your changes were saved, but the layout could not be saved/).waitFor();
+ const revC=Number((await scenarioRow()).revision);
+ check('When the business save succeeds but the layout save fails the user is told, the business change is stored, and Save stays available for the layout',revC===revB+1&&(await db.query('SELECT name FROM planning_activities WHERE scenario_id=? AND name=?',[mainScenario,'Preparation (renamed)']))[0].length===1&&await saveBtn().isEnabled()&&await page.getByText('Unsaved changes').isVisible());
+ failLayout=false;await saveBtn().click();
+ check('Retrying after the layout failure succeeds with no stale-version error, saves only the layout, and does not bump the business revision',await savedOk()&&Number((await scenarioRow()).revision)===revC&&mx1!==mx0&&Number((await db.query('SELECT x FROM planning_canvas_positions p JOIN planning_activities a ON a.id=p.activity_id WHERE a.scenario_id=? AND a.name=?',[mainScenario,'Paving']))[0][0].x)===mx1);
+ await page.unroute('**/api/planning');
+
+ // ================= Precision: preview, validation and storage agree =================
+ await openNode('Paving');
+ const rateBox=dlg().getByTestId('requirement').nth(0).getByLabel('Resource rate');
+ await rateBox.fill('95.12345');
+ check('A rate with more decimal places than are stored is rejected in the UI: message shown, cost previews as Unknown, Save disabled',await dlg().getByTestId('num-problem').isVisible()&&/Activity cost: Unknown/.test(await costText())&&await saveBtn().isDisabled(),await costText());
+ await rateBox.fill('95.125');
+ check('A rate of 95.125 is storable and previews exactly (day basis: $95.13 once the line is rounded to cents)',!(await dlg().getByTestId('num-problem').count())&&/\$95\.13/.test(await costText()),await costText());
+ await closeDrawer();await saveBtn().click();
+ check('95.125 saves',await savedOk());
+ await goPlanning();await page.locator('li',{hasText:'Main Street resurfacing'}).getByRole('button',{name:'Open'}).click();await page.getByRole('group',{name:/^Paving,/}).waitFor();
+ await openNode('Paving');
+ check('After reload the rate is still 95.125 (not changed by persistence) and the cost matches the preview',(await dlg().getByTestId('requirement').nth(0).getByLabel('Resource rate').inputValue())==='95.125'&&/\$95\.13/.test(await costText()));
+ await closeDrawer();
+ // server contract: exact round trips and rejections
+ const prec=must(await E.post({action:'create-plan',name:'Precision plan'}),[200],'precision plan');let pr=prec.scenario.revision;const psid=prec.scenario.id;
+ const pdoc=(over)=>docOf(act('prc-a00001','Precision',{durationMode:'derived',quantity:1,unit:'m',productivity:0.0004,productivityUnit:'m',hoursPerDay:8,requirements:[{id:'prc-r00001',kind:'labour',name:'Crew',quantity:1,rate:95.125,rateBasis:'hour',resourceRef:null}],costItems:[],...over}));
+ const savedP=await E.post({action:'save',scenarioId:psid,expectedRevision:pr,document:pdoc({})});
+ const readP=(await E.get(psid)).body;pr=readP.scenario.revision;
+ check('Very small productivity (0.0004) and a $95.125 hourly rate round-trip exactly through save and reload',savedP.status===200&&readP.document.activities[0].productivity===0.0004&&readP.document.activities[0].requirements[0].rate===95.125,JSON.stringify([readP.document.activities[0].productivity,readP.document.activities[0].requirements[0].rate]));
+ check('The server result equals the preview arithmetic: 1 m at 0.0004 m/h = 2,500 h = 312.5 days; 95.125 × 8 h × 312.5 d = $237,812.50',readP.result.activities['prc-a00001'].durationDays===312.5&&readP.result.cost.total===237812.5,JSON.stringify(readP.result.cost.total));
+ const [[stored]]=await db.query('SELECT productivity,duration_days FROM planning_activities WHERE id=?',['prc-a00001']);
+ check('The database holds the same values (no rounding in storage)',Number(stored.productivity)===0.0004);
+ for(const [label,over,pattern] of [['productivity below the stored precision (0.0000004) is rejected, not stored as zero',{productivity:0.0000004},/at most 6 decimal places/],['a dollar amount with more than cents (setup 95.125) is rejected',{costItems:[{id:'prc-c00001',label:'Setup',amount:95.125}]},/at most 2 decimal places/],['a rate beyond 4 decimal places is rejected',{requirements:[{id:'prc-r00002',kind:'labour',name:'Crew',quantity:1,rate:95.12345,rateBasis:'hour',resourceRef:null}]},/at most 4 decimal places/],['a duration beyond the stored range is rejected',{durationMode:'entered',durationDays:200000},/between 0 and/]]){
+  const r=await E.post({action:'save',scenarioId:psid,expectedRevision:pr,document:pdoc(over)});
+  check(`Server: ${label}`,r.status===400&&pattern.test(JSON.stringify(r.body)),`-> ${r.status} ${JSON.stringify(r.body).slice(0,120)}`);
+ }
+ check('Rejected precision saves left the stored plan unchanged',(await E.get(psid)).body.scenario.revision===pr);
+
  // Mobile
  await page.setViewportSize({width:390,height:844});await page.waitForTimeout(500);
  const mobile={};

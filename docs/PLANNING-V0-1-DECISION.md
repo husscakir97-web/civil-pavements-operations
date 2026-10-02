@@ -18,6 +18,7 @@ Built on PR 62 (`chatgpt/connected-job-release-candidate` @ `f852c21`). This wor
 
 ## Calculation (one implementation: `lib/v1/planning.ts`)
 - Imported by the browser (live preview) and by the server (authoritative validation and every response). The server recomputes; client numbers are never trusted.
+- **Numeric contract** (`FIELDS` in `lib/v1/planning.ts`, mirrored by migration 0026): quantity and count 3 decimal places, productivity 6 (and above zero), duration 3 (up to 100,000 days), productive hours/day 2 (above 0, at most 24), rates 4, dollar amounts (setup, shared) 2; nothing above 999,999,999. Validation (browser and server), the live preview and storage use the same table. A value with more decimal places than its column keeps, or outside its range, is **rejected** (the field shows why, Save is disabled, the server answers 400) and is previewed as *unknown* until corrected; persistence never rounds. Line costs are still rounded to cents by the calculation, identically in the browser and on the server.
 - Quantities are typed (`quantity` + `unit`); productivity is `productivityUnit` per productive hour (same convention as the estimate engine). Units convert only within a dimension (m/km, m2/ha, t/kg…); an incompatible unit is **rejected**, not guessed.
 - Duration is an explicit choice per activity: **entered** or **derived** (quantity ÷ productivity ÷ productive hours per day). Milestones have zero duration and no cost.
 - **Unknown ≠ zero**: a missing value is `null` and propagates (activity cost, start, finish, plan total become unknown, with the known subtotal and a count of unknowns shown). A known zero stays a known zero. The estimate engine coerces missing values to zero, which is exactly why it is not reused for this.
@@ -37,6 +38,8 @@ Dated leave, resource reservations/bookings, optimisation, real-time co-editing,
 - Full gate (security audit, lint, typecheck, `npm test`, pruned build, `test:fresh`, `test:migration-recovery`, `db:migrate` ×2, backfill, `test:mysql`, `test:v1`, connected-job driver) passed on the final code. `scripts/test-v1-logic.cjs` was updated for an intended rule: Planning appears under Pipeline for Estimating.
 
 - After merging the PR 62 corrections (head `2dc0472`) the application was rebuilt and `test:planning` rerun on the final PR 63 code: 62 passed, 0 failed; `test:migration-recovery` also passed. The merge changed only test scripts and documentation.
+
+- Follow-up corrections: removed activities no longer leave a canvas position behind and a layout-save failure after a successful business save keeps the new revision so a retry works (add/remove/save, drag/remove/save and a forced layout failure are in `test:planning`); the numeric contract above replaced a looser range check that could preview more precision than the database stored (95.125 and 0.0004 round-trip exactly; unstorable values are refused). Migration 0026 was edited in place (rate `decimal(15,4)`, productivity `decimal(15,6)`) because it has not been released; any scratch database that applied the earlier 0026 must be recreated.
 
 ## Limitations of v0.1
 - No UI yet to link a plan to an estimate, tender or project, or to pick an existing worker/plant record (the API and schema accept and validate them).

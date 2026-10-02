@@ -4,7 +4,7 @@
 import {useMemo,useRef,useState,type PointerEvent as ReactPointerEvent} from 'react';
 import {Download,GitBranch,Link2,Milestone,Plus,Trash2,X} from 'lucide-react';
 import {api,useApi,useAction,useSession,PageHeader,Section,ErrorState,EmptyState,Btn,Pill,Stat,Tabs,Field,field as fieldClass,money} from './kit';
-import {KNOWN_UNITS,blankActivity,calculatePlan,findCycle,newId,validatePlan,type PlanActivity,type PlanDocument,type PlanResult,type Positions,type Requirement} from '@/lib/v1/planning';
+import {FIELDS,KNOWN_UNITS,blankActivity,calculatePlan,findCycle,fits,newId,validatePlan,type FieldSpec,type PlanActivity,type PlanDocument,type PlanResult,type Positions,type Requirement} from '@/lib/v1/planning';
 
 type PlanSummary={id:string;name:string;ownerUserId:string;accessScope:'organisation'|'owner';status:string;revision:number;updatedAt:string;scenarios:{id:string;name:string;revision:number}[]};
 type List={plans:PlanSummary[];ratesVisible:boolean;canEdit:boolean};
@@ -18,14 +18,16 @@ const costLabel=(a:PlanActivity,total:number|null|undefined,visible:boolean)=>vi
 const dayText=(v:number|null|undefined)=>v===null||v===undefined?'Unknown':`${v} d`;
 
 /** Numeric input that keeps what the user typed: empty is UNKNOWN (null), never zero. */
-function NumInput({value,onChange,label,disabled,step='any'}:{value:number|null;onChange:(v:number|null)=>void;label:string;disabled?:boolean;step?:string}){
+function NumInput({value,onChange,label,disabled,spec}:{value:number|null;onChange:(v:number|null)=>void;label:string;disabled?:boolean;spec:FieldSpec}){
  const [text,setText]=useState(value===null?'':String(value));
  // Adopt an external change (reload, discard) without disturbing what the user is typing.
  const [seen,setSeen]=useState(value);
  if(seen!==value){setSeen(value);if(!((text.trim()===''&&value===null)||Number(text)===value))setText(value===null?'':String(value));}
- const bad=text.trim()!==''&&!(Number.isFinite(Number(text))&&Number(text)>=0);
- return <input aria-label={label} aria-invalid={bad} inputMode="decimal" step={step} disabled={disabled} className={`${fieldClass} ${bad?'border-red-400':''}`} placeholder="Unknown" value={text}
-  onChange={e=>{const t=e.target.value;setText(t);if(t.trim()==='')onChange(null);else if(Number.isFinite(Number(t))&&Number(t)>=0)onChange(Number(t));}}/>;
+ const typed=text.trim()===''?null:Number(text);
+ // A value the database cannot store exactly is rejected (and previewed as unknown) rather than silently rounded on save.
+ const problem=typed===null?'':!Number.isFinite(typed)||typed<0?'Enter a number of zero or more.':fits(typed,spec)?'':spec.positive&&typed===0?'Must be above zero.':`Use at most ${spec.scale} decimal places (up to ${spec.max.toLocaleString('en-AU')}).`;
+ return <><input aria-label={label} aria-invalid={Boolean(problem)} inputMode="decimal" disabled={disabled} className={`${fieldClass} ${problem?'border-red-400':''}`} placeholder="Unknown" value={text}
+  onChange={e=>{const t=e.target.value;setText(t);if(t.trim()==='')onChange(null);else if(Number.isFinite(Number(t))&&Number(t)>=0)onChange(Number(t));}}/>{problem&&<span data-testid="num-problem" className="text-xs text-red-700">{problem}</span>}</>;
 }
 
 export function Planning(){
@@ -59,9 +61,13 @@ function Editor({scenarioId,onBack}:{scenarioId:string;onBack:()=>void}){
  const [view,setView]=useState<View>('Flowchart'),[drawer,setDrawer]=useState<string|null>(null),[linkFrom,setLinkFrom]=useState<string|null>(null);
  const [note,setNote]=useState(''),[stale,setStale]=useState(false),[newName,setNewName]=useState('');
  const save=useAction();
- const [synced,setSynced]=useState<Loaded|null>(null);
+ const [synced,setSynced]=useState<Loaded|null>(null),[retainLayout,setRetainLayout]=useState<Positions|null>(null);
  // Server data replaces the local draft whenever a fresh response arrives (initial load, save, reload, scenario switch).
- if(data&&synced!==data){setSynced(data);setDoc(data.document);setPositions(data.positions);setDirtyDoc(false);setDirtyPos(false);setStale(false);}
+ if(data&&synced!==data){
+  setSynced(data);setDoc(data.document);setDirtyDoc(false);setStale(false);
+  // After a partial save (business data saved, layout not) keep the unsaved layout and stay dirty so a retry only has to save the layout.
+  if(retainLayout){setPositions(retainLayout);setDirtyPos(true);setRetainLayout(null);}else{setPositions(data.positions);setDirtyPos(false);}
+ }
  const rates=Boolean(data?.ratesVisible),editable=Boolean(data?.canEdit);
  const result=useMemo(()=>doc?calculatePlan(doc,{rates}):null,[doc,rates]);
  const issues=useMemo(()=>doc?validatePlan(doc):[],[doc]);
@@ -77,7 +83,7 @@ function Editor({scenarioId,onBack}:{scenarioId:string;onBack:()=>void}){
  const edit=(fn:(d:PlanDocument)=>PlanDocument)=>{setDoc(d=>d?fn(d):d);setDirtyDoc(true);};
  const patch=(id:string,p:Partial<PlanActivity>)=>edit(d=>({...d,activities:d.activities.map(a=>a.id===id?{...a,...p}:a)}));
  const add=(kind:'activity'|'milestone')=>{const id=newId();const n=doc.activities.length;edit(d=>({...d,activities:[...d.activities,blankActivity(kind,kind==='milestone'?'New milestone':['Milling','Preparation','Paving'][n]||`Activity ${n+1}`,id)]}));setPositions(p=>({...p,[id]:{x:24+(n%4)*(NODE_W+60),y:24+Math.floor(n/4)*(NODE_H+28)}}));setDirtyPos(true);setDrawer(id);};
- const remove=(id:string)=>{edit(d=>({activities:d.activities.filter(a=>a.id!==id),dependencies:d.dependencies.filter(x=>x.from!==id&&x.to!==id),sharedCosts:d.sharedCosts}));setDrawer(null);};
+ const remove=(id:string)=>{edit(d=>({activities:d.activities.filter(a=>a.id!==id),dependencies:d.dependencies.filter(x=>x.from!==id&&x.to!==id),sharedCosts:d.sharedCosts}));setPositions(p=>Object.fromEntries(Object.entries(p).filter(([k])=>k!==id)));setDrawer(null);};
  const connect=(from:string,to:string)=>{
   if(from===to||doc.dependencies.some(d=>d.from===from&&d.to===to))return;
   const next=[...doc.dependencies,{from,to}];const loop=findCycle(doc.activities.map(a=>a.id),next);
@@ -85,14 +91,26 @@ function Editor({scenarioId,onBack}:{scenarioId:string;onBack:()=>void}){
   setNote('');edit(d=>({...d,dependencies:next}));setLinkFrom(null);
  };
  const persist=()=>save.run(async()=>{
-  let latest=data;
+  setNote('');
+  let latest=data,businessSaved=false;
   if(dirtyDoc){
    if(issues.length)throw new Error(issues[0].message);
    latest=await api<Loaded>('/api/planning',{method:'POST',body:{action:'save',scenarioId:data.scenario.id,expectedRevision:data.scenario.revision,document:doc}}).catch(e=>{if(e&&(e as {status?:number}).status===409)setStale(true);throw e;});
+   businessSaved=true;
   }
-  if(dirtyPos)await api('/api/planning',{method:'POST',body:{action:'positions',scenarioId:data.scenario.id,positions}});
-  return latest;
- },l=>{if(l){loaded.setData({...l,positions});setDirtyDoc(false);setDirtyPos(false);setNote('Saved.');}});
+  // Layout is saved only for activities that still exist in the saved scenario: positions of removed activities are dropped, never sent.
+  const live=new Set(latest.document.activities.map(a=>a.id));
+  const layout:Positions=Object.fromEntries(Object.entries(positions).filter(([id])=>live.has(id)));
+  if(dirtyPos&&Object.keys(layout).length){
+   try{await api('/api/planning',{method:'POST',body:{action:'positions',scenarioId:data.scenario.id,positions:layout}});}
+   catch(e){
+    // The business save already happened: adopt its new revision so a retry saves only the layout instead of hitting a stale-version error.
+    if(businessSaved){setRetainLayout(layout);loaded.setData(latest);}
+    throw new Error(`${businessSaved?'Your changes were saved, but the layout could not be saved. ':''}${e instanceof Error?e.message:'The layout save failed.'} Press Save to retry the layout.`);
+   }
+  }
+  return {latest,layout};
+ },r=>{if(r){loaded.setData({...r.latest,positions:r.layout});setDirtyDoc(false);setDirtyPos(false);setNote('Saved.');}});
  const dirty=dirtyDoc||dirtyPos;
  const newScenario=()=>save.run(()=>api<Loaded>('/api/planning',{method:'POST',body:{action:'create-scenario',planId:data.plan.id,name:newName,basedOnScenarioId:data.scenario.id}}),l=>{setNewName('');setCurrent(l.scenario.id);});
  const selected=drawer?doc.activities.find(a=>a.id===drawer):null;
@@ -171,7 +189,7 @@ function CostsPanel({doc,result,rates,editable,edit}:{doc:PlanDocument;result:Pl
   <dl className="grid gap-2 text-sm sm:grid-cols-2"><div className="flex justify-between"><dt>Resources</dt><dd data-testid="cost-run">{money(c.runTotal,true)}</dd></div><div className="flex justify-between"><dt>Activity setup</dt><dd data-testid="cost-setup">{money(c.activitySetupTotal,true)}</dd></div><div className="flex justify-between"><dt>Shared costs (counted once)</dt><dd data-testid="cost-shared">{money(c.sharedTotal,true)}</dd></div><div className="flex justify-between font-semibold"><dt>Total</dt><dd data-testid="cost-total">{c.total===null?`Unknown (${c.unknownCount} missing; known ${money(c.knownTotal,true)})`:money(c.total,true)}</dd></div></dl>
  </Section>
  <Section title="Shared costs" description="One cost used by several activities (for example mobilisation or traffic management). It is counted once in the plan total.">
-  <ul className="space-y-2">{doc.sharedCosts.map(s=><li key={s.id} className="grid gap-2 sm:grid-cols-[1fr_10rem_auto] sm:items-end"><Field label="Name"><input className={fieldClass} disabled={!editable} value={s.label} maxLength={180} onChange={e=>edit(d=>({...d,sharedCosts:d.sharedCosts.map(x=>x.id===s.id?{...x,label:e.target.value}:x)}))}/></Field><Field label="Amount (ex GST)"><NumInput label={`Amount for ${s.label}`} disabled={!editable} value={s.amount} onChange={v=>edit(d=>({...d,sharedCosts:d.sharedCosts.map(x=>x.id===s.id?{...x,amount:v}:x)}))}/></Field>{editable&&<Btn variant="ghost" aria-label={`Remove shared cost ${s.label}`} onClick={()=>edit(d=>({activities:d.activities.map(a=>({...a,sharedCostIds:a.sharedCostIds.filter(i=>i!==s.id)})),dependencies:d.dependencies,sharedCosts:d.sharedCosts.filter(x=>x.id!==s.id)}))}><Trash2 aria-hidden className="size-4"/></Btn>}</li>)}</ul>
+  <ul className="space-y-2">{doc.sharedCosts.map(s=><li key={s.id} className="grid gap-2 sm:grid-cols-[1fr_10rem_auto] sm:items-end"><Field label="Name"><input className={fieldClass} disabled={!editable} value={s.label} maxLength={180} onChange={e=>edit(d=>({...d,sharedCosts:d.sharedCosts.map(x=>x.id===s.id?{...x,label:e.target.value}:x)}))}/></Field><Field label="Amount (ex GST)"><NumInput spec={FIELDS.amount} label={`Amount for ${s.label}`} disabled={!editable} value={s.amount} onChange={v=>edit(d=>({...d,sharedCosts:d.sharedCosts.map(x=>x.id===s.id?{...x,amount:v}:x)}))}/></Field>{editable&&<Btn variant="ghost" aria-label={`Remove shared cost ${s.label}`} onClick={()=>edit(d=>({activities:d.activities.map(a=>({...a,sharedCostIds:a.sharedCostIds.filter(i=>i!==s.id)})),dependencies:d.dependencies,sharedCosts:d.sharedCosts.filter(x=>x.id!==s.id)}))}><Trash2 aria-hidden className="size-4"/></Btn>}</li>)}</ul>
   {editable&&<Btn className="mt-3" variant="secondary" onClick={()=>edit(d=>({...d,sharedCosts:[...d.sharedCosts,{id:newId(),label:'Shared cost',amount:null}]}))}><Plus aria-hidden className="size-4"/>Add shared cost</Btn>}
  </Section>
  <Section title="By activity"><div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="text-left text-xs text-slate-500"><th className="py-1 pr-3">Activity</th><th className="pr-3">Resources</th><th className="pr-3">Setup</th><th>Total</th></tr></thead><tbody>{doc.activities.map(a=>{const r=result.activities[a.id].cost!;return <tr key={a.id} className="border-t"><td className="py-1.5 pr-3">{a.name}</td><td className="pr-3">{a.requirements.length?cost(r.runCost,true):'—'}</td><td className="pr-3">{a.costItems.length?cost(r.setupCost,true):'—'}</td><td data-testid="activity-total">{costLabel(a,r.total,true)}</td></tr>;})}</tbody></table></div></Section></div>;
@@ -195,28 +213,28 @@ function Drawer({a,doc,result,rates,editable,onClose,patch,edit,remove}:{a:PlanA
     <fieldset className="grid gap-2 rounded-lg border p-3"><legend className="px-1 text-sm font-medium text-slate-700">Duration</legend>
      <label className="flex items-center gap-2 text-sm"><input type="radio" name="mode" disabled={ro} checked={a.durationMode==='entered'} onChange={()=>patch({durationMode:'entered'})}/>Enter the duration</label>
      <label className="flex items-center gap-2 text-sm"><input type="radio" name="mode" disabled={ro} checked={a.durationMode==='derived'} onChange={()=>patch({durationMode:'derived'})}/>Derive it from quantity and productivity</label>
-     {a.durationMode==='entered'?<Field label="Duration (working days)" hint="Leave empty if unknown."><NumInput label="Duration days" disabled={ro} value={a.durationDays} onChange={v=>patch({durationDays:v})}/></Field>
-      :<div className="grid gap-3 sm:grid-cols-2"><Field label="Quantity"><NumInput label="Quantity" disabled={ro} value={a.quantity} onChange={v=>patch({quantity:v})}/></Field>
+     {a.durationMode==='entered'?<Field label="Duration (working days)" hint="Leave empty if unknown."><NumInput spec={FIELDS.durationDays} label="Duration days" disabled={ro} value={a.durationDays} onChange={v=>patch({durationDays:v})}/></Field>
+      :<div className="grid gap-3 sm:grid-cols-2"><Field label="Quantity"><NumInput spec={FIELDS.quantity} label="Quantity" disabled={ro} value={a.quantity} onChange={v=>patch({quantity:v})}/></Field>
        <Field label="Quantity unit"><input aria-label="Quantity unit" list="plan-units" className={fieldClass} disabled={ro} value={a.unit??''} maxLength={20} onChange={e=>patch({unit:e.target.value||null})}/></Field>
-       <Field label="Productivity (per productive hour)"><NumInput label="Productivity" disabled={ro} value={a.productivity} onChange={v=>patch({productivity:v})}/></Field>
+       <Field label="Productivity (per productive hour)"><NumInput spec={FIELDS.productivity} label="Productivity" disabled={ro} value={a.productivity} onChange={v=>patch({productivity:v})}/></Field>
        <Field label="Productivity unit"><input aria-label="Productivity unit" list="plan-units" className={fieldClass} disabled={ro} value={a.productivityUnit??''} maxLength={20} onChange={e=>patch({productivityUnit:e.target.value||null})}/></Field>
        <p data-testid="derived-duration" className="text-sm text-slate-700 sm:col-span-2">Derived duration: <strong>{dayText(r.durationDays)}</strong>{r.durationDays===null&&' (needs quantity, productivity and productive hours per day)'}</p></div>}
-     <Field label="Productive hours per day" hint="Needed for hourly rates and derived durations. Leave empty if unknown."><NumInput label="Productive hours per day" disabled={ro} value={a.hoursPerDay} onChange={v=>patch({hoursPerDay:v})}/></Field>
+     <Field label="Productive hours per day" hint="Needed for hourly rates and derived durations. Leave empty if unknown."><NumInput spec={FIELDS.hoursPerDay} label="Productive hours per day" disabled={ro} value={a.hoursPerDay} onChange={v=>patch({hoursPerDay:v})}/></Field>
      <datalist id="plan-units">{KNOWN_UNITS.map(u=><option key={u} value={u}/>)}</datalist>
     </fieldset>
     <fieldset className="grid gap-1 rounded-lg border p-3"><legend className="px-1 text-sm font-medium text-slate-700">Resources</legend>
      {a.requirements.map(q=>{const c=r.cost?.requirements.find(x=>x.id===q.id);return <div key={q.id} data-testid="requirement" className="grid gap-2 border-b pb-3 last:border-0 sm:grid-cols-[6rem_1fr_5rem_7rem_6rem_auto] sm:items-end">
       <Field label="Type"><select aria-label="Resource type" className={fieldClass} disabled={ro} value={q.kind} onChange={e=>setReq(q.id,{kind:e.target.value as Requirement['kind']})}><option value="labour">Labour</option><option value="plant">Plant</option></select></Field>
       <Field label="Name"><input aria-label="Resource name" className={fieldClass} disabled={ro} value={q.name} maxLength={180} onChange={e=>setReq(q.id,{name:e.target.value})}/></Field>
-      <Field label="Count"><NumInput label="Resource count" disabled={ro} value={q.quantity} onChange={v=>setReq(q.id,{quantity:v})}/></Field>
-      <Field label={rates?'Rate (ex GST)':'Rate'}>{rates?<NumInput label="Resource rate" disabled={ro} value={q.rate} onChange={v=>setReq(q.id,{rate:v})}/>:<span className="text-sm text-slate-500">Restricted</span>}</Field>
+      <Field label="Count"><NumInput spec={FIELDS.count} label="Resource count" disabled={ro} value={q.quantity} onChange={v=>setReq(q.id,{quantity:v})}/></Field>
+      <Field label={rates?'Rate (ex GST)':'Rate'}>{rates?<NumInput spec={FIELDS.rate} label="Resource rate" disabled={ro} value={q.rate} onChange={v=>setReq(q.id,{rate:v})}/>:<span className="text-sm text-slate-500">Restricted</span>}</Field>
       <Field label="Per"><select aria-label="Rate basis" className={fieldClass} disabled={ro||!rates} value={q.rateBasis} onChange={e=>setReq(q.id,{rateBasis:e.target.value as 'hour'|'day'})}><option value="hour">hour</option><option value="day">day</option></select></Field>
       {!ro&&<Btn variant="ghost" aria-label={`Remove ${q.name||'resource'}`} onClick={()=>patch({requirements:a.requirements.filter(x=>x.id!==q.id)})}><Trash2 aria-hidden className="size-4"/></Btn>}
       <p className="text-xs text-slate-500 sm:col-span-6">Cost: {cost(c?.amount,rates)}</p></div>;})}
      {!ro&&<div className="flex gap-2 pt-1"><Btn variant="secondary" onClick={()=>patch({requirements:[...a.requirements,{id:newId(),kind:'labour',name:'Labour',quantity:null,rate:null,rateBasis:'hour',resourceRef:null}]})}><Plus aria-hidden className="size-4"/>Add labour</Btn><Btn variant="secondary" onClick={()=>patch({requirements:[...a.requirements,{id:newId(),kind:'plant',name:'Plant',quantity:null,rate:null,rateBasis:'hour',resourceRef:null}]})}><Plus aria-hidden className="size-4"/>Add plant</Btn></div>}
     </fieldset>
     {rates&&<fieldset className="grid gap-2 rounded-lg border p-3"><legend className="px-1 text-sm font-medium text-slate-700">Setup costs</legend>
-     {a.costItems.map(c=><div key={c.id} className="grid gap-2 sm:grid-cols-[1fr_9rem_auto] sm:items-end"><Field label="Setup item"><input aria-label="Setup cost name" className={fieldClass} disabled={ro} value={c.label} maxLength={180} onChange={e=>patch({costItems:a.costItems.map(x=>x.id===c.id?{...x,label:e.target.value}:x)})}/></Field><Field label="Amount (ex GST)"><NumInput label="Setup cost amount" disabled={ro} value={c.amount} onChange={v=>patch({costItems:a.costItems.map(x=>x.id===c.id?{...x,amount:v}:x)})}/></Field>{!ro&&<Btn variant="ghost" aria-label={`Remove ${c.label}`} onClick={()=>patch({costItems:a.costItems.filter(x=>x.id!==c.id)})}><Trash2 aria-hidden className="size-4"/></Btn>}</div>)}
+     {a.costItems.map(c=><div key={c.id} className="grid gap-2 sm:grid-cols-[1fr_9rem_auto] sm:items-end"><Field label="Setup item"><input aria-label="Setup cost name" className={fieldClass} disabled={ro} value={c.label} maxLength={180} onChange={e=>patch({costItems:a.costItems.map(x=>x.id===c.id?{...x,label:e.target.value}:x)})}/></Field><Field label="Amount (ex GST)"><NumInput spec={FIELDS.amount} label="Setup cost amount" disabled={ro} value={c.amount} onChange={v=>patch({costItems:a.costItems.map(x=>x.id===c.id?{...x,amount:v}:x)})}/></Field>{!ro&&<Btn variant="ghost" aria-label={`Remove ${c.label}`} onClick={()=>patch({costItems:a.costItems.filter(x=>x.id!==c.id)})}><Trash2 aria-hidden className="size-4"/></Btn>}</div>)}
      {!ro&&<Btn variant="secondary" className="justify-self-start" onClick={()=>patch({costItems:[...a.costItems,{id:newId(),label:'Setup',amount:null}]})}><Plus aria-hidden className="size-4"/>Add setup cost</Btn>}
     </fieldset>}
     {doc.sharedCosts.length>0&&<fieldset className="grid gap-1 rounded-lg border p-3"><legend className="px-1 text-sm font-medium text-slate-700">Relies on shared costs</legend><p className="text-xs text-slate-500">Counted once in the plan total, not in this activity.</p>

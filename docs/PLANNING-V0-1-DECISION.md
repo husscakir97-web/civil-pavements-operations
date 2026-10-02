@@ -30,3 +30,15 @@ Built on PR 62 (`chatgpt/connected-job-release-candidate` @ `f852c21`). This wor
 
 ## Out of scope (interfaces only)
 Dated leave, resource reservations/bookings, optimisation, real-time co-editing, tender extraction, standards ingestion, ITP generation, executive dashboards. `resource_ref_*`, the optional links and the pure calculation module are the seams future work can connect to.
+
+## Verification (final code)
+- `node scripts/test-planning-v01.cjs` (in `npm test`): unit conversion, derived duration, unknown vs zero, parallel join, cycle/duplicate/self/unknown-id rejection, shared cost once, arithmetic, redaction, determinism.
+- `test:migration-recovery`: real runner for 0026 (fresh install, upgrade from 0025, `organisation_id` + index on all eight tables, unknown stays `NULL`, idempotent restart). `test:planning` (`scripts/planning-journey.mjs`, production build, real MySQL-compatible database, 62 checks): server contract, redaction in JSON and CSV, ownership scope, tenant isolation, Estimating-only organisation, the full browser journey (create, add blocks, connect, drawer edits, drag, save, reload in flowchart and timeline, cycle refused, shared cost once, scenarios, stale save, approved estimate untouched) and desktop/390px overflow with screenshots inspected.
+- Full gate (security audit, lint, typecheck, `npm test`, pruned build, `test:fresh`, `test:migration-recovery`, `db:migrate` ×2, backfill, `test:mysql`, `test:v1`, connected-job driver) passed on the final code. `scripts/test-v1-logic.cjs` was updated for an intended rule: Planning appears under Pipeline for Estimating.
+
+## Limitations of v0.1
+- No UI yet to link a plan to an estimate, tender or project, or to pick an existing worker/plant record (the API and schema accept and validate them).
+- Plan access is organisation or owner-only; no per-person sharing. No deletion of plans or scenarios (archive plan only through the API).
+- Whole-document save (last 200 activities); no autosave, undo or real-time co-editing. Positions are last-write-wins.
+- The browser journey (`test:planning`) needs Playwright and Chromium and is not wired into CI (CI workflow left unchanged); the engine and migration tests do run in CI.
+- Relative days only: no calendar, leave, bookings or optimisation. Rates are ex GST and entered by hand; no rate-library lookup.

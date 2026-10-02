@@ -602,6 +602,45 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
   const fixed=await json(await call('/api/dockets','PUT',{...undatedDocket,workDate:'2026-09-23',status:'review'},A.cookie),200);assert.equal(fixed.docket.workDate,'2026-09-23');
   assert.equal((await db.execute('SELECT work_date FROM dockets WHERE id=?',[undatedDocket.id]))[0][0].work_date,'2026-09-23');
   const [[unpriced]]=await db.execute("SELECT line_items FROM dockets WHERE id=?",[undatedDocket.id]);assert.equal(JSON.parse(unpriced.line_items)[0].amount,null,'absent amounts stay unknown');
+  // ---- Approval validation: POST, PUT and the seam all require a real work date, and a rejection writes nothing.
+  {const count=async()=>Number((await db.execute("SELECT COUNT(*) AS n FROM dockets WHERE docket_no LIKE ?",['GATE-%'+suffix]))[0][0].n);
+   const postRaw=async recs=>{const f=new FormData();f.set('records',JSON.stringify(recs));return call('/api/dockets','POST',f,A.cookie);};
+   const good={docketNo:`GATE-OK-${suffix}`,workDate:'2026-09-23',client:'Example Builder Group',project:'Sample Road',status:'review',amount:0};
+   const before=await count();
+   const [auditBefore]=(await db.execute("SELECT COUNT(*) AS n FROM audit_log WHERE organisation_id=?",[memberA.organisation_id]))[0];
+   await json(await postRaw([{...good,docketNo:`GATE-BAD-${suffix}`,workDate:'',status:'approved'}]),422,'an approved docket with a blank date is rejected on create');
+   await json(await postRaw([{...good,docketNo:`GATE-BAD2-${suffix}`,workDate:'not a date',status:'approved'}]),422,'an approved docket with an invalid date is rejected on create');
+   await json(await postRaw([{...good,docketNo:`GATE-BAD3-${suffix}`,workDate:'',status:'ready'}]),422,'a ready docket with a blank date is rejected on create');
+   await json(await postRaw([good,{...good,docketNo:`GATE-BAD4-${suffix}`,workDate:'',status:'approved'}]),422,'one bad record rejects the whole batch');
+   assert.equal(await count(),before,'nothing was written by any rejected create');
+   const created=(await json(await postRaw([{...good,docketNo:`GATE-PUT-${suffix}`,workDate:'',status:'review'}]),200)).dockets[0];
+   await json(await call('/api/dockets','PUT',{...created,status:'approved'},A.cookie),422,'approving a blank date through PUT is rejected');
+   const [[stillReview]]=await db.execute('SELECT status,work_date FROM dockets WHERE id=?',[created.id]);assert.deepEqual([stillReview.status,stillReview.work_date],['review',''],'the rejected approval changed nothing');
+   assert.equal((await db.execute("SELECT COUNT(*) AS n FROM cost_transactions WHERE source_id=?",[created.id]))[0][0].n,0,'no cost rows');
+   await json(await call('/api/dockets','PUT',{...created,workDate:'2026-09-23',status:'approved'},A.cookie),200,'with a date it can be approved');}
+  // ---- Review freshness: save → reopen → edit, status changes and concurrent updates never overwrite corrections.
+  {const doc=await post({docketNo:`FRESH-${suffix}`,workDate:'2026-09-23',client:'Example Builder Group',project:'Sample Road',status:'review',notes:'as uploaded'});
+   const get=async(id,cookie=A.cookie)=>call('/api/dockets?id='+id,'GET',undefined,cookie);
+   const put=(d,patch)=>call('/api/dockets','PUT',{...d,...patch},A.cookie);
+   const t0=doc.updatedAt;
+   const first=await json(await put(doc,{client:'Corrected Client',expectedUpdatedAt:t0}),200);const t1=first.docket.updatedAt;assert.notEqual(t1,t0);
+   // reopening loads the current server record, not the upload snapshot
+   const reopened=(await json(await get(doc.id),200)).docket;assert.equal(reopened.client,'Corrected Client');assert.equal(reopened.updatedAt,t1);assert.notEqual(reopened.client,doc.client);
+   const second=await json(await put(reopened,{notes:'second correction',expectedUpdatedAt:reopened.updatedAt}),200);const t2=second.docket.updatedAt;
+   assert.equal((await json(await get(doc.id),200)).docket.notes,'second correction');
+   // a stale editor (still holding the upload snapshot) is refused and overwrites nothing
+   const stale=await put(doc,{client:'Stale Overwrite',notes:'stale',expectedUpdatedAt:t0});assert.equal(stale.status,409);
+   const [[kept]]=await db.execute('SELECT client,notes,updated_at FROM dockets WHERE id=?',[doc.id]);assert.deepEqual([kept.client,kept.notes,kept.updated_at],['Corrected Client','second correction',t2],'corrections survive a stale save');
+   // status changes are versioned too
+   await json(await put(reopened,{status:'approved',expectedUpdatedAt:t2}),200);const approvedAt=(await json(await get(doc.id),200)).docket.updatedAt;
+   assert.equal((await put({...reopened,status:'review'},{expectedUpdatedAt:t2})).status,409,'a stale return-to-review does not undo an approval');assert.equal((await db.execute('SELECT status FROM dockets WHERE id=?',[doc.id]))[0][0].status,'approved');
+   // two editors saving from the same version: exactly one wins and the loser changes nothing
+   const results=await Promise.all(['Editor one','Editor two'].map(name=>put({...reopened,status:'approved'},{notes:name,expectedUpdatedAt:approvedAt})));
+   assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);const winner=results.findIndex(r=>r.status===200);
+   assert.equal((await json(await get(doc.id),200)).docket.notes,['Editor one','Editor two'][winner],'the winner\'s correction is the stored one');
+   // other organisations cannot read it
+   assert.equal((await get(doc.id,B.cookie)).status,404,'a record of another organisation is not found by id');
+   assert.equal((await get('missing-id')).status,404);}
   console.log('PASS docket parsing: unknown dates are stored unknown and listed for review, approval refused until dated, references kept distinct, unpriced rows stay unknown');}
  // ---------------------------------------------------------------- Scenario G
  step='G tenant attack';

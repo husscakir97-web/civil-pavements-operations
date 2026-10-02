@@ -48,7 +48,6 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import {loadPdfReader,loadTesseract,PDF_READER_OPTIONS,type OcrWorker} from '@/lib/document-readers';
-import {PaidAiScan} from '@/components/paid-ai-scan';
 import {useWorkspaceBrand} from '@/components/workspace-brand';
 import {can} from '@/lib/platform/permissions';
 import {
@@ -68,6 +67,8 @@ type PendingFile = {
   state: "queued" | "reading" | "saving" | "done" | "error";
   message?: string;
   docketCount?: number;
+  // Run local OCR on every page even when the PDF has readable text (readable labels, scanned or handwritten values).
+  runOcr?: boolean;
 };
 
 const money = new Intl.NumberFormat("en-AU", {
@@ -111,6 +112,8 @@ type OcrPage = {
   confidence: number;
   pageNumber: number;
   pageCount: number;
+  method?: string;
+  nativeText?: string;
 };
 
 function prepareOcrCanvas(source: HTMLCanvasElement, mode: "normalised" | "binary") {
@@ -277,6 +280,7 @@ async function readPdf(
   getWorker: () => Promise<OcrWorker>,
   setOcrProgress: (handler: (message: { status: string; progress: number }) => void) => void,
   onProgress: (progress: number, message: string) => void,
+  options: { forceOcr?: boolean } = {},
 ) {
   await loadPdfReader();
   if (!window.pdfjsLib) throw new Error("PDF reader unavailable");
@@ -286,12 +290,13 @@ async function readPdf(
   for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
     const page = await pdfDocument.getPage(pageNumber);
     const embeddedText = textFromPdfItems((await page.getTextContent()).items);
-    if (hasUsefulPdfText(embeddedText)) {
+    if (!options.forceOcr && hasUsefulPdfText(embeddedText)) {
       pages.push({
         text: embeddedText,
         confidence: 99,
         pageNumber,
         pageCount: pdfDocument.numPages,
+        method: "pdf-text",
       });
       onProgress(
         Math.max(8, Math.round((pageNumber / pdfDocument.numPages) * 80)),
@@ -327,6 +332,9 @@ async function readPdf(
       confidence: result.confidence,
       pageNumber,
       pageCount: pdfDocument.numPages,
+      // OCR was asked for explicitly on a PDF whose text is readable: remember it, and keep the native text to compare against.
+      method: options.forceOcr && hasUsefulPdfText(embeddedText) ? "local-ocr:run" : "local-ocr",
+      nativeText: embeddedText.trim() ? embeddedText : undefined,
     });
   }
   return pages;
@@ -368,6 +376,8 @@ export function DocketDashboard() {
   const [processing, setProcessing] = useState(false);
   // The dockets actually created by this upload (as returned by the server), shown for review.
   const [uploadedRecords, setUploadedRecords] = useState<Docket[]>([]);
+  // After "Run OCR" on a PDF with readable text: the native text and what each read produced, for side-by-side review.
+  const [compare, setCompare] = useState<{ nativeText: string; native?: Docket; ocr: Docket } | null>(null);
   const [editing, setEditing] = useState<Docket | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -532,6 +542,7 @@ export function DocketDashboard() {
               getWorker,
               (handler) => { progressHandler = handler; },
               (progress, message) => updatePending(item.id, { progress, message }),
+              { forceOcr: Boolean(item.runOcr) },
             );
           }
           const parsed = parseDocketDocument(pages, item.file.name);
@@ -599,6 +610,22 @@ export function DocketDashboard() {
     toast.success("Reconciliation CSV downloaded.");
   }
 
+  // The review dialog always opens the current server record, never the snapshot taken when the file was uploaded.
+  async function openReview(id: string) {
+    try {
+      const response = await fetch(`/api/dockets?id=${encodeURIComponent(id)}`);
+      if (!response.ok) throw new Error(response.status === 404 ? "This docket no longer exists." : "The current docket could not be loaded. Nothing was opened.");
+      const { docket } = (await response.json()) as { docket: Docket };
+      setUploadedRecords((list) => list.map((item) => item.id === docket.id ? docket : item));
+      setRecords((items) => items.map((item) => item.id === docket.id ? docket : item));
+      setCompare(null);
+      setUploadOpen(false);
+      setEditing({ ...docket });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The current docket could not be loaded.");
+    }
+  }
+
   async function saveEdit() {
     if (!editing || isSample) return;
     setSavingEdit(true);
@@ -606,11 +633,12 @@ export function DocketDashboard() {
       const response = await fetch("/api/dockets", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editing),
+        body: JSON.stringify({ ...editing, expectedUpdatedAt: editing.updatedAt }),
       });
       if (!response.ok) { const problem=await response.json().catch(()=>({})) as {error?:string}; throw new Error(problem.error || 'Changes could not be saved.'); }
       const { docket } = (await response.json()) as { docket: Docket };
       window.dispatchEvent(new Event('records-changed'));
+      setUploadedRecords((list) => list.map((item) => item.id === docket.id ? { ...item, ...docket } : item));
       setRecords((items) => items.map((item) => item.id === docket.id ? docket : item).filter((item) => !item.workDate || item.workDate.startsWith(selectedMonth)));
       setEditing(null);
       toast.success("Docket updated.");
@@ -655,8 +683,10 @@ export function DocketDashboard() {
       setEditing({...record,...parsed,workDate:parsed.workDate||record.workDate,id:record.id,status:'review',links:record.links,sourceCrop:record.sourceCrop,notes:parsed.notes+' Re-read saved OCR text. Review before saving.'});
       toast.info('Updated extraction opened for review. Save changes to update this docket.');return;
     }
-    if(action!=='reprocess') { toast.error('Boundary editing is unavailable until source regions are selected. No records have been changed.'); return; }
+    if(action!=='reprocess'&&action!=='reprocess-ocr') { toast.error('Boundary editing is unavailable until source regions are selected. No records have been changed.'); return; }
     let worker: OcrWorker | null=null;
+    // Run OCR is an explicit choice that Reprocess keeps honouring for this record (a PDF whose readable labels hide scanned or handwritten values).
+    const forceOcr=action==='reprocess-ocr'||record.extractionMethod==='local-ocr:run';
     try {
       const response=await fetch('/api/dockets/file?id='+encodeURIComponent(record.id));
       if(!response.ok)throw new Error('The original file could not be opened.');
@@ -669,14 +699,19 @@ export function DocketDashboard() {
         return worker;
       }
       toast.info('Reading the original document again…');
-      const pages=file.type==='application/pdf'?await readPdf(file,getWorker,()=>{},()=>{}):[{...await recogniseDocketCanvas(await getWorker(),await imageToCanvas(file),()=>{}),pageNumber:1,pageCount:1}];
+      const pages=file.type==='application/pdf'?await readPdf(file,getWorker,()=>{},()=>{},{forceOcr}):[{...await recogniseDocketCanvas(await getWorker(),await imageToCanvas(file),()=>{}),pageNumber:1,pageCount:1}];
       // Whole-file assembly, so a docket that spans pages is read as one. The matching docket is chosen by number, then by its first page.
       const found=parseDocketDocument(pages,record.sourceName);
       const parsed=(record.docketNo&&record.docketNo!=='UNREAD'?found.find(d=>d.docketNo.toUpperCase()===record.docketNo.toUpperCase()):undefined)??found.find(d=>d.sourcePage===(record.sourcePage||1));
       if(!parsed)throw new Error('No readable text found. Saved data is unchanged.');
+      // The PDF's own text is kept for comparison with what OCR read; it is never applied to the record.
+      const nativePages=pages.filter(p=>p.nativeText);
+      const nativeFound=nativePages.length?parseDocketDocument(nativePages.map(p=>({text:p.nativeText as string,confidence:99,pageNumber:p.pageNumber,pageCount:p.pageCount,method:'pdf-text'})),record.sourceName):[];
+      const nativeMatch=nativeFound.find(d=>d.docketNo===parsed.docketNo)??nativeFound.find(d=>d.sourcePage===parsed.sourcePage);
+      setCompare(forceOcr&&nativePages.length?{nativeText:nativePages.map(p=>`[page ${p.pageNumber}]\n${p.nativeText}`).join('\n'),native:nativeMatch,ocr:parsed}:null);
       if(!window.confirm('Review newly extracted fields? This replaces the open draft only. Saved values remain unchanged until you choose Save changes.'))return;
       setEditing({...record,...parsed,workDate:parsed.workDate||record.workDate,id:record.id,status:'review',links:record.links,notes:parsed.notes+' New OCR draft from original source; review before saving.'});
-      toast.success('New OCR draft ready. Check the fields before saving.');
+      toast.success(forceOcr?'OCR draft ready. Compare it with the PDF text, then check the fields before saving.':'New OCR draft ready. Check the fields before saving.');
     } catch(e) { toast.error(e instanceof Error?e.message:'Reprocessing failed. Saved data is unchanged.'); }
     finally { if(worker)await (worker as OcrWorker).terminate(); }
   }
@@ -1028,7 +1063,7 @@ export function DocketDashboard() {
               Read digital dockets / standard OCR
             </DialogTitle>
             <DialogDescription>
-              Read digital PDFs directly or use standard OCR for printed scans. Handwriting can use the separate paid AI option after upload.
+              Digital PDFs are read directly. Scanned pages are read with local OCR. For a PDF whose labels are readable but whose values are scanned or handwritten, tick Run OCR.
             </DialogDescription>
           </DialogHeader>
 
@@ -1079,6 +1114,12 @@ export function DocketDashboard() {
                         {item.message || "Ready to scan"}
                       </span>
                     </div>
+                    {item.file.type === "application/pdf" && item.state !== "done" && (
+                      <label className="mt-2 flex items-center gap-2 text-xs text-slate-600">
+                        <input type="checkbox" checked={Boolean(item.runOcr)} disabled={processing} onChange={(event) => updatePending(item.id, { runOcr: event.target.checked })} />
+                        Run OCR on this PDF (readable labels, scanned or handwritten values)
+                      </label>
+                    )}
                     {item.state === "error" && (
                       <div className="mt-2 flex items-center justify-between gap-2 rounded-md bg-red-50 px-2.5 py-1.5 text-xs text-red-700" role="alert">
                         <span>This file was not added. {item.message}</span>
@@ -1102,11 +1143,11 @@ export function DocketDashboard() {
                   <li key={record.id} className="flex items-center justify-between gap-3 rounded-lg border bg-white px-3 py-2 text-sm" data-testid="uploaded-docket">
                     <div className="min-w-0">
                       <p className="truncate font-medium text-slate-900">Docket {record.docketNo} · <span className={record.workDate ? "" : "text-amber-700"}>{displayDate(record.workDate)}</span></p>
-                      <p className="truncate text-xs text-slate-500">{[record.client, record.project].filter(Boolean).join(" — ") || "Client and project not read"}{record.labourHours ? ` · ${record.labourHours} labour hrs` : ""}{record.sourcePage ? ` · ${record.sourceCrop?.startsWith("pages-") ? "pages" : "page"} ${record.sourceCrop?.startsWith("pages-") ? record.sourceCrop.replace("pages-", "").replace("-to-", "–") : record.sourcePage}` : ""}</p>
+                      <p className="truncate text-xs text-slate-500">{[record.client, record.project].filter(Boolean).join(" — ") || "Client and project not read"}{record.labourHours ? ` · ${record.labourHours} labour hrs` : ""}{record.sourcePage ? ` · ${record.sourceCrop?.startsWith("pages-") ? "pages" : "page"} ${record.sourceCrop?.startsWith("pages-") ? record.sourceCrop.replace("pages-", "").split("+").join(", ") : record.sourcePage}` : ""}</p>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">{statusLabel(record.status)}</span>
-                      <Button size="xs" variant="outline" onClick={() => { setUploadOpen(false); setEditing({ ...record }); }}>Review</Button>
+                      <Button size="xs" variant="outline" onClick={() => void openReview(record.id)}>Review</Button>
                     </div>
                   </li>
                 ))}
@@ -1142,19 +1183,34 @@ export function DocketDashboard() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="flex items-center justify-between gap-3 rounded-lg border bg-slate-50 px-3 py-2 sm:col-span-2">
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-slate-800">{editing.sourceName}</p><div className="mt-2"><PaidAiScan kind="docket" sourceId={editing.id}/></div>
+                  <p className="truncate text-sm font-semibold text-slate-800">{editing.sourceName}</p>{/\.pdf$/i.test(editing.sourceName) && <div className="mt-2"><Button type="button" variant="outline" size="sm" onClick={() => void docketAction('reprocess-ocr', editing)}>Run OCR (local)</Button></div>}
                   <p className="text-xs text-slate-500">Standard OCR / digital text · original uploaded docket</p>
                 </div>
-              <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm sm:col-span-2"><p className="font-semibold text-orange-900">Source and boundary review</p><p className="mt-1 text-orange-800">Page {editing.sourcePage || "Source page not captured"} · {editing.sourceCrop || "full-page"} · {editing.extractionMethod || "local-ocr"} · Profile {editing.profileId || "generic"}</p><div className="mt-2 flex flex-wrap gap-2"><Button type="button" variant="outline" size="sm" onClick={() => docketAction("split", editing).catch((e) => toast.error(e.message))}>Split record</Button><Button type="button" variant="outline" size="sm" onClick={() => docketAction("merge", editing).catch((e) => toast.error(e.message))}>Merge adjacent</Button><Button type="button" variant="outline" size="sm" onClick={() => docketAction("reprocess", editing).catch((e) => toast.error(e.message))}>Reprocess</Button></div></div>
-              {!!editing.fieldConfidence && <div className="rounded-lg border p-3 text-sm sm:col-span-2"><p className="font-semibold">Uncertain fields</p><div className="mt-2 flex flex-wrap gap-2">{Object.entries(editing.fieldConfidence).filter(([,v])=>Number(v)<78).map(([k,v])=><span key={k} className="rounded-full bg-amber-100 px-2 py-1 text-amber-900">{k}: {v}%</span>)}</div></div>}
-              <div className="rounded-lg border bg-slate-50 p-3 text-sm sm:col-span-2"><p className="font-semibold">Suggested OS links</p><p className="mt-1 text-slate-600">Client {editing.client||"confirm"} · Job {editing.project||"confirm"} · Shift {editing.startTime||"suggest"} · PO/WOL {editing.poNumber||"confirm"} · Vehicle {editing.vehicle||"confirm"} · Claim {editing.workDate.slice(0,7)}</p><p className="mt-1 text-amber-800">Confirm uncertain matches before Matched or Approved.</p></div>
-              {!!editing.lineItems?.length && <div className="rounded-lg border p-3 text-sm sm:col-span-2"><p className="font-semibold">Line items</p>{editing.lineItems.map((item,i)=><div key={i} className="flex justify-between border-b py-2"><span>{String(item.description||"Item")}</span><span>{String(item.quantity||0)} {String(item.unit||"")} · {item.valueSource === "document" ? "document" : "system rate pending"}</span></div>)}</div>}
                 <Button asChild variant="outline" size="sm">
                   <a href={`/api/dockets/file?id=${encodeURIComponent(editing.id)}`} target="_blank" rel="noreferrer">
                     <FileSearch /> Open original
                   </a>
                 </Button>
               </div>
+              <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm sm:col-span-2"><p className="font-semibold text-orange-900">Source and boundary review</p><p className="mt-1 text-orange-800">Page {editing.sourcePage || "Source page not captured"} · {editing.sourceCrop || "full-page"} · {editing.extractionMethod || "local-ocr"} · Profile {editing.profileId || "generic"}</p><div className="mt-2 flex flex-wrap gap-2"><Button type="button" variant="outline" size="sm" onClick={() => docketAction("split", editing).catch((e) => toast.error(e.message))}>Split record</Button><Button type="button" variant="outline" size="sm" onClick={() => docketAction("merge", editing).catch((e) => toast.error(e.message))}>Merge adjacent</Button><Button type="button" variant="outline" size="sm" onClick={() => docketAction("reprocess", editing).catch((e) => toast.error(e.message))}>Reprocess</Button></div></div>
+              {compare && (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm sm:col-span-2" data-testid="ocr-compare">
+                  <p className="font-semibold text-blue-900">Compare OCR with the PDF text</p>
+                  <p className="mt-1 text-xs text-blue-800">The PDF&apos;s own text is shown for comparison only. Nothing here is saved until you review the fields and choose Save.</p>
+                  <table className="mt-2 w-full text-left text-xs">
+                    <thead><tr><th className="py-1 pr-2">Field</th><th className="py-1 pr-2">PDF text</th><th className="py-1">OCR</th></tr></thead>
+                    <tbody>
+                      {([["Docket number", "docketNo"], ["Work date", "workDate"], ["Client", "client"], ["Project / site", "project"], ["Labour hours", "labourHours"]] as const).map(([label, key]) => (
+                        <tr key={key} className="border-t border-blue-100"><td className="py-1 pr-2 font-medium">{label}</td><td className="py-1 pr-2">{String(compare.native?.[key] || "—")}</td><td className="py-1">{String(compare.ocr[key] || "—")}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <details className="mt-2"><summary className="cursor-pointer text-xs font-medium text-blue-900">Show the PDF text</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-white p-2 text-[11px]" data-testid="native-text">{compare.nativeText}</pre></details>
+                </div>
+              )}
+              {!!editing.fieldConfidence && <div className="rounded-lg border p-3 text-sm sm:col-span-2"><p className="font-semibold">Uncertain fields</p><div className="mt-2 flex flex-wrap gap-2">{Object.entries(editing.fieldConfidence).filter(([,v])=>Number(v)<78).map(([k,v])=><span key={k} className="rounded-full bg-amber-100 px-2 py-1 text-amber-900">{k}: {v}%</span>)}</div></div>}
+              <div className="rounded-lg border bg-slate-50 p-3 text-sm sm:col-span-2"><p className="font-semibold">Suggested OS links</p><p className="mt-1 text-slate-600">Client {editing.client||"confirm"} · Job {editing.project||"confirm"} · Shift {editing.startTime||"suggest"} · PO/WOL {editing.poNumber||"confirm"} · Vehicle {editing.vehicle||"confirm"} · Claim {editing.workDate.slice(0,7)}</p><p className="mt-1 text-amber-800">Confirm uncertain matches before Matched or Approved.</p></div>
+              {!!editing.lineItems?.length && <div className="rounded-lg border p-3 text-sm sm:col-span-2"><p className="font-semibold">Line items</p>{editing.lineItems.map((item,i)=><div key={i} className="flex justify-between border-b py-2"><span>{String(item.description||"Item")}</span><span>{String(item.quantity||0)} {String(item.unit||"")} · {item.valueSource === "document" ? "document" : "system rate pending"}</span></div>)}</div>}
               <div className="min-h-56 rounded-lg border bg-slate-100 p-2 sm:col-span-1"><p className="mb-2 text-xs font-semibold text-slate-600">Source document</p><object data={`/api/dockets/file?id=${encodeURIComponent(editing.id)}`} type="application/pdf" className="h-56 w-full"><a href={`/api/dockets/file?id=${encodeURIComponent(editing.id)}`} target="_blank" rel="noreferrer">Open source</a></object></div>
               <div className="rounded-lg border p-3 text-sm sm:col-span-1"><p className="font-semibold">Extracted record</p><p className="mt-2 text-slate-600">Fields with confidence below 78% are highlighted below for manual confirmation.</p></div>
               <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm sm:col-span-2"><p>Previously saved dockets keep their original extraction until reviewed. Re-read saved text to apply the latest parsing rules without rescanning.</p><Button type="button" className="mt-2" variant="outline" onClick={()=>void docketAction('reparse',editing)}>Re-read saved text</Button></div>

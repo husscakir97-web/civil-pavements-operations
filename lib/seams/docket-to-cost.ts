@@ -44,6 +44,7 @@ export async function docketCostStatements(docketId:string,nextStatus:string,nex
   const reversed=database.prepare("UPDATE cost_transactions SET status='reversed',updated_at=? WHERE organisation_id=? AND source_type='docket' AND source_id=? AND status<>'reversed'").bind(now,org,docketId);
   return {statements:[reversed],posted:0,message:null};
  }
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(String(d.work_date||'')))throw Object.assign(new Error('A work date is required before a docket can be approved.'),{status:422});
  const event=await domainEventStatement('docket.approved',docketId,crypto.randomUUID());
  const jobId=String(safeJson<Record<string,unknown>>(d.links,{}).jobId||'');
  if(!jobId)return {statements:[event],posted:0,message:'Approved. This docket is not allocated to a project, so no cost was posted.'};

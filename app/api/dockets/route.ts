@@ -10,6 +10,7 @@ import {
   mandatoryMissing,
 } from "@/lib/dockets-db";
 import { safeJson } from '@/lib/estimates-db';
+import { tx, one } from '@/lib/platform/sql';
 import { actorContext } from '@/lib/platform/context';
 import { can } from '@/lib/platform/permissions';
 import { docketCostStatements } from '@/lib/seams/docket-to-cost';
@@ -17,37 +18,56 @@ import { checkUpload, DOCKET_UPLOAD_NAME } from '@/lib/platform/upload-safety';
 
 export const dynamic = "force-dynamic";
 
+class Refusal extends Error { constructor(message: string, readonly status: number) { super(message); } }
+
+// The checks that must pass before a docket may be marked ready or approved. Approval posts cost against the work date, so it needs a real one.
+function approvalGate(record: DocketInput) {
+  if (record.status === "ready") return mandatoryMissing(record);
+  if (record.status === "approved" && !/^\d{4}-\d{2}-\d{2}$/.test(record.workDate)) return ["Work date"];
+  return [] as string[];
+}
+
 function jsonError(message: string, status = 400) {
   return Response.json({ error: message }, { status });
 }
+
+const DOCKET_COLUMNS = `id, docket_no AS docketNo, work_date AS workDate,
+          client, project, crew, vehicle, start_time AS startTime,
+          finish_time AS finishTime, break_hours AS breakHours,
+          labour_hours AS labourHours, quantity, quantity_unit AS quantityUnit,
+          amount, po_number AS poNumber, notes, status, confidence,
+          source_name AS sourceName, raw_text AS rawText, source_page AS sourcePage, source_crop AS sourceCrop, field_confidence AS fieldConfidence, line_items AS lineItems, links, extraction_method AS extractionMethod,
+          created_at AS createdAt, updated_at AS updatedAt`;
+const presentDocket = (r: Record<string, unknown>) => ({ ...r,
+  fieldConfidence: safeJson(r.fieldConfidence, {}),
+  lineItems: safeJson(r.lineItems, []),
+  links: safeJson(r.links, {}),
+});
 
 async function handleGET(request: Request) {
   try {
     const { db } = requireBindings();
     const { searchParams } = new URL(request.url);
+    // One current record by id (own organisation only): the review dialog reloads from here so it never edits an old upload snapshot.
+    const byId = cleanText(searchParams.get("id"), 80);
+    if (byId) {
+      const row = await db.prepare(`SELECT ${DOCKET_COLUMNS} FROM dockets WHERE organisation_id = ? AND id = ? AND lower(status) != 'archived'`).bind(currentOrganisationId(), byId).first<Record<string, unknown>>();
+      if (!row) return jsonError("The docket was not found.", 404);
+      return Response.json({ docket: presentDocket(row) });
+    }
     const { start, end } = parseMonth(searchParams.get("month"));
     const result = await db
       .prepare(
-        `SELECT id, docket_no AS docketNo, work_date AS workDate,
-          client, project, crew, vehicle, start_time AS startTime,
-          finish_time AS finishTime, break_hours AS breakHours,
-          labour_hours AS labourHours, quantity, quantity_unit AS quantityUnit,
-          amount, po_number AS poNumber, notes, status, confidence,
-          source_name AS sourceName, raw_text AS rawText, source_page AS sourcePage, source_crop AS sourceCrop, field_confidence AS fieldConfidence, line_items AS lineItems, links, extraction_method AS extractionMethod, profile_id AS profileId,
-          created_at AS createdAt, updated_at AS updatedAt
+        `SELECT ${DOCKET_COLUMNS}
         FROM dockets
         WHERE organisation_id = ? AND ((work_date >= ? AND work_date < ?) OR work_date = '') AND lower(status) != 'archived'
         ORDER BY work_date DESC, created_at DESC`,
       )
       .bind(currentOrganisationId(), start, end)
       .all();
-    return Response.json({ dockets: result.results.map((r: Record<string,unknown>) => ({...r,
-      fieldConfidence: safeJson(r.fieldConfidence, {}),
-      lineItems: safeJson(r.lineItems, []),
-      links: safeJson(r.links, {}),
-    })) });
+    return Response.json({ dockets: result.results.map((r: Record<string, unknown>) => presentDocket(r)) });
   } catch (error) {
-    console.error("load dockets", error);
+    console.error("list dockets", error);
     return jsonError("The month could not be loaded.", 503);
   }
 }
@@ -94,7 +114,7 @@ async function handlePOST(request: Request) {
       return jsonError("Upload between 1 and 200 dockets at a time.");
     }
     const records = values.map((value) => parseRecord(value as Record<string, unknown>));
-    const invalid = records.flatMap((record, index) => record.status === "ready" ? mandatoryMissing(record).map(field => ({ index, field })) : []);
+    const invalid = records.flatMap((record, index) => approvalGate(record).map(field => ({ index, field })));
     if (invalid.length) {
       const now = new Date().toISOString();
       await db.prepare("INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)")
@@ -190,8 +210,7 @@ async function handlePUT(request: Request) {
     const id = cleanText(raw.id, 80);
     if (!id) return jsonError("A docket ID is required.");
     const record = parseRecord(raw);
-    // Approving posts cost against the work date, so an undated docket cannot be approved either.
-    const missing = record.status === "ready" ? mandatoryMissing(record) : record.status === "approved" && !record.workDate ? ["Work date"] : [];
+    const missing = approvalGate(record);
     if (missing.length) {
       const now = new Date().toISOString();
       await db.prepare("INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)")
@@ -199,49 +218,43 @@ async function handlePUT(request: Request) {
       return Response.json({ error: "Docket remains Needs Review until mandatory fields are complete.", missing }, { status: 422 });
     }
     const now = new Date().toISOString();
-    const previous = await db.prepare("SELECT status FROM dockets WHERE organisation_id = ? AND id = ?").bind(currentOrganisationId(), id).first<{ status: string }>();
-    if (!previous) return jsonError("The docket was not found.", 404);
-    if (["included_claim", "invoiced"].includes(previous.status)) return jsonError("This docket has been claimed and is locked. Reverse the claim line before changing it.", 409);
+    const org = currentOrganisationId();
     const actor = actorContext.getStore()!;
-    if ((record.status === "approved" || previous.status === "approved") && record.status !== previous.status && !can(actor.role, "docket.approve")) return jsonError("Only an authorised office user can approve or unapprove dockets.", 403);
-    if (["included_claim", "invoiced"].includes(record.status)) return jsonError("Dockets are marked claimed by the claims workflow, not by editing.", 409);
-    // SEAM: approved docket → actual cost (idempotent); leaving approved reverses unclaimed cost.
-    const seam = record.status === "approved" || previous.status === "approved" ? await docketCostStatements(id, record.status, { docket_no: record.docketNo, work_date: record.workDate, amount: record.amount, quantity: record.quantity, quantity_unit: record.quantityUnit, labour_hours: record.labourHours, line_items: JSON.stringify(record.lineItems ?? []), links: JSON.stringify(record.links ?? {}), notes: record.notes }) : { statements: [], posted: 0, message: null };
-    const update = db
-      .prepare(
-        `UPDATE dockets SET
-          docket_no = ?, work_date = ?, client = ?, project = ?, crew = ?, vehicle = ?,
-          start_time = ?, finish_time = ?, break_hours = ?, labour_hours = ?, quantity = ?,
-          quantity_unit = ?, amount = ?, po_number = ?, notes = ?, status = ?,
-          confidence = ?, field_confidence = ?, line_items = ?, links = ?, extraction_method = ?, profile_id = ?, updated_at = ?
-        WHERE organisation_id = ? AND id = ?`,
-      )
-      .bind(
-        record.docketNo,
-        record.workDate,
-        record.client,
-        record.project,
-        record.crew,
-        record.vehicle,
-        record.startTime,
-        record.finishTime,
-        record.breakHours,
-        record.labourHours,
-        record.quantity,
-        record.quantityUnit,
-        record.amount,
-        record.poNumber,
-        record.notes,
-        record.status,
-        record.confidence, JSON.stringify(record.fieldConfidence ?? {}), JSON.stringify(record.lineItems ?? []), JSON.stringify(record.links ?? {}), record.extractionMethod ?? "local-ocr", record.profileId ?? "",
-        now,
-        currentOrganisationId(),
-        id,
-      );
-    await db.batch([update, ...seam.statements]);
+    const expected = cleanText(raw.expectedUpdatedAt, 64);
+    // One transaction: lock the docket row, check it is still the version the editor opened, then write the docket and any cost rows together.
+    const seam = await tx(async (conn) => {
+      const previous = await one<{ status: string; updatedAt: string }>("SELECT status, updated_at AS updatedAt FROM dockets WHERE organisation_id = ? AND id = ? FOR UPDATE", [org, id], conn);
+      if (!previous) throw new Refusal("The docket was not found.", 404);
+      if (["included_claim", "invoiced"].includes(previous.status)) throw new Refusal("This docket has been claimed and is locked. Reverse the claim line before changing it.", 409);
+      if ((record.status === "approved" || previous.status === "approved") && record.status !== previous.status && !can(actor.role, "docket.approve")) throw new Refusal("Only an authorised office user can approve or unapprove dockets.", 403);
+      if (["included_claim", "invoiced"].includes(record.status)) throw new Refusal("Dockets are marked claimed by the claims workflow, not by editing.", 409);
+      // A stale editor must not overwrite corrections made since it opened: when it says which version it has, that must still be current.
+      if (expected && expected !== String(previous.updatedAt ?? "")) throw new Refusal("This docket was changed by someone else since you opened it. Reload it and try again.", 409);
+      // SEAM: approved docket → actual cost (idempotent); leaving approved reverses unclaimed cost.
+      const result = record.status === "approved" || previous.status === "approved" ? await docketCostStatements(id, record.status, { docket_no: record.docketNo, work_date: record.workDate, amount: record.amount, quantity: record.quantity, quantity_unit: record.quantityUnit, labour_hours: record.labourHours, line_items: JSON.stringify(record.lineItems ?? []), links: JSON.stringify(record.links ?? {}), notes: record.notes }) : { statements: [], posted: 0, message: null };
+      const update = db
+        .prepare(
+          `UPDATE dockets SET
+            docket_no = ?, work_date = ?, client = ?, project = ?, crew = ?, vehicle = ?,
+            start_time = ?, finish_time = ?, break_hours = ?, labour_hours = ?, quantity = ?,
+            quantity_unit = ?, amount = ?, po_number = ?, notes = ?, status = ?,
+            confidence = ?, field_confidence = ?, line_items = ?, links = ?, extraction_method = ?, profile_id = ?, updated_at = ?
+          WHERE organisation_id = ? AND id = ?`,
+        )
+        .bind(
+          record.docketNo, record.workDate, record.client, record.project, record.crew, record.vehicle,
+          record.startTime, record.finishTime, record.breakHours, record.labourHours, record.quantity,
+          record.quantityUnit, record.amount, record.poNumber, record.notes, record.status,
+          record.confidence, JSON.stringify(record.fieldConfidence ?? {}), JSON.stringify(record.lineItems ?? []), JSON.stringify(record.links ?? {}), record.extractionMethod ?? "local-ocr", record.profileId ?? "",
+          now, org, id,
+        );
+      for (const statement of [update, ...result.statements]) await statement.execute(conn);
+      return result;
+    });
     return Response.json({ docket: { ...raw, ...record, id, updatedAt: now }, costLinesPosted: seam.posted, message: seam.message });
   } catch (error) {
-    if ((error as { status?: number }).status === 409) return jsonError((error as Error).message, 409);
+    if (error instanceof Refusal) return jsonError(error.message, error.status);
+    if ([409, 422].includes((error as { status?: number }).status ?? 0)) return jsonError((error as Error).message, (error as { status: number }).status);
     console.error("update docket", error);
     return jsonError("Changes could not be saved.", 503);
   }

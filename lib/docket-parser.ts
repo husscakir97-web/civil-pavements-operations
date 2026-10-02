@@ -2,6 +2,7 @@ export type DocketStatus = "uploaded" | "processing" | "review" | "matched" | "a
 
 export type DocketRecord = {
   id: string;
+  updatedAt?: string;
   docketNo: string;
   workDate: string;
   client: string;
@@ -28,6 +29,9 @@ export type DocketRecord = {
   links?: Record<string, string>;
   extractionMethod?: string;
   profileId?: string;
+  // Client-side only (not stored): every contributing page and every warning, so assembly never loses either.
+  pages?: number[];
+  warnings?: string[];
 };
 
 type SourceContext = {
@@ -227,45 +231,77 @@ export function findContractReference(text: string) {
 }
 
 // ---- Docket identity -------------------------------------------------------------------------------------------------
-// A docket is identified by a labelled number ("Docket number: 9042"), never by a heading ("WORKS DOCKET") or the page count.
+// A docket is identified by a labelled number ("Docket number: 4742"), never by a heading ("WORKS DOCKET") or the page count.
+// One rule decides whether a candidate value may be an identity, and it is used by the primary lookup and by every fallback.
 const DOCKET_LABEL = String.raw`(?:delivery[ \t]+docket|works?[ \t]+docket|job[ \t]+docket|docket|dkt|ticket|delivery[ \t]+note)`;
-const IDENTITY_LINE = new RegExp(String.raw`^[ \t]*([^:\n]{0,45}?)\b${DOCKET_LABEL}[ \t]*(?:(?:no\.?|number|num|id|#)[ \t]*){0,2}(?:[:#=-][ \t]*|[ \t]+)([a-z0-9][a-z0-9\-/.]{1,})`, "i");
+const IDENTITY_LINE = new RegExp(String.raw`^[ \t]*([^:\n]{0,45}?)\b${DOCKET_LABEL}[ \t]*(?:(?:no\.?|number|num|id|#)[ \t]*){0,2}(?:[:#=-][ \t]*|[ \t]+)([a-z0-9][a-z0-9\-/.:]{1,})`, "i");
 // Other numbers that sit next to the word "docket" but are not this docket's identity.
-const NOT_IDENTITY_PREFIX = /\b(?:physical|paper|manual|supplier|customer|client|booking|replaces|replaced|original|previous|prior|related|cancel(?:s|led)?|amended|amends|see|ref(?:erence)?)\b/i;
+const NOT_IDENTITY_PREFIX = /\b(?:physical|paper|manual|supplier|customer|client|booking|replaces|replaced|replacing|original|previous|prior|related|cancel(?:s|led)?|amended|amends|see|ref(?:erence)?|contract|job|order|purchase|po)\b/i;
+
+/** The validated identity rule: a value with a digit that is not a date or a time, whose label is not a cross-reference or another number. */
+export function acceptableIdentity(raw: string, context = "") {
+  const value = raw.trim().replace(/[.\-/:]+$/, "");
+  if (value.length < 2 || !/\d/.test(value)) return "";
+  if (parseDateValue(value) || /^\d{1,2}[:.]\d{2}(?:[:.]\d{2})?(?:am|pm)?$/i.test(value)) return "";
+  if (NOT_IDENTITY_PREFIX.test(context)) return "";
+  return value.toUpperCase();
+}
+
+// OCR and some forms stack the value under its label: "Docket number:" then "55621" on the next line. Only an explicit number label counts
+// (a bare heading followed by a number is not an identity) and the next line must be a single token.
+const STACKED_IDENTITY_LABEL = new RegExp(String.raw`^[ \t]*([^:\n]{0,45}?)\b${DOCKET_LABEL}[ \t]*(?:(?:(?:no\.?|number|num|id|#)[ \t]*){1,2}[:#=-]?|[:#=-])[ \t]*$`, "i");
 
 export function docketIdentities(text: string) {
   const found: Array<{ value: string; index: number }> = [];
+  const lines = text.split("\n");
   let offset = 0;
-  for (const line of text.split("\n")) {
+  lines.forEach((line, lineIndex) => {
     const match = line.match(IDENTITY_LINE);
-    if (match) {
-      const value = match[2].replace(/[.\-/]+$/, "");
-      const usable = /\d/.test(value) && !parseDateValue(value) && !/^\d{1,2}[:.]\d{2}$/.test(value) && !NOT_IDENTITY_PREFIX.test(match[1]);
-      if (usable) found.push({ value: value.toUpperCase(), index: offset });
+    let value = match ? acceptableIdentity(match[2], match[1]) : "";
+    if (!value) {
+      const stacked = line.match(STACKED_IDENTITY_LABEL);
+      const next = (lines[lineIndex + 1] ?? "").trim();
+      if (stacked && /^[a-z0-9][a-z0-9\-/.:]{1,}$/i.test(next)) value = acceptableIdentity(next, stacked[1]);
     }
+    if (value) found.push({ value, index: offset });
     offset += line.length + 1;
-  }
+  });
   return found;
 }
 
 // ---- Resource table (rows of people / plant with times and hours) -----------------------------------------------------
 type ResourceRow = {
   role: string; name: string; date: string; start: string; finish: string;
-  breakHours: number; travelHours: number; hours: number; hoursFrom: "document" | "times";
-  rate: number | null; amount: number | null; plant: boolean; yearInferred: boolean;
+  breakHours: number; travelHours: number; hours: number; hoursFrom: "document" | "times" | "last-value";
+  rate: number | null; amount: number | null; plant: boolean; yearInferred: boolean; ambiguous: boolean; mismatch: boolean; line: string;
 };
 const VEHICLE_ROLE = /^(?:ute|truck|vehicle|van|trailer|tma|vms|awv|ptcd|bus|car|tipper|plant)$/i;
+const RESOURCE_ROW = /^([A-Za-z][A-Za-z/&. ]{0,24}?)[ \t]*:[ \t]*(.+?)[ \t]+(?:(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)[ \t]+)?(\d{1,2}[:.]\d{2})[ \t]+(\d{1,2}[:.]\d{2})((?:[ \t]+(?:\d+(?:\.\d+)?|-))*)[ \t]*$/;
+
+/** True for a line that is one resource row (used to avoid counting a row twice when pages repeat it). */
+export function isResourceRowLine(line: string) {
+  return RESOURCE_ROW.test(line.trim());
+}
+
+const COLUMN_WORDS = /\b(?:first|break|travel|lafha|total|hours?|rate|amount|allowance)\b/g;
 
 function resourceColumns(lines: string[]) {
   for (const line of lines) {
     const lower = line.toLowerCase();
-    if (/\bstart\b/.test(lower) && /\bfinish\b/.test(lower) && /\b(?:break|travel|lafha|total|hours?)\b/.test(lower)) {
-      const afterFinish = lower.slice(lower.indexOf("finish") + 6).replace(/\bon[ \t]+site\b/g, " ");
-      return (afterFinish.match(/\b(?:first|break|travel|lafha|total|hours?|rate|amount|allowance)\b/g) ?? [])
-        .map((word) => word === "first" ? "break" : word === "hour" ? "hours" : word);
-    }
+    if (!(/\bstart\b/.test(lower) && /\bfinish\b/.test(lower) && /\b(?:break|travel|lafha|total|hours?)\b/.test(lower))) continue;
+    const afterFinish = lower.slice(lower.indexOf("finish") + 6)
+      .replace(/\bon[ \t]+site\b/g, " ")
+      // compound column names are one column each
+      .replace(/\b(?:first|unpaid|meal|lunch)[ \t]+break\b|\bbreak[ \t]+(?:time|hours?)\b/g, "break")
+      .replace(/\btravel[ \t]+(?:time|hours?)\b/g, "travel")
+      .replace(/\b(?:total|paid|worked)[ \t]+hours?\b|\bhours[ \t]+(?:total|worked)\b/g, "total");
+    // A lone "first" is the top half of a two-line "First / Break" header.
+    const columns = (afterFinish.match(COLUMN_WORDS) ?? []).map((word) => word === "first" ? "break" : word === "hour" ? "hours" : word);
+    const duplicates = new Set(columns).size !== columns.length;
+    const bothTotals = columns.includes("total") && columns.includes("hours");
+    return { columns, ambiguous: duplicates || bothTotals || columns.length === 0 };
   }
-  return [] as string[];
+  return { columns: [] as string[], ambiguous: false };
 }
 
 function rowDate(value: string | undefined, signOff: string) {
@@ -282,37 +318,48 @@ function rowDate(value: string | undefined, signOff: string) {
 
 export function parseResourceTable(text: string, signOff = "") {
   const lines = text.split("\n");
-  const columns = resourceColumns(lines);
+  const header = resourceColumns(lines);
+  const columns = header.columns;
   const rows: ResourceRow[] = [];
   const vehicles: string[] = [];
-  const ROW = /^([A-Za-z][A-Za-z/&. ]{0,24}?)[ \t]*:[ \t]*(.+?)[ \t]+(?:(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)[ \t]+)?(\d{1,2}[:.]\d{2})[ \t]+(\d{1,2}[:.]\d{2})((?:[ \t]+(?:\d+(?:\.\d+)?|-))*)[ \t]*$/;
   for (const line of lines) {
-    const match = line.match(ROW);
+    const match = line.match(RESOURCE_ROW);
     if (match) {
       const start = normaliseTime(match[4]);
       const finish = normaliseTime(match[5]);
       if (!start || !finish) continue;
       const values = (match[6].trim() ? match[6].trim().split(/[ \t]+/) : []);
+      const numeric = values.map((value) => value === "-" ? null : Number(value));
       const named: Record<string, number | null> = {};
-      if (columns.length && values.length <= columns.length) values.forEach((value, index) => { named[columns[index]] = value === "-" ? null : Number(value); });
-      else if (values.length === 1) named.total = values[0] === "-" ? null : Number(values[0]);
+      // Columns are only trusted when the header is recognised and matches the number of values; otherwise the row is flagged, never reinterpreted.
+      const reliable = columns.length > 0 && !header.ambiguous && values.length === columns.length;
+      const singleTotal = columns.length === 0 && values.length === 1;
+      if (reliable) numeric.forEach((value, index) => { named[columns[index]] = value; });
+      else if (singleTotal) named.total = numeric[0];
+      const ambiguous = values.length > 0 && !reliable && !singleTotal;
       const breakHours = named.break ?? 0;
       const computed = Math.round(hoursBetween(start, finish, breakHours) * 100) / 100;
-      const stated = named.total ?? named.hours ?? null;
+      const lastValue = [...numeric].reverse().find((value) => value != null && value > 0 && value <= 24) ?? null;
+      const stated = named.total ?? named.hours ?? (ambiguous ? lastValue : null);
+      const hours = stated ?? computed;
       rows.push({
         role: match[1].trim(), name: match[2].trim(), date: rowDate(match[3], signOff), start, finish, breakHours,
         travelHours: named.travel ?? 0,
-        hours: stated ?? computed, hoursFrom: stated != null ? "document" : "times",
+        hours, hoursFrom: ambiguous && stated != null ? "last-value" : stated != null ? "document" : "times",
         rate: named.rate ?? null, amount: named.amount ?? null,
         plant: VEHICLE_ROLE.test(match[1].trim()),
         yearInferred: Boolean(match[3]) && match[3].split("/").length < 3,
+        ambiguous,
+        mismatch: reliable && stated != null && Math.abs(stated - computed) > 0.25,
+        line,
       });
       continue;
     }
     const vehicle = line.match(/^(ute|truck|vehicle|van|trailer|tma|vms|awv|ptcd|tipper)[ \t]*:[ \t]*([A-Z0-9][A-Z0-9 -]{1,12})$/i);
     if (vehicle && /\d/.test(vehicle[2]) && !vehicles.includes(vehicle[2].trim().toUpperCase())) vehicles.push(vehicle[2].trim().toUpperCase());
   }
-  return { rows, vehicles, columns };
+  const labelled = rows.some((row) => !row.ambiguous) || header.columns.length > 0;
+  return { rows, vehicles, columns, headerFound: labelled, ambiguous: rows.some((row) => row.ambiguous) || (rows.length > 0 && header.ambiguous) };
 }
 
 /** Where the work date comes from: a labelled work date, then the resource rows, then a single unlabelled date. Never today, never a sign-off. */
@@ -376,7 +423,7 @@ function filenameReference(fileName: string) {
   );
   const reference = labelled?.[1]
     ?? '';
-  return reference && /\d/.test(reference) ? reference.replaceAll("_", "-").toUpperCase() : '';
+  return reference ? acceptableIdentity(reference.replaceAll("_", "-")) : '';
 }
 
 function tfnswFormReference(text: string) {
@@ -395,37 +442,70 @@ function tfnswFormReference(text: string) {
   return "";
 }
 
-// Where a docket's own block starts: its identity line, plus a bare title line ("WORKS DOCKET") directly above it.
-function blockStart(text: string, index: number) {
-  const before = text.slice(0, Math.max(0, index - 1));
-  const lineStart = before.lastIndexOf("\n") + 1;
-  const previous = text.slice(lineStart, index).trim();
-  const isTitle = previous.length > 0 && previous.length <= 40 && !/\d/.test(previous)
-    && new RegExp(String.raw`\b${DOCKET_LABEL}\b`, "i").test(previous);
-  return isTitle && index > 0 ? lineStart : index;
+const HEADER_LINE = /^(?:client|customer|project|site|job location|work location|location|work date|date|contract|job|order|po|supplier|company|abn|attention)\b[^:\n]{0,24}[:#=-]/i;
+const HEADER_KEYS: Record<string, RegExp> = {
+  client: /^(?:client|customer)\b[^:\n]{0,24}[:#=-]/i,
+  project: /^(?:project|site|job location|work location|location)\b[^:\n]{0,24}[:#=-]/i,
+  date: /^(?:work date|date)\b[^:\n]{0,24}[:#=-]/i,
+};
+const isTitleLine = (line: string) => {
+  const value = line.trim();
+  return value.length > 0 && value.length <= 40 && !/\d/.test(value) && new RegExp(String.raw`\b${DOCKET_LABEL}\b`, "i").test(value);
+};
+
+/** Index (into `lines`) where a docket's own block starts: its identity line plus the header lines and title directly above it. */
+function blockStartLine(lines: string[], identityLine: number, headerFirst: boolean) {
+  let start = identityLine;
+  if (isTitleLine(lines[start - 1] ?? "")) start -= 1;
+  if (headerFirst) while (start > 0 && start > identityLine - 10 && HEADER_LINE.test((lines[start - 1] ?? "").trim())) start -= 1;
+  return start;
 }
 
 /**
  * Splits text only where a different, genuine docket identity starts. Headings, repeated page headers, cross-references to other
- * docket numbers and page counts never create a boundary. Without two distinct identities the text is one docket.
+ * docket numbers and page counts never create a boundary. Without two distinct identities the text is one docket. Each docket keeps the
+ * client/project/date lines printed directly above its own number; a header shared by the whole page is inherited only for the fields a
+ * docket does not have itself, and that inheritance is marked so the record is reviewed.
  */
 export function splitDocketText(rawText: string) {
   const text = tidyText(rawText);
   if (!text) return [];
 
-  const starts: number[] = [];
+  const lines = text.split("\n");
+  const lineStarts: number[] = [];
+  let offset = 0;
+  for (const line of lines) { lineStarts.push(offset); offset += line.length + 1; }
+  const lineOf = (index: number) => lineStarts.findIndex((start, i) => index >= start && index < (lineStarts[i + 1] ?? Infinity));
+
+  const identityLines: number[] = [];
   let current = "";
   for (const identity of docketIdentities(text)) {
     if (identity.value === current) continue;
-    starts.push(blockStart(text, identity.index));
+    identityLines.push(lineOf(identity.index));
     current = identity.value;
   }
-  if (starts.length < 2) return [text];
+  if (identityLines.length < 2) return [text];
 
-  const commonHeader = text.slice(0, starts[0]).trim();
+  // Header-first pages print client/project lines above the docket number; identity-first pages print them below it.
+  const firstDirect = blockStartLine(lines, identityLines[0], true);
+  const headerFirst = lines.slice(firstDirect, identityLines[0]).some((line) => HEADER_LINE.test(line.trim()));
+  const starts = identityLines.map((line, index) => index === 0 ? 0 : Math.max(blockStartLine(lines, line, headerFirst), identityLines[index - 1] + 1));
+  const commonLines = lines.slice(0, identityLines[0]);
+  const common = commonLines.join("\n");
   const segments = starts.map((start, index) => {
-    const segment = text.slice(start, starts[index + 1] ?? text.length).trim();
-    return commonHeader && commonHeader.length < 700 ? `${commonHeader}\n${segment}` : segment;
+    const body = lines.slice(start, starts[index + 1] ?? lines.length);
+    if (index === 0) return body.join("\n").trim();
+    if (!common || common.length >= 700) return body.join("\n").trim();
+    const inherited: string[] = [];
+    const kept = commonLines.filter((line) => {
+      const key = Object.entries(HEADER_KEYS).find(([, pattern]) => pattern.test(line.trim()))?.[0];
+      if (!key) return true;
+      if (body.some((own) => HEADER_KEYS[key].test(own.trim()))) return false;
+      inherited.push(key);
+      return true;
+    });
+    const marker = inherited.length ? [`[inherited from page header: ${[...new Set(inherited)].join(", ")}]`] : [];
+    return [...kept, ...marker, ...body].join("\n").trim();
   }).filter((segment) => segment.length > 60);
   return segments.length > 1 ? segments : [text];
 }
@@ -440,10 +520,13 @@ export function parseDocket(
   const profile = inferProfile(text);
   const isTfnswPlantSheet = /\btransport\b/i.test(text) && /\bnsw\b/i.test(text)
     && /hired\s+equipment/i.test(text) && /plant\s*\/\s*truck/i.test(text);
-  const docketNo = (isTfnswPlantSheet ? tfnswFormReference(text) : '') || docketIdentities(text)[0]?.value || referenceField(text, [
-    /(?:^|\n)[ \t]*[^:\n]{0,45}?\b(?:delivery[ \t]+docket|works?[ \t]+docket|job[ \t]+docket|docket|dkt|ticket|delivery[ \t]+note)[ \t]*(?:(?:no\.?|number|num|id|#)[ \t]*){0,2}(?:[:#=-][ \t]*|[ \t]+)([a-z0-9][a-z0-9\-/.]{2,})/im,
-    /(?:^|\n)\s*(?:run sheet|document|reference|ref)\s*(?:no\.?|number|num|id|#)?\s*[:#=-]?\s*([a-z0-9][a-z0-9\-/.]{2,})/im,
-  ]) || (isTfnswPlantSheet ? tfnswFormReference(text) : "") || filenameReference(fileName);
+  // Every source of an identity goes through acceptableIdentity: no dates, times, physical numbers or cross-references.
+  const runSheet = text.split("\n").map((line) => {
+    const match = line.match(/^\s*(?:run sheet|document|reference|ref)\s*(?:no\.?|number|num|id|#)?\s*[:#=-]?\s*([a-z0-9][a-z0-9\-/.:]{1,})/i);
+    const value = match ? acceptableIdentity(match[1]) : "";
+    return /^[A-Z0-9./-]+$/.test(value) ? value : "";
+  }).find(Boolean) ?? "";
+  const docketNo = (isTfnswPlantSheet ? tfnswFormReference(text) : "") || docketIdentities(text)[0]?.value || runSheet || filenameReference(fileName);
   const signOffDate = findSignOffDate(text);
   const table = parseResourceTable(text, signOffDate);
   const labourRows = table.rows.filter((row) => !row.plant);
@@ -464,6 +547,12 @@ export function parseDocket(
   const inferred = [
     !isTfnswPlantSheet && !extractedClient && header.client && "client / project split from the header line",
     date.from === "rows" && table.rows.some((row) => row.yearInferred) && "work date year taken from the sign-off date",
+  ].filter(Boolean) as string[];
+  const inheritedHeader = text.match(/^\[inherited from page header: ([^\]]+)\]/m)?.[1];
+  if (inheritedHeader) inferred.push(`${inheritedHeader} taken from the page header shared by several dockets`);
+  const tableWarnings = [
+    table.ambiguous && "resource table columns could not be matched reliably; printed totals were kept as read and break/travel were not inferred",
+    table.rows.some((row) => row.mismatch) && `${table.rows.filter((row) => row.mismatch).length} resource row(s) show a total that differs from start/finish minus break; the printed total was kept`,
   ].filter(Boolean) as string[];
   const crew = labourRows.length ? [...new Set(labourRows.map((row) => row.name.replace(/\s*\(.*?\)\s*/g, " ").trim()))].join(", ").slice(0, 160) : readableField(text, [
     /(?:^|\n)\s*(?:crew name|crew|employee name|employee|operator|driver|team|supervisor|leading hand)\s*[:#=-]?\s*([^\n]+)/im,
@@ -544,7 +633,14 @@ export function parseDocket(
     signOffDate ? `Signed off ${signOffDate}.` : '',
     labourRows.length ? `${labourRows.length} resource ${labourRows.length === 1 ? "row" : "rows"}: ${rowHours} labour hours${travelHours ? `, ${travelHours} travel hours kept separate` : ""}. Rates, amounts and PO not shown on the docket stay blank.` : '',
     inferred.length ? `Check against the original: ${inferred.join("; ")}.` : '',
+    tableWarnings.length ? `Check the resource table: ${tableWarnings.join("; ")}.` : '',
   ].filter(Boolean).join(" ");
+  const warnings = [
+    missing.length ? `Check ${missing.join(", ")} against the original.` : "",
+    !date.found ? "No work date was found on the docket, so none has been filled in." : "",
+    ...inferred.map((note) => `Check against the original: ${note}.`),
+    ...tableWarnings.map((note) => `Resource table: ${note}.`),
+  ].filter(Boolean);
   const fieldConfidence: Record<string, number> = {
     docketNo: docketNo ? Math.min(99, ocrScore + 8) : 12,
     workDate: !date.found ? 15 : inferred.some((note) => note.startsWith("work date")) ? Math.min(70, ocrScore) : Math.min(99, ocrScore + 5),
@@ -568,7 +664,7 @@ export function parseDocket(
   ] : [];
   const lineItems = resourceItems.length ? resourceItems : quantity > 0 ? [{ description: profile, quantity, unit, rate: amount && quantity ? Math.round(amount / quantity * 100) / 100 : 0, amount, valueSource: amount ? "document" : "pending-rate-match" }] : [];
   // Mandatory-field presence always overrides the aggregate OCR score.
-  const ready = confidence >= 78 && missing.length === 0 && inferred.length === 0;
+  const ready = confidence >= 78 && missing.length === 0 && inferred.length === 0 && tableWarnings.length === 0;
 
   return {
     id: crypto.randomUUID(),
@@ -602,6 +698,8 @@ export function parseDocket(
     },
     extractionMethod: "local-ocr",
     profileId: profile,
+    pages: context.pageNumber ? [context.pageNumber] : undefined,
+    warnings,
   };
 }
 
@@ -636,7 +734,7 @@ export function parseDocketPage(candidates:DocketCandidate[],fileName:string,con
     if(groups[0].length===1&&groups.slice(1).some(g=>g.length===1&&g[0].docketNo!=='UNREAD'&&primary.docketNo!=='UNREAD'&&g[0].docketNo!==primary.docketNo)){
       result.fieldConfidence.docketNo=35;result.status='review';evidence.push('OCR passes disagree on docket number; verify original');
     }
-    if(evidence.length){result.notes=primary.notes+' '+evidence.join('. ');result.confidence=Math.min(result.confidence,75);}
+    if(evidence.length){result.notes=primary.notes+' '+evidence.join('. ');result.confidence=Math.min(result.confidence,75);result.warnings=[...(primary.warnings||[]),...evidence.map(e=>e.replace(/\.?$/,'.'))];result.status='review';}
     return result;
   });
 }
@@ -656,51 +754,142 @@ export function isReadablePdfText(text: string) {
 }
 
 // ---- Whole-document assembly -------------------------------------------------------------------------------------------
-export type DocketPage = { text: string; confidence: number; candidates?: DocketCandidate[]; pageNumber: number; pageCount: number };
+export type DocketPage = { text: string; confidence: number; candidates?: DocketCandidate[]; pageNumber: number; pageCount: number; method?: string };
 
 const TITLE_WORDS = new RegExp(String.raw`\b${DOCKET_LABEL}\b|\btimesheet\b|\btime sheet\b`, "i");
+const pageMarker = (page: number) => `[page ${page}]`;
+const normalisedPage = (text: string) => text.replace(/^\[page \d+\]$/gim, "").replace(/\bpage[ \t]*\d{1,3}[ \t]*(?:of|\/)[ \t]*\d{1,3}\b/gi, "").replace(/\s+/g, " ").trim().toLowerCase();
 
 /** A page (or section) with no docket identity continues the previous docket when it says so, or has no header of its own. */
 function isContinuation(text: string) {
-  if (/\b(?:continued|continuation|cont['’]?d)\b/i.test(text)) return true;
-  const pageOf = text.match(/\bpage[ \t]*(\d{1,3})[ \t]*(?:of|\/)[ \t]*\d{1,3}\b/i);
-  if (pageOf && Number(pageOf[1]) > 1) return true;
+  if (hasContinuationMarker(text)) return true;
   const headerLabels = text.match(/(?:^|\n)[ \t]*(?:client|customer|project|job location|site|date|work date)[ \t]*[:#=-]/gi)?.length ?? 0;
   return !TITLE_WORDS.test(text) && headerLabels < 2;
 }
 
+/** The page says it continues another: "continued", or "Page 2 of 3". */
+function hasContinuationMarker(text: string) {
+  if (/\b(?:continued|continuation|cont['’]?d)\b/i.test(text)) return true;
+  const pageOf = text.match(/\bpage[ \t]*(\d{1,3})[ \t]*(?:of|\/)[ \t]*\d{1,3}\b/i);
+  return Boolean(pageOf && Number(pageOf[1]) > 1);
+}
+
+/** Who issued the docket: the ABN, else the first plain line above the docket number. Used to keep two suppliers' same number apart. */
+function issuerKey(text: string) {
+  const abn = text.match(/\bABN[ \t:]*([\d ]{11,14})/i)?.[1]?.replace(/\s/g, "");
+  if (abn) return `abn:${abn}`;
+  const first = text.split("\n").map((line) => line.trim()).filter(Boolean).find((line) => !isTitleLine(line) && !/^\[(?:page|inherited)/i.test(line) && !/^page\b/i.test(line));
+  return first && /^[A-Za-z][A-Za-z0-9 &.'()-]{2,60}$/.test(first) && !HEADER_LINE.test(first) ? `name:${first.toLowerCase().replace(/\s+/g, " ")}` : "";
+}
+/** "same" / "different" / "unknown" (one side has no issuer, or they are different kinds of evidence). */
+function compareIssuers(a: string, b: string) {
+  if (!a || !b || a.split(":")[0] !== b.split(":")[0]) return "unknown" as const;
+  return a === b ? "same" as const : "different" as const;
+}
+
+type Draft = { record: DocketRecord; parts: Array<{ page: number; text: string }>; confidence: number; warnings: string[]; review: boolean; methods: Set<string> };
+
 /**
- * Turns the pages of one file into dockets. A docket is a genuine identity ("Docket number: N"), so a file may hold one docket over
- * several pages, several dockets on one page, or several dockets over several pages. A page with no identity that says it continues
- * (or has no header of its own) joins the previous docket; a repeated identity on the next page joins it too. Nothing is split on a
- * heading or on the page count.
+ * Turns the pages of one file into dockets. A docket is a genuine identity ("Docket number: N"), so a file may hold one docket over several
+ * pages, several dockets on one page, or several dockets over several pages. Grouping is conservative:
+ *  - a page identical to one already read is dropped with a warning (quantities are never counted twice), and resource rows repeated from an
+ *    earlier page are not added again;
+ *  - the same number from a different supplier is a different docket;
+ *  - the same number with no supplier or continuation evidence is ambiguous: the records stay separate and are flagged for review;
+ *  - a page with no identity continues the previous docket only when it says so or has no header of its own.
+ * Every contributing page and every warning is kept on the merged record.
  */
 export function parseDocketDocument(pages: DocketPage[], fileName: string) {
-  const parsed: Array<{ record: DocketRecord; pages: number[]; rawParts: string[]; confidence: number }> = [];
+  const drafts: Draft[] = [];
+  const flag = (draft: Draft, message: string) => { draft.review = true; if (!draft.warnings.includes(message)) draft.warnings.push(message); };
   for (const page of pages) {
     const records = parseDocketPage(page.candidates?.length ? page.candidates : [page], fileName, { pageNumber: page.pageNumber, pageCount: page.pageCount });
     records.forEach((record, index) => {
-      const last = parsed[parsed.length - 1];
-      const sameIdentity = last && record.docketNo !== "UNREAD" && record.docketNo === last.record.docketNo;
-      const continues = last && index === 0 && page.pageNumber > 1 && record.docketNo === "UNREAD" && isContinuation(record.rawText);
-      if (last && (sameIdentity || continues)) {
-        last.pages.push(page.pageNumber);
-        last.rawParts.push(record.rawText);
-        last.confidence = Math.min(last.confidence, record.confidence);
+      if (page.method) record.extractionMethod = page.method;
+      const last = drafts[drafts.length - 1];
+      const issuer = compareIssuers(last ? issuerKey(last.parts[0].text) : "", issuerKey(record.rawText));
+      const sameNumber = Boolean(last) && record.docketNo !== "UNREAD" && record.docketNo === last.record.docketNo;
+      const draftFor = () => ({ record, parts: [{ page: page.pageNumber, text: record.rawText }], confidence: record.confidence, warnings: [...(record.warnings ?? [])], review: record.status === "review" && (record.warnings ?? []).some((w) => /differ|disagree|recovered from alternate/i.test(w)), methods: new Set([record.extractionMethod ?? "local-ocr"]) });
+      if (last && sameNumber) {
+        if (last.parts.some((part) => normalisedPage(part.text) === normalisedPage(record.rawText))) {
+          flag(last, `Page ${page.pageNumber} is identical to an earlier page of docket ${record.docketNo} and was not added again; check it is not a second copy.`);
+          last.parts.push({ page: page.pageNumber, text: "" });
+          return;
+        }
+        if (issuer === "different") {
+          const other = draftFor();
+          const message = `The same docket number ${record.docketNo} appears from a different supplier on page ${page.pageNumber}; kept as a separate docket.`;
+          flag(last, message); flag(other, message); drafts.push(other);
+          return;
+        }
+        if (issuer === "same" || hasContinuationMarker(record.rawText)) {
+          last.parts.push({ page: page.pageNumber, text: record.rawText });
+          last.confidence = Math.min(last.confidence, record.confidence);
+          record.warnings?.forEach((w) => { if (!last.warnings.includes(w)) last.warnings.push(w); });
+          if (record.status === "review" && (record.warnings ?? []).some((w) => /differ|disagree|recovered from alternate/i.test(w))) last.review = true;
+          last.methods.add(record.extractionMethod ?? "local-ocr");
+          return;
+        }
+        const other = draftFor();
+        const message = `The same docket number ${record.docketNo} appears on pages ${last.parts[last.parts.length - 1].page} and ${page.pageNumber} with nothing to show they belong together; not combined. Check whether this is one docket or a duplicate.`;
+        flag(last, message); flag(other, message); drafts.push(other);
         return;
       }
-      parsed.push({ record, pages: [page.pageNumber], rawParts: [record.rawText], confidence: record.confidence });
+      const continues = Boolean(last) && index === 0 && page.pageNumber > 1 && record.docketNo === "UNREAD" && isContinuation(record.rawText) && issuer !== "different";
+      if (last && continues) {
+        last.parts.push({ page: page.pageNumber, text: record.rawText });
+        last.confidence = Math.min(last.confidence, record.confidence);
+        record.warnings?.forEach((w) => { if (!last.warnings.includes(w) && !/^Check .* against the original\.$/.test(w)) last.warnings.push(w); });
+        if (record.status === "review" && (record.warnings ?? []).some((w) => /differ|disagree|recovered from alternate/i.test(w))) last.review = true;
+        last.methods.add(record.extractionMethod ?? "local-ocr");
+        return;
+      }
+      drafts.push(draftFor());
     });
   }
-  return parsed.map(({ record, pages: used, rawParts, confidence }) => {
-    if (used.length < 2) return record;
-    const first = used[0], lastPage = used[used.length - 1];
-    const merged = parseDocket(rawParts.join("\n"), fileName, confidence, { pageNumber: first, pageCount: pages[0]?.pageCount });
+  return drafts.map((draft) => {
+    const used = [...new Set(draft.parts.map((part) => part.page))];
+    const warnings = [...draft.warnings];
+    if (used.length < 2 && draft.parts.length < 2) {
+      const record = draft.record;
+      if (!draft.review || record.status === "review") return { ...record, warnings: unique(warnings), notes: appendWarnings(record.notes, warnings, record.warnings ?? []) };
+      return { ...record, status: "review" as const, warnings: unique(warnings), notes: appendWarnings(record.notes, warnings, record.warnings ?? []) };
+    }
+    // Merge: pages are joined under page markers, resource rows already read on an earlier page are not added again.
+    const seenRows = new Set<string>();
+    let repeated = 0;
+    const joined = draft.parts.filter((part) => part.text).map((part) => {
+      const kept = part.text.split("\n").filter((line) => {
+        if (!isResourceRowLine(line)) return true;
+        const key = line.replace(/\s+/g, " ").trim().toLowerCase();
+        if (seenRows.has(key)) { repeated += 1; return false; }
+        seenRows.add(key);
+        return true;
+      });
+      return `${pageMarker(part.page)}\n${kept.join("\n")}`;
+    }).join("\n");
+    if (repeated) { warnings.push(`${repeated} resource row(s) already read on an earlier page were not added again; check the rows are not genuinely repeated.`); draft.review = true; }
+    const first = used[0];
+    const merged = parseDocket(joined, fileName, draft.confidence, { pageNumber: first, pageCount: pages[0]?.pageCount });
+    const allWarnings = unique([...warnings, ...(merged.warnings ?? [])]);
+    const status = draft.review || merged.status === "review" ? "review" as const : merged.status;
+    const methods = [...draft.methods];
     return {
       ...merged,
+      status,
       sourcePage: first,
-      sourceCrop: `pages-${first}-to-${lastPage}`,
-      notes: merged.notes.replace(/Source: [^.]*\.\s*/, "") + ` Source: pages ${used.join(", ")} of ${pages[0]?.pageCount ?? used.length}.`,
+      sourceCrop: used.length > 1 ? `pages-${used.join("+")}` : merged.sourceCrop,
+      pages: used,
+      extractionMethod: methods.find((m) => m.endsWith(":run")) ?? methods.find((m) => m === "local-ocr") ?? methods[0],
+      warnings: allWarnings,
+      notes: appendWarnings(merged.notes.replace(/Source: [^.]*\.\s*/, "") + ` Source: pages ${used.join(", ")} of ${pages[0]?.pageCount ?? used.length}.`, allWarnings, merged.warnings ?? []),
     };
   });
 }
+
+const unique = (values: string[]) => [...new Set(values)];
+// Warnings that the record's own notes do not already say are appended, so nothing assembly learned is lost.
+const appendWarnings = (notes: string, all: string[], own: string[]) => {
+  const extra = all.filter((warning) => !notes.includes(warning) && !own.includes(warning));
+  return extra.length ? `${notes} ${extra.join(" ")}`.trim() : notes;
+};

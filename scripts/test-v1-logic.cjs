@@ -331,6 +331,18 @@ let lines=seam.docketCostLines({docket_no:'D1',amount:1300,quantity:0,quantity_u
 assert.deepEqual(lines.map(l=>[l.line,l.category,l.amount]),[['L1','labour',800],['L2','material',400],['ADJ','other',100]]);
 lines=seam.docketCostLines({docket_no:'D2',amount:500,quantity:3,quantity_unit:'t',line_items:'[]',notes:'Tipper hire'});assert.deepEqual(lines.map(l=>[l.line,l.category,l.amount]),[['TOTAL','plant',500]]);
 assert.equal(seam.docketCostLines({docket_no:'D3',amount:0,line_items:'[]',notes:''}).length,0,'zero dockets post nothing');
+// Docket allocation: jobId and the allocation sequence are decided on the server; moving or clearing an allocated docket advances the sequence
+// (so the old cost rows are never overwritten), the first allocation does not, and the previous project's shift link is dropped.
+{const n=seam.nextAllocationLinks;
+ assert.equal(seam.lineKey('L1',0),'L1');assert.equal(seam.lineKey('L1',2),'L1@2');assert.equal(seam.allocationSeq({allocationSeq:3}),3);assert.equal(seam.allocationSeq({allocationSeq:'x'}),0);assert.equal(seam.allocationSeq({allocationSeq:-1}),0);assert.equal(seam.allocationSeq(null),0);assert.equal(seam.jobOf({jobId:' j1 '}),'j1');assert.equal(seam.jobOf({}),'');
+ let r=n({},{jobId:'j1'});assert.deepEqual(r,{links:{jobId:'j1'},from:'',to:'j1',changed:true,seq:0},'first allocation keeps the plain line keys');
+ r=n({jobId:'j1'},{jobId:'j1',notes:'x'});assert.equal(r.changed,false);assert.equal(r.seq,0);assert.equal(r.links.jobId,'j1');
+ r=n({jobId:'j1',shiftId:'s1'},{jobId:'j2',shiftId:'s1'});assert.equal(r.seq,1);assert.equal(r.links.jobId,'j2');assert.equal(r.links.allocationSeq,1);assert.equal('shiftId' in r.links,false,'the old project\'s shift link is dropped');
+ r=n({jobId:'j2',allocationSeq:1},{jobId:'j1'});assert.equal(r.seq,2,'moving back is a new allocation, not a reactivation of the old rows');
+ r=n({jobId:'j1'},{});assert.deepEqual(r,{links:{allocationSeq:1},from:'j1',to:'',changed:true,seq:1},'clearing advances the sequence and removes jobId');
+ r=n({allocationSeq:1},{jobId:'j3'});assert.equal(r.seq,1,'allocating a cleared docket does not advance again');assert.equal(r.links.jobId,'j3');
+ r=n({jobId:'j1',allocationSeq:2},{jobId:'j1',allocationSeq:99});assert.equal(r.links.allocationSeq,2,'the client cannot set the sequence');
+ r=n({},{jobId:'j1',allocationSeq:7});assert.equal('allocationSeq' in r.links,false,'nor invent one for a first allocation');}
 
 // Stage mapping for legacy free-text statuses.
 const rs=load('lib/v1/register-server.ts');assert.equal(rs.legacyOpportunityStage('Tendering'),'bidding');assert.equal(rs.legacyOpportunityStage('Won'),'won');assert.equal(rs.legacyOpportunityStage('Qualifying'),'qualified');

@@ -16,8 +16,11 @@ import {renderDocument,organisationBranding} from '@/lib/platform/pdf';
 const actor=()=>actorContext.getStore()!;
 const r2=round2;
 
-async function project(projectId:string,conn?:PoolConnection,forWrite=false){
- const p=await one('SELECT id,name,stage,contract_value,metadata,retention_enabled,retention_pct,retention_cap_amount FROM jobs WHERE organisation_id=? AND id=?',[actor().organisationId,projectId],conn);
+// lock takes the project row lock (FOR UPDATE) as the FIRST read of the transaction: it waits behind closure and docket edits, then reads the
+// committed latest row. Later consistent reads in the same transaction therefore start their snapshot after the lock, never before it.
+// Lock order everywhere is: project row, then docket rows.
+async function project(projectId:string,conn?:PoolConnection,forWrite=false,lock=false){
+ const p=await one('SELECT id,name,stage,contract_value,metadata,retention_enabled,retention_pct,retention_cap_amount FROM jobs WHERE organisation_id=? AND id=?'+(lock?' FOR UPDATE':''),[actor().organisationId,projectId],conn);
  if(!p)fail(404,'Project not found.');
  if(forWrite&&p!.stage==='closed')fail(409,'This project is closed. Reopen it before claiming.');
  return p!;
@@ -61,8 +64,7 @@ export async function createClaim(projectId:string,input:{period:string;claimDat
  if(release&&!input.retentionRelease?.reason?.trim())fail(422,'Give the reason for releasing retention (for example practical completion).');
  if(!lines.length&&!release)fail(422,'Add at least one claim line with a value, or a retention release.');
  return tx(async conn=>{
-  const p=await project(projectId,conn,true);
-  await exec('SELECT id FROM jobs WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,projectId],conn);
+  const p=await project(projectId,conn,true,true);
   const open=await one("SELECT id FROM progress_claims WHERE organisation_id=? AND project_id=? AND status IN ('draft','internal_approval')",[a.organisationId,projectId],conn);
   if(open)fail(409,'Finish or delete the open draft claim before starting another.');
   const available=await claimable(projectId,conn);
@@ -82,7 +84,8 @@ export async function createClaim(projectId:string,input:{period:string;claimDat
   await exec("INSERT INTO progress_claims (id,organisation_id,project_id,number,period,claim_date,status,gross_amount,retention_withheld,retention_released,retention_release_reason,net_amount,notes,revision,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,'draft',?,?,?,?,?,?,1,?,?,?)",[id,a.organisationId,projectId,Number(n?.n||1),input.period,input.claimDate||now.slice(0,10),gross,ret!.withheld,ret!.released,release?input.retentionRelease!.reason.trim().slice(0,1000):null,ret!.net,input.notes||null,a.userId,now,now],conn);
   for(const r of rows)await exec('INSERT INTO claim_lines (id,organisation_id,claim_id,project_id,line_type,source_id,exclusive_key,description,contract_value,previous_claimed,this_claim,claimed_to_date,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',[uuid(),a.organisationId,id,projectId,r.line_type,r.source_id,r.exclusive_key,String(r.description).slice(0,500),r.contract_value,r.previous_claimed,r.this_claim,r.claimed_to_date,now],conn);
   const docketIds=rows.filter(r=>r.line_type==='docket').map(r=>r.source_id);
-  if(docketIds.length)await exec("UPDATE dockets SET status='included_claim',updated_at=? WHERE organisation_id=? AND id IN (?) AND status='approved'",[now,a.organisationId,docketIds],conn);
+  // The project row is locked above, which is also what a docket reallocation locks first. Every docket must still be approved and in this project when claimed.
+  if(docketIds.length){const claimedNow=await exec("UPDATE dockets SET status='included_claim',updated_at=? WHERE organisation_id=? AND id IN (?) AND status='approved' AND JSON_UNQUOTE(JSON_EXTRACT(links,'$.jobId'))=?",[now,a.organisationId,docketIds,projectId],conn);if(claimedNow!==new Set(docketIds).size)fail(409,'A selected docket changed while the claim was prepared. Refresh and try again.');}
   await audit({event:'claim.created',entityType:'claim',entityId:id,projectId,summary:`Claim ${n?.n} (${input.period}) prepared: gross ${gross.toFixed(2)}, retention ${ret!.withheld.toFixed(2)}${ret!.released?`, release ${ret!.released.toFixed(2)}`:''}, net ${ret!.net.toFixed(2)} for ${p.name}`,after:{gross,lines:rows.length,retention:ret}},conn);
   return {claimId:id,number:Number(n?.n||1),grossAmount:gross,retentionWithheld:ret!.withheld,retentionReleased:ret!.released,netAmount:ret!.net};
  });

@@ -1,6 +1,7 @@
 import {readFile,readdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {connect} from './mysql-config.mjs';
+import {modifyColumnState} from './migrate-recovery.mjs';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 // DDL commits implicitly. Persist intent before each statement to recover an
 // interrupted deployment without treating unrelated existing objects as ours.
@@ -14,6 +15,7 @@ async function objectExists(db,sql){
  // Idempotent data backfills (INSERT IGNORE on a unique key) are always safe to re-run.
  if(/^(?:--[^\n]*\n)*INSERT IGNORE INTO `/.test(sql))return false;
  if(sql==='ALTER TABLE `dockets` MODIFY COLUMN `organisation_id` varchar(191) NOT NULL;')return false;
+ {const modified=await modifyColumnState(db,sql);if(modified!==null)return modified;}
  match=sql.match(/^ALTER TABLE `([^`]+)` ADD `([^`]+)` /);
  if(match){const [rows]=await db.execute('SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?',[match[1],match[2]]);return rows.length>0;}
  return null;
@@ -39,6 +41,7 @@ try{
    }else if(exists===null)throw new Error(`Interrupted non-repeatable migration ${name}, step ${step}; manual database recovery required`);
    // Pending intent + matching hash allows recovery of our completed CREATE.
    // Errors stop startup; requests cannot arrive before the schema is ready.
+   if(journal.length&&exists&&/^ALTER TABLE `[^`]+` MODIFY/.test(statement))console.log(`Recovered ${name} step ${step}: already applied, marking complete`);
    if(!exists)await db.query(statement);
    await db.execute('UPDATE app_migration_steps SET complete=TRUE WHERE name=? AND step=?',[name,step]);
   }

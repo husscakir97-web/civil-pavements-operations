@@ -155,6 +155,8 @@ try{
  const afterEdit=must(await a('/api/estimates/approval?estimateId='+estimateId),[200],'approval after edit');
  const approvedRev=afterEdit.revisions.find(r=>r.id===baseline.revisionId);
  check('Approved estimate revision is protected from edits',estLocked.status!==200||(approvedRev&&approvedRev.directCost===baseline.directCost&&approvedRev.sellPrice===baseline.sellPrice),`PUT -> ${estLocked.status}; approved revision still direct ${approvedRev?.directCost}, sell ${approvedRev?.sellPrice}; estimate state now ${afterEdit.state}`);
+ // Close the desktop drawer first, so the mobile check really re-opens it instead of measuring a drawer left open.
+ {const open=page.getByRole('dialog',{name:/Activity details/});if(await open.count())await open.getByRole('button',{name:'Close'}).click();await open.waitFor({state:'detached'});}
  await page.setViewportSize({width:390,height:844});await page.waitForTimeout(500);
  // The measurement only counts if the drawer really opened: a failed open must fail the check, not pass on the page underneath.
  await page.getByRole('button',{name:/Details/}).first().click();await page.waitForTimeout(800);await shot('04-programme-drawer-mobile');
@@ -184,7 +186,7 @@ try{
   await page.reload();await page.waitForTimeout(3000);await nav('Commercial','Work Records');
  }
  const docketRows=async()=>(await db.query("SELECT id,docket_no,status,amount,links,updated_at FROM dockets WHERE organisation_id=? ORDER BY docket_no",[admin.org]))[0];
- const openDocket=async(no,month)=>{if(month)await page.getByLabel('Reconciliation month').fill(month);const search=page.getByPlaceholder(/Search docket/);if(await search.count())await search.fill(no);await page.waitForTimeout(500);await page.getByRole('button',{name:new RegExp(`Edit entry .*docket ${no}`)}).first().click({timeout:15000}).catch(async e=>{await page.screenshot({path:`${OUT}/debug-open-${no}.png`,fullPage:true});writeFileSync(`${OUT}/debug-open-${no}.txt`,(await page.locator('main').innerText()).slice(0,3000));throw e;});await page.waitForTimeout(1500);return page.getByRole('dialog').first();};
+ const openDocket=async(no,month)=>{if(month)await page.getByLabel('Reconciliation month').fill(month);const search=page.getByPlaceholder(/Search docket/);if(await search.count())await search.fill(no);await page.waitForTimeout(500);await (page.viewportSize().width<768?page.locator('article',{hasText:no}).getByRole('button',{name:'Review docket'}):page.getByRole('button',{name:new RegExp(`Edit entry .*docket ${no}`)})).first().click({timeout:15000}).catch(async e=>{await page.screenshot({path:`${OUT}/debug-open-${no}.png`,fullPage:true});writeFileSync(`${OUT}/debug-open-${no}.txt`,(await page.locator('main').innerText()).slice(0,3000));throw e;});await page.waitForTimeout(1500);return page.getByRole('dialog').first();};
  // supplier docket: allocate + approve
  let drows=await docketRows();const supplier=drows.find(d=>d.docket_no==='Q-7781'),works=drows.find(d=>d.docket_no==='9042');
  if(uploaded)await page.reload().then(()=>page.waitForTimeout(3000)).then(()=>nav('Commercial','Work Records'));
@@ -210,12 +212,15 @@ try{
  check('Re-approving the same docket never duplicates cost',approvedAgain.status===200&&Number(n725.n)===2&&Number(n725.total)===725,`PUT -> ${approvedAgain.status} ${JSON.stringify(approvedAgain.body).slice(0,200)}; active rows ${n725.n} (original line + one adjustment), total ${n725.total}`);
  await page.setViewportSize({width:390,height:844});
  // A failed attempt to open the record must fail the check (previously the error was swallowed and the page underneath was measured).
- let e390=null,openError='';try{e390=await openDocket('Q-7781');}catch(e){openError=String(e.message||e).split('\n')[0].slice(0,120);}
+ // The register is monthly: restore October (Q-7781's month) after the September step.
+ let e390=null,openError='';try{e390=await openDocket('Q-7781','2026-10');}catch(e){openError=String(e.message||e).split('\n')[0].slice(0,120);
+  // Say what is in the way, so a real mobile defect is diagnosable from the report alone.
+  try{const b=page.getByRole('button',{name:/Edit entry .*docket Q-7781/}).first();const box=await b.boundingBox();openError+=box?` | button at ${Math.round(box.x)},${Math.round(box.y)} ${Math.round(box.width)}x${Math.round(box.height)}, viewport ${page.viewportSize().width}x${page.viewportSize().height}, topmost element there: ${await page.evaluate(([x,y])=>{const el=document.elementFromPoint(x,y);return el?el.tagName+' '+(el.getAttribute('aria-label')||el.textContent||'').trim().slice(0,50):'none';},[box.x+box.width/2,box.y+box.height/2])}`:' | button not rendered';}catch(inner){openError+=' | diagnosis failed: '+String(inner).slice(0,80);}}
  await page.waitForTimeout(500);await shot('07-docket-editor-mobile');
  const editorOpen=Boolean(e390)&&await e390.isVisible()&&(await e390.getByLabel('Amount ex GST').count())>0;
  const ov2=await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth);
  const editorFits=editorOpen&&await e390.evaluate(d=>d.scrollWidth<=d.clientWidth+2);
- check('Docket editor opens at 390px and has no horizontal overflow',editorOpen&&editorFits&&ov2<=2,editorOpen?`page overflow ${ov2}px`:`editor did not open ${openError}`);await page.keyboard.press('Escape');await page.setViewportSize({width:1440,height:1100});
+ check('Docket editor opens at 390px and has no horizontal overflow',editorOpen&&editorFits&&ov2<=2,editorOpen?`page overflow ${ov2}px`:`editor did not open: ${openError}`);await page.keyboard.press('Escape');await page.setViewportSize({width:1440,height:1100});
 
  // ================= 5. Separately agreed client charge -> claim -> approval -> client-review PDF (UI) =================
  await nav('Projects');await page.getByText('RC Sample Road Upgrade').first().click();await page.waitForTimeout(2000);
@@ -281,7 +286,7 @@ try{
  // the migration under test
  const [cols]=await db.query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='program_activities' AND COLUMN_NAME IN ('productive_hours_per_day','direct_cost_rate','cost_rate_basis','source_estimate_revision_id','source_estimate_item_id')");
  check('Migration 0025 columns exist on the migrated database',cols.length===5);
-}catch(error){record('Workflow aborted',"fail",String(error?.stack||error).slice(0,600));}
+}catch(error){record('Workflow aborted',"fail",String(error?.stack||error).slice(0,2500));}
 finally{
  await browser?.close().catch(()=>{});server.kill();s3.close();await db.end();
  const failed=results.filter(r=>r.status==='fail').length,skipped=results.filter(r=>r.status==='not-run').length;

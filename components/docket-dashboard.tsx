@@ -268,7 +268,7 @@ function textFromPdfItems(items: Array<{ str?: string; transform?: number[] }>) 
 }
 
 // Readable embedded text is used as it is. Fields that were not understood send the docket to review; they never trigger OCR.
-function hasReadablePdfText(text: string) {
+function hasUsefulPdfText(text: string) {
   return isReadablePdfText(text);
 }
 
@@ -286,7 +286,7 @@ async function readPdf(
   for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
     const page = await pdfDocument.getPage(pageNumber);
     const embeddedText = textFromPdfItems((await page.getTextContent()).items);
-    if (hasReadablePdfText(embeddedText)) {
+    if (hasUsefulPdfText(embeddedText)) {
       pages.push({
         text: embeddedText,
         confidence: 99,
@@ -652,7 +652,7 @@ export function DocketDashboard() {
     if(action==='reparse'){
       if(!record.rawText.trim()){toast.error('No saved OCR text. Use Reprocess to scan the original.');return;}
       const parsed=parseDocket(record.rawText,record.sourceName,record.confidence,{pageNumber:record.sourcePage});
-      setEditing({...record,...parsed,workDate:parsed.workDate||record.workDate,id:record.id,status:'review',links:{...parsed.links,...record.links},sourceCrop:record.sourceCrop,notes:parsed.notes+' Re-read saved text. Review before saving.'});
+      setEditing({...record,...parsed,workDate:parsed.workDate||record.workDate,id:record.id,status:'review',links:record.links,sourceCrop:record.sourceCrop,notes:parsed.notes+' Re-read saved OCR text. Review before saving.'});
       toast.info('Updated extraction opened for review. Save changes to update this docket.');return;
     }
     if(action!=='reprocess') { toast.error('Boundary editing is unavailable until source regions are selected. No records have been changed.'); return; }
@@ -675,7 +675,7 @@ export function DocketDashboard() {
       const parsed=(record.docketNo&&record.docketNo!=='UNREAD'?found.find(d=>d.docketNo.toUpperCase()===record.docketNo.toUpperCase()):undefined)??found.find(d=>d.sourcePage===(record.sourcePage||1));
       if(!parsed)throw new Error('No readable text found. Saved data is unchanged.');
       if(!window.confirm('Review newly extracted fields? This replaces the open draft only. Saved values remain unchanged until you choose Save changes.'))return;
-      setEditing({...record,...parsed,workDate:parsed.workDate||record.workDate,id:record.id,status:'review',links:{...parsed.links,...record.links},notes:parsed.notes+' New draft from the original source; review before saving.'});
+      setEditing({...record,...parsed,workDate:parsed.workDate||record.workDate,id:record.id,status:'review',links:record.links,notes:parsed.notes+' New OCR draft from original source; review before saving.'});
       toast.success('New OCR draft ready. Check the fields before saving.');
     } catch(e) { toast.error(e instanceof Error?e.message:'Reprocessing failed. Saved data is unchanged.'); }
     finally { if(worker)await (worker as OcrWorker).terminate(); }

@@ -83,7 +83,7 @@ const start=dashboard.indexOf('async function readPdf('),end=dashboard.indexOf('
 const functionJs=ts.transpileModule(dashboard.slice(start,end),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 const makeReader=(textLayer)=>{let ocr=0;const fakePage={getTextContent:async()=>({items:[]}),getViewport:()=>({width:100,height:100}),render:()=>({promise:Promise.resolve()})};
  const win={pdfjsLib:{getDocument:()=>({promise:Promise.resolve({numPages:1,getPage:async()=>fakePage})})}};
- const read=new Function('window','document','loadPdfReader','textFromPdfItems','hasReadablePdfText','recogniseDocketCanvas','PDF_READER_OPTIONS',`${functionJs}; return readPdf;`)(win,{createElement:()=>({getContext:()=>({})})},async()=>{},()=>textLayer,isReadablePdfText,async()=>{ocr++;return {text:'ocr text',confidence:60,score:1};},{isEvalSupported:false});
+ const read=new Function('window','document','loadPdfReader','textFromPdfItems','hasUsefulPdfText','recogniseDocketCanvas','PDF_READER_OPTIONS',`${functionJs}; return readPdf;`)(win,{createElement:()=>({getContext:()=>({})})},async()=>{},()=>textLayer,isReadablePdfText,async()=>{ocr++;return {text:'ocr text',confidence:60,score:1};},{isEvalSupported:false});
  return {read:()=>read({arrayBuffer:async()=>new ArrayBuffer(0)},async()=>({}),()=>{},()=>{}),ocrCalls:()=>ocr};};
 {const r=makeReader(labelsOnly);const pages=await r.read();assert.equal(r.ocrCalls(),0,'readable text with missing fields does not run OCR');assert.equal(pages[0].text,labelsOnly);assert.equal(pages[0].confidence,99);}
 {const r=makeReader(works);await r.read();assert.equal(r.ocrCalls(),0);}

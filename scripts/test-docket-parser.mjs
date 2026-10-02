@@ -29,7 +29,7 @@ const end = dashboard.indexOf('\nfunction escapeCsv', start);
 const functionJs = ts.transpileModule(dashboard.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const fakePage = { getTextContent: async () => ({ items: [] }), getViewport: () => ({ width: 100, height: 100 }), render: () => ({ promise: Promise.resolve() }) };
 const fakeWindow = { pdfjsLib: { getDocument: options => { assert.equal(options.isEvalSupported, false); return { promise: Promise.resolve({ numPages: 1, getPage: async () => fakePage }) }; } } };
-const readPdf = new Function('window', 'document', 'loadPdfReader', 'textFromPdfItems', 'hasReadablePdfText', 'recogniseDocketCanvas', 'PDF_READER_OPTIONS', `${functionJs}; return readPdf;`)(fakeWindow, { createElement: () => ({ getContext: () => ({}) }) }, async () => {}, () => '', () => false, async () => ({ text: complete, confidence: 95, score: 100 }), { isEvalSupported: false });
+const readPdf = new Function('window', 'document', 'loadPdfReader', 'textFromPdfItems', 'hasUsefulPdfText', 'recogniseDocketCanvas', 'PDF_READER_OPTIONS', `${functionJs}; return readPdf;`)(fakeWindow, { createElement: () => ({ getContext: () => ({}) }) }, async () => {}, () => '', () => false, async () => ({ text: complete, confidence: 95, score: 100 }), { isEvalSupported: false });
 const pages = await readPdf({ arrayBuffer: async () => new ArrayBuffer(0) }, async () => ({}), () => {}, () => {});
 assert.equal(pages[0].text, complete);
 assert.equal(pages[0].confidence, 95);

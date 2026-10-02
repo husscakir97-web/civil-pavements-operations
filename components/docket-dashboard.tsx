@@ -53,10 +53,10 @@ import {useWorkspaceBrand} from '@/components/workspace-brand';
 import {can} from '@/lib/platform/permissions';
 import {
   parseDocket,
-  parseDocketPage,
+  parseDocketDocument,
+  isReadablePdfText,
   docketCandidateScore,
   type DocketCandidate,
-  splitDocketText,
   type DocketRecord as Docket,
   type DocketStatus,
 } from "@/lib/docket-parser";
@@ -82,7 +82,7 @@ function monthTitle(value: string) {
 }
 
 function displayDate(value: string) {
-  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value)) return value || "—";
+  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value)) return value || "Date not read";
   return new Intl.DateTimeFormat("en-AU", { day: "2-digit", month: "short" })
     .format(new Date(`${value}T00:00:00`));
 }
@@ -267,12 +267,9 @@ function textFromPdfItems(items: Array<{ str?: string; transform?: number[] }>) 
     .join("\n");
 }
 
-function hasUsefulPdfText(text: string) {
-  const compact = text.replace(/\s/g, "");
-  const labels = text.match(/docket|ticket|date|client|customer|project|site|quantity|total|hours?/gi)?.length ?? 0;
-  const parsed = parseDocket(text, "", 99);
-  // A PDF can contain selectable printed labels but scanned handwritten values.
-  return compact.length >= 80 && labels >= 2 && parsed.status === "ready";
+// Readable embedded text is used as it is. Fields that were not understood send the docket to review; they never trigger OCR.
+function hasReadablePdfText(text: string) {
+  return isReadablePdfText(text);
 }
 
 async function readPdf(
@@ -289,7 +286,7 @@ async function readPdf(
   for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
     const page = await pdfDocument.getPage(pageNumber);
     const embeddedText = textFromPdfItems((await page.getTextContent()).items);
-    if (hasUsefulPdfText(embeddedText)) {
+    if (hasReadablePdfText(embeddedText)) {
       pages.push({
         text: embeddedText,
         confidence: 99,
@@ -369,6 +366,8 @@ export function DocketDashboard() {
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [processing, setProcessing] = useState(false);
+  // The dockets actually created by this upload (as returned by the server), shown for review.
+  const [uploadedRecords, setUploadedRecords] = useState<Docket[]>([]);
   const [editing, setEditing] = useState<Docket | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -461,6 +460,7 @@ export function DocketDashboard() {
     const additions: PendingFile[] = accepted.map((file) => ({
       id: crypto.randomUUID(), file, progress: 0, state: "queued",
     }));
+    if (!uploadOpen) setUploadedRecords([]);
     setPending((current) => uploadOpen ? [...current, ...additions] : additions);
     setUploadOpen(true);
     if (fileInput.current) fileInput.current.value = "";
@@ -479,7 +479,7 @@ export function DocketDashboard() {
     return ((await response.json()) as { dockets: Docket[] }).dockets;
   }
 
-  async function processFiles() {
+  async function processFiles(only?: string) {
     if (!pending.length || processing) return;
     setProcessing(true);
     const uploaded: Docket[] = [];
@@ -502,8 +502,8 @@ export function DocketDashboard() {
       return worker;
     }
     try {
-      for (const [fileIndex, item] of pending.entries()) {
-        if (item.state === "done") continue;
+      const queue = pending.filter((entry) => entry.state !== "done" && (!only || entry.id === only));
+      for (const [fileIndex, item] of queue.entries()) {
         try {
           updatePending(item.id, { state: "reading", progress: 6, message: "Preparing file" });
           let pages: OcrPage[] = [];
@@ -534,7 +534,7 @@ export function DocketDashboard() {
               (progress, message) => updatePending(item.id, { progress, message }),
             );
           }
-          const parsed = pages.flatMap(page=>parseDocketPage(page.candidates||[page],item.file.name,{pageNumber:page.pageNumber,pageCount:page.pageCount}));
+          const parsed = parseDocketDocument(pages, item.file.name);
           if (!parsed.length) throw new Error("No docket pages found");
           updatePending(item.id, {
             state: "saving",
@@ -556,15 +556,16 @@ export function DocketDashboard() {
             message: error instanceof Error ? error.message.slice(0, 60) : "Could not process",
           });
         }
-        if (fileIndex < pending.length - 1) progressHandler = () => undefined;
+        if (fileIndex < queue.length - 1) progressHandler = () => undefined;
       }
       if (uploaded.length) {
-        const inMonth = uploaded.filter((record) => record.workDate.startsWith(selectedMonth));
+        setUploadedRecords((existing) => [...existing, ...uploaded]);
+        const inMonth = uploaded.filter((record) => !record.workDate || record.workDate.startsWith(selectedMonth));
         window.dispatchEvent(new Event('records-changed'));
         setRecords((existing) => [...inMonth, ...existing]);
         setIsSample(false);
         toast.success(`${uploaded.length} ${uploaded.length === 1 ? "docket" : "dockets"} extracted and added.`);
-        const otherMonths = [...new Set(uploaded.filter((record) => !record.workDate.startsWith(selectedMonth)).map((record) => record.workDate.slice(0, 7)))];
+        const otherMonths = [...new Set(uploaded.filter((record) => record.workDate && !record.workDate.startsWith(selectedMonth)).map((record) => record.workDate.slice(0, 7)))];
         if (otherMonths.length) toast.info(`Other dockets were filed under ${otherMonths.map(monthTitle).join(", ")}. Change the month to review them.`);
       }
     } catch {
@@ -610,7 +611,7 @@ export function DocketDashboard() {
       if (!response.ok) { const problem=await response.json().catch(()=>({})) as {error?:string}; throw new Error(problem.error || 'Changes could not be saved.'); }
       const { docket } = (await response.json()) as { docket: Docket };
       window.dispatchEvent(new Event('records-changed'));
-      setRecords((items) => items.map((item) => item.id === docket.id ? docket : item).filter((item) => item.workDate.startsWith(selectedMonth)));
+      setRecords((items) => items.map((item) => item.id === docket.id ? docket : item).filter((item) => !item.workDate || item.workDate.startsWith(selectedMonth)));
       setEditing(null);
       toast.success("Docket updated.");
     } catch (error) {
@@ -651,7 +652,7 @@ export function DocketDashboard() {
     if(action==='reparse'){
       if(!record.rawText.trim()){toast.error('No saved OCR text. Use Reprocess to scan the original.');return;}
       const parsed=parseDocket(record.rawText,record.sourceName,record.confidence,{pageNumber:record.sourcePage});
-      setEditing({...record,...parsed,id:record.id,status:'review',links:record.links,sourceCrop:record.sourceCrop,notes:parsed.notes+' Re-read saved OCR text. Review before saving.'});
+      setEditing({...record,...parsed,workDate:parsed.workDate||record.workDate,id:record.id,status:'review',links:{...parsed.links,...record.links},sourceCrop:record.sourceCrop,notes:parsed.notes+' Re-read saved text. Review before saving.'});
       toast.info('Updated extraction opened for review. Save changes to update this docket.');return;
     }
     if(action!=='reprocess') { toast.error('Boundary editing is unavailable until source regions are selected. No records have been changed.'); return; }
@@ -669,14 +670,12 @@ export function DocketDashboard() {
       }
       toast.info('Reading the original document again…');
       const pages=file.type==='application/pdf'?await readPdf(file,getWorker,()=>{},()=>{}):[{...await recogniseDocketCanvas(await getWorker(),await imageToCanvas(file),()=>{}),pageNumber:1,pageCount:1}];
-      const page=pages.find(p=>p.pageNumber===(record.sourcePage||1));
-      if(!page)throw new Error('Source page was not found.');
-      const sections=splitDocketText(page.text);
-      if(sections.length>1)throw new Error('This page contains multiple dockets. Select the source region before replacing a record.');
-      const parsed=parseDocketPage(page.candidates||[page],record.sourceName,{pageNumber:page.pageNumber,pageCount:page.pageCount})[0];
+      // Whole-file assembly, so a docket that spans pages is read as one. The matching docket is chosen by number, then by its first page.
+      const found=parseDocketDocument(pages,record.sourceName);
+      const parsed=(record.docketNo&&record.docketNo!=='UNREAD'?found.find(d=>d.docketNo.toUpperCase()===record.docketNo.toUpperCase()):undefined)??found.find(d=>d.sourcePage===(record.sourcePage||1));
       if(!parsed)throw new Error('No readable text found. Saved data is unchanged.');
       if(!window.confirm('Review newly extracted fields? This replaces the open draft only. Saved values remain unchanged until you choose Save changes.'))return;
-      setEditing({...record,...parsed,id:record.id,status:'review',links:record.links,notes:parsed.notes+' New OCR draft from original source; review before saving.'});
+      setEditing({...record,...parsed,workDate:parsed.workDate||record.workDate,id:record.id,status:'review',links:{...parsed.links,...record.links},notes:parsed.notes+' New draft from the original source; review before saving.'});
       toast.success('New OCR draft ready. Check the fields before saving.');
     } catch(e) { toast.error(e instanceof Error?e.message:'Reprocessing failed. Saved data is unchanged.'); }
     finally { if(worker)await (worker as OcrWorker).terminate(); }
@@ -736,6 +735,11 @@ export function DocketDashboard() {
             >
               <ArrowDownToLine /> <span className="hidden md:inline">Export CSV</span>
             </Button>
+            {uploadedRecords.length > 0 && !uploadOpen && (
+              <Button variant="outline" className="h-10 border-emerald-400 bg-transparent text-emerald-200 hover:bg-slate-800 hover:text-white" onClick={() => setUploadOpen(true)}>
+                Review uploaded dockets ({uploadedRecords.length})
+              </Button>
+            )}
             <Button className="h-10 shadow-[0_8px_20px_rgba(232,93,37,.24)]" onClick={upload}>
               <UploadCloud /> <span className="hidden sm:inline">Upload dockets</span>
             </Button>
@@ -1071,15 +1075,44 @@ export function DocketDashboard() {
                     </div>
                     <div className="mt-2 flex items-center gap-3">
                       <Progress aria-label={`Upload progress for ${item.file.name}`} value={item.progress} className="h-1.5 flex-1 [&_[data-slot=progress-indicator]]:bg-primary" />
-                      <span className="w-28 truncate text-right text-xs text-slate-500">
+                      <span className="w-28 truncate text-right text-xs text-slate-500" title={item.message}>
                         {item.message || "Ready to scan"}
                       </span>
                     </div>
+                    {item.state === "error" && (
+                      <div className="mt-2 flex items-center justify-between gap-2 rounded-md bg-red-50 px-2.5 py-1.5 text-xs text-red-700" role="alert">
+                        <span>This file was not added. {item.message}</span>
+                        <Button size="xs" variant="outline" disabled={processing} onClick={() => processFiles(item.id)}>Retry</Button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
             ))}
           </div>
+
+          {uploadedRecords.length > 0 && (
+            <section className="space-y-2 rounded-xl border border-emerald-200 bg-emerald-50/50 p-3.5" data-testid="review-uploaded" aria-label="Review uploaded dockets">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Review uploaded dockets</h3>
+                <p className="text-xs text-slate-600">{uploadedRecords.length} {uploadedRecords.length === 1 ? "docket was" : "dockets were"} created from this upload. Nothing is approved until you review it.</p>
+              </div>
+              <ul className="space-y-1.5">
+                {uploadedRecords.map((record) => (
+                  <li key={record.id} className="flex items-center justify-between gap-3 rounded-lg border bg-white px-3 py-2 text-sm" data-testid="uploaded-docket">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium text-slate-900">Docket {record.docketNo} · <span className={record.workDate ? "" : "text-amber-700"}>{displayDate(record.workDate)}</span></p>
+                      <p className="truncate text-xs text-slate-500">{[record.client, record.project].filter(Boolean).join(" — ") || "Client and project not read"}{record.labourHours ? ` · ${record.labourHours} labour hrs` : ""}{record.sourcePage ? ` · ${record.sourceCrop?.startsWith("pages-") ? "pages" : "page"} ${record.sourceCrop?.startsWith("pages-") ? record.sourceCrop.replace("pages-", "").replace("-to-", "–") : record.sourcePage}` : ""}</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">{statusLabel(record.status)}</span>
+                      <Button size="xs" variant="outline" onClick={() => { setUploadOpen(false); setEditing({ ...record }); }}>Review</Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           <div className="rounded-lg bg-blue-50 px-3.5 py-3 text-sm text-blue-900">
             <strong>Standard OCR — no AI charge.</strong> Digital PDF text is read directly; scanned pages are enhanced before OCR. Missing fields and duplicate docket numbers are sent to review.
@@ -1089,7 +1122,7 @@ export function DocketDashboard() {
             <Button variant="outline" disabled={processing} onClick={() => setUploadOpen(false)}>Cancel</Button>
             <Button
               disabled={processing || !pending.length || completedFiles === pending.length}
-              onClick={processFiles}
+              onClick={() => processFiles()}
             >
               {processing
                 ? <><LoaderCircle className="animate-spin" /> Reading {Math.min(completedFiles + 1, pending.length)} of {pending.length}</>

@@ -60,6 +60,8 @@ function tidyText(value: string) {
 }
 
 function cleanValue(value: string) {
+  // A value that is itself a label ("Project:") means the field was left blank and the next printed label was captured.
+  if (/^[a-z][a-z .\/&-]{1,30}:\s*$/i.test(value.trim())) return '';
   if (/^(?:job\s*site|job\s*ste|contact|day|rego\s*no\.?|customer\s*(?:name|sign)?|operator|sign|date|start\s*time|finish\s*time|total\s*hours)[\s:._-]*$/i.test(value.trim())) return '';
   if (/^(?:overtime|shift|date|contractor|item description|day of the week|start|finish|totals?|signature)\b/i.test(value.trim())) return '';
   return value
@@ -174,25 +176,158 @@ function parseDateValue(value: string) {
   return "";
 }
 
-function dateFromFilename(fileName: string) {
-  const base = fileName.replace(/\.[a-z0-9]{2,5}$/i, "");
-  const compact = base.match(/(?:^|\D)(\d{2})(\d{2})(20\d{2})(?:\d{6})?(?:\D|$)/);
-  if (compact) return makeIsoDate(Number(compact[1]), Number(compact[2]), Number(compact[3]));
-  return parseDateValue(base.replaceAll("_", "-").replaceAll(" ", "-"));
+// Dates that are NOT the date the work was done: when a docket was signed off, printed, invoiced or due.
+const NON_WORK_DATE_LINE = /\b(?:sign(?:ed)?[ -]?off|signed|sign[ -]?date|approved|approval|printed|created|issued|invoice[d]?|due|received|generated|submitted|signature|authorised|authorized)\b/i;
+
+function dateInLine(line: string) {
+  return parseDateValue(line);
 }
 
-function findWorkDate(text: string, fileName: string) {
-  const labelled = field(text, [
-    /(?:^|\n)\s*(?:work date|date of work|service date|docket date|delivery date|shift date|date)\s*[:#=-]?\s*([^\n]+)/im,
-  ]);
-  const labelledDate = parseDateValue(labelled);
-  if (labelledDate) return { value: labelledDate, found: true };
-  const anywhere = parseDateValue(text);
-  const fromFilename = dateFromFilename(fileName);
-  return {
-    value: anywhere || fromFilename || new Date().toISOString().slice(0, 10),
-    found: Boolean(anywhere),
-  };
+/** The date a docket was signed off ("Signed off on 28/09/2026 by …"); never used as the work date. */
+export function findSignOffDate(text: string) {
+  for (const line of text.split("\n")) {
+    const match = line.match(/sign(?:ed)?[ -]?off\b[^\d\n]{0,30}(\d{1,2}[/.\-]\d{1,2}[/.\-](?:20\d{2}|\d{2})|20\d{2}[-/.]\d{1,2}[-/.]\d{1,2})/i)
+      ?? line.match(/\b(?:signed|approved)\b[^\d\n]{0,30}(\d{1,2}[/.\-]\d{1,2}[/.\-](?:20\d{2}|\d{2}))/i);
+    if (match) {
+      const date = parseDateValue(match[1]);
+      if (date) return date;
+    }
+  }
+  return "";
+}
+
+/** Layout used by some booking systems: the line after the job / contract reference reads "Client - Project". */
+function headerClientProject(text: string) {
+  const lines = text.split("\n").slice(0, 25);
+  let anchor = -1;
+  lines.forEach((line, index) => { if (/^(?:contract[ \t]*(?:code|no|number|ref)|job|booking)\b/i.test(line) && /\d/.test(line)) anchor = index; });
+  if (anchor < 0) return { client: "", project: "" };
+  for (const line of lines.slice(anchor + 1, anchor + 4)) {
+    const match = line.match(/^([A-Za-z][^:\d]{2,80}?)[ \t]+-[ \t]+([^:]{3,120})$/);
+    if (match && !/\d{1,2}[:.]\d{2}/.test(line) && !/^(?:start|finish|docket|notes?|worker|physical|signed)/i.test(line)) return { client: match[1].trim(), project: match[2].trim() };
+  }
+  return { client: "", project: "" };
+}
+
+// Job / booking reference and contract reference are distinct from the docket identity, the PO and each other.
+export function findJobReference(text: string) {
+  for (const line of text.split("\n").slice(0, 40)) {
+    const match = line.match(/^(?:job|booking)[ \t]*(?:no\.?|number|ref(?:erence)?|code)?[ \t]*[:#=-]?[ \t]*([a-z0-9][a-z0-9\-/.]*\d[a-z0-9\-/.]*)[ \t]*$/i);
+    if (match && !parseDateValue(match[1])) return match[1].toUpperCase();
+  }
+  return "";
+}
+
+export function findContractReference(text: string) {
+  for (const line of text.split("\n").slice(0, 40)) {
+    const match = line.match(/^contract[ \t]*(?:code|no\.?|number|ref(?:erence)?)[ \t]*[:#=-]?[ \t]*(\S.{1,60})$/i);
+    if (match && /[a-z0-9]/i.test(match[1]) && /\d/.test(match[1])) return match[1].replace(/[ \t]+/g, " ").trim().toUpperCase();
+  }
+  return "";
+}
+
+// ---- Docket identity -------------------------------------------------------------------------------------------------
+// A docket is identified by a labelled number ("Docket number: 4742"), never by a heading ("WORKS DOCKET") or the page count.
+const DOCKET_LABEL = String.raw`(?:delivery[ \t]+docket|works?[ \t]+docket|job[ \t]+docket|docket|dkt|ticket|delivery[ \t]+note)`;
+const IDENTITY_LINE = new RegExp(String.raw`^[ \t]*([^:\n]{0,45}?)\b${DOCKET_LABEL}[ \t]*(?:(?:no\.?|number|num|id|#)[ \t]*){0,2}(?:[:#=-][ \t]*|[ \t]+)([a-z0-9][a-z0-9\-/.]{1,})`, "i");
+// Other numbers that sit next to the word "docket" but are not this docket's identity.
+const NOT_IDENTITY_PREFIX = /\b(?:physical|paper|manual|supplier|customer|client|booking|replaces|replaced|original|previous|prior|related|cancel(?:s|led)?|amended|amends|see|ref(?:erence)?)\b/i;
+
+export function docketIdentities(text: string) {
+  const found: Array<{ value: string; index: number }> = [];
+  let offset = 0;
+  for (const line of text.split("\n")) {
+    const match = line.match(IDENTITY_LINE);
+    if (match) {
+      const value = match[2].replace(/[.\-/]+$/, "");
+      const usable = /\d/.test(value) && !parseDateValue(value) && !/^\d{1,2}[:.]\d{2}$/.test(value) && !NOT_IDENTITY_PREFIX.test(match[1]);
+      if (usable) found.push({ value: value.toUpperCase(), index: offset });
+    }
+    offset += line.length + 1;
+  }
+  return found;
+}
+
+// ---- Resource table (rows of people / plant with times and hours) -----------------------------------------------------
+type ResourceRow = {
+  role: string; name: string; date: string; start: string; finish: string;
+  breakHours: number; travelHours: number; hours: number; hoursFrom: "document" | "times";
+  rate: number | null; amount: number | null; plant: boolean; yearInferred: boolean;
+};
+const VEHICLE_ROLE = /^(?:ute|truck|vehicle|van|trailer|tma|vms|awv|ptcd|bus|car|tipper|plant)$/i;
+
+function resourceColumns(lines: string[]) {
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    if (/\bstart\b/.test(lower) && /\bfinish\b/.test(lower) && /\b(?:break|travel|lafha|total|hours?)\b/.test(lower)) {
+      const afterFinish = lower.slice(lower.indexOf("finish") + 6).replace(/\bon[ \t]+site\b/g, " ");
+      return (afterFinish.match(/\b(?:first|break|travel|lafha|total|hours?|rate|amount|allowance)\b/g) ?? [])
+        .map((word) => word === "first" ? "break" : word === "hour" ? "hours" : word);
+    }
+  }
+  return [] as string[];
+}
+
+function rowDate(value: string | undefined, signOff: string) {
+  if (!value) return "";
+  const parts = value.split("/").map(Number);
+  if (parts.length === 3) return makeIsoDate(parts[0], parts[1], parts[2]);
+  if (!signOff) return "";
+  // No year printed: the work was done on or before the sign-off, in the nearest such year.
+  const signYear = Number(signOff.slice(0, 4));
+  const candidate = makeIsoDate(parts[0], parts[1], signYear);
+  if (!candidate) return "";
+  return candidate > signOff ? makeIsoDate(parts[0], parts[1], signYear - 1) : candidate;
+}
+
+export function parseResourceTable(text: string, signOff = "") {
+  const lines = text.split("\n");
+  const columns = resourceColumns(lines);
+  const rows: ResourceRow[] = [];
+  const vehicles: string[] = [];
+  const ROW = /^([A-Za-z][A-Za-z/&. ]{0,24}?)[ \t]*:[ \t]*(.+?)[ \t]+(?:(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)[ \t]+)?(\d{1,2}[:.]\d{2})[ \t]+(\d{1,2}[:.]\d{2})((?:[ \t]+(?:\d+(?:\.\d+)?|-))*)[ \t]*$/;
+  for (const line of lines) {
+    const match = line.match(ROW);
+    if (match) {
+      const start = normaliseTime(match[4]);
+      const finish = normaliseTime(match[5]);
+      if (!start || !finish) continue;
+      const values = (match[6].trim() ? match[6].trim().split(/[ \t]+/) : []);
+      const named: Record<string, number | null> = {};
+      if (columns.length && values.length <= columns.length) values.forEach((value, index) => { named[columns[index]] = value === "-" ? null : Number(value); });
+      else if (values.length === 1) named.total = values[0] === "-" ? null : Number(values[0]);
+      const breakHours = named.break ?? 0;
+      const computed = Math.round(hoursBetween(start, finish, breakHours) * 100) / 100;
+      const stated = named.total ?? named.hours ?? null;
+      rows.push({
+        role: match[1].trim(), name: match[2].trim(), date: rowDate(match[3], signOff), start, finish, breakHours,
+        travelHours: named.travel ?? 0,
+        hours: stated ?? computed, hoursFrom: stated != null ? "document" : "times",
+        rate: named.rate ?? null, amount: named.amount ?? null,
+        plant: VEHICLE_ROLE.test(match[1].trim()),
+        yearInferred: Boolean(match[3]) && match[3].split("/").length < 3,
+      });
+      continue;
+    }
+    const vehicle = line.match(/^(ute|truck|vehicle|van|trailer|tma|vms|awv|ptcd|tipper)[ \t]*:[ \t]*([A-Z0-9][A-Z0-9 -]{1,12})$/i);
+    if (vehicle && /\d/.test(vehicle[2]) && !vehicles.includes(vehicle[2].trim().toUpperCase())) vehicles.push(vehicle[2].trim().toUpperCase());
+  }
+  return { rows, vehicles, columns };
+}
+
+/** Where the work date comes from: a labelled work date, then the resource rows, then a single unlabelled date. Never today, never a sign-off. */
+function findWorkDate(text: string, rows: ResourceRow[]) {
+  for (const line of text.split("\n")) {
+    if (NON_WORK_DATE_LINE.test(line)) continue;
+    const match = line.match(/^[ \t]*(?:work date|date of work|date worked|service date|docket date|delivery date|shift date|job date|date)[ \t]*[:#=-]?[ \t]*(.+)$/i);
+    const labelled = match ? parseDateValue(match[1]) : "";
+    if (labelled) return { value: labelled, found: true, from: "label" as const };
+  }
+  const rowDates = rows.map((row) => row.date).filter(Boolean).sort();
+  if (rowDates.length) return { value: rowDates[0], found: true, from: "rows" as const, multiple: new Set(rowDates).size > 1, last: rowDates[rowDates.length - 1] };
+  const others = [...new Set(text.split("\n").filter((line) => !NON_WORK_DATE_LINE.test(line)).map(dateInLine).filter(Boolean))];
+  if (others.length === 1) return { value: others[0], found: true, from: "text" as const };
+  return { value: "", found: false, from: "none" as const };
 }
 
 function hoursBetween(start: string, finish: string, breakHours: number) {
@@ -207,7 +342,7 @@ function hoursBetween(start: string, finish: string, breakHours: number) {
 function inferProfile(text: string) {
   const lower = text.toLowerCase();
   if (/weighbridge|tare weight|gross weight|net weight/.test(lower)) return "Weighbridge / material";
-  if (/traffic control|traffic controller|tct\b|ptcd|vms\b|tma\b|awv\b/.test(lower)) return "Traffic control";
+  if (/traffic control|traffic controller|traffic coordinator|tct\b|ptcd|vms\b|tma\b|awv\b|(?:^|\n)\s*tc\s*:/.test(lower)) return "Traffic control";
   if (/asphalt|profil(?:e|ing)|mill(?:ing)?|paver|tonnage|hotmix/.test(lower)) return "Asphalt / profiling";
   if (/plant hire|hired equipment|plant\s*\/\s*truck|machine hours|engine hours|excavator|skid steer|roller|sweeper/.test(lower)) return "Plant / equipment";
   if (/timesheet|time sheet|employee name|labour hours|crew hours/.test(lower)) return "Labour / timesheet";
@@ -260,22 +395,39 @@ function tfnswFormReference(text: string) {
   return "";
 }
 
+// Where a docket's own block starts: its identity line, plus a bare title line ("WORKS DOCKET") directly above it.
+function blockStart(text: string, index: number) {
+  const before = text.slice(0, Math.max(0, index - 1));
+  const lineStart = before.lastIndexOf("\n") + 1;
+  const previous = text.slice(lineStart, index).trim();
+  const isTitle = previous.length > 0 && previous.length <= 40 && !/\d/.test(previous)
+    && new RegExp(String.raw`\b${DOCKET_LABEL}\b`, "i").test(previous);
+  return isTitle && index > 0 ? lineStart : index;
+}
+
+/**
+ * Splits text only where a different, genuine docket identity starts. Headings, repeated page headers, cross-references to other
+ * docket numbers and page counts never create a boundary. Without two distinct identities the text is one docket.
+ */
 export function splitDocketText(rawText: string) {
   const text = tidyText(rawText);
   if (!text) return [];
 
-  const anchors = Array.from(text.matchAll(
-    /(?:^|\n)[ \t]*[^:\n]{0,45}?\b(?:delivery[ \t]+docket|works?[ \t]+docket|job[ \t]+docket|docket|dkt|ticket|delivery[ \t]+note)[ \t]*(?:(?:no\.?|number|num|id|#)[ \t]*){0,2}[:#=-]?/gim,
-  )).map((match) => match.index ?? 0);
-  if (anchors.length < 2) return [text];
+  const starts: number[] = [];
+  let current = "";
+  for (const identity of docketIdentities(text)) {
+    if (identity.value === current) continue;
+    starts.push(blockStart(text, identity.index));
+    current = identity.value;
+  }
+  if (starts.length < 2) return [text];
 
-  const usable = anchors.filter((anchor, index) => index === 0 || anchor - anchors[index - 1] > 40);
-  if (usable.length < 2) return [text];
-  const commonHeader = text.slice(0, usable[0]).trim();
-  return usable.map((start, index) => {
-    const segment = text.slice(start, usable[index + 1] ?? text.length).trim();
+  const commonHeader = text.slice(0, starts[0]).trim();
+  const segments = starts.map((start, index) => {
+    const segment = text.slice(start, starts[index + 1] ?? text.length).trim();
     return commonHeader && commonHeader.length < 700 ? `${commonHeader}\n${segment}` : segment;
   }).filter((segment) => segment.length > 60);
+  return segments.length > 1 ? segments : [text];
 }
 
 export function parseDocket(
@@ -288,35 +440,53 @@ export function parseDocket(
   const profile = inferProfile(text);
   const isTfnswPlantSheet = /\btransport\b/i.test(text) && /\bnsw\b/i.test(text)
     && /hired\s+equipment/i.test(text) && /plant\s*\/\s*truck/i.test(text);
-  const docketNo = (isTfnswPlantSheet ? tfnswFormReference(text) : '') || referenceField(text, [
+  const docketNo = (isTfnswPlantSheet ? tfnswFormReference(text) : '') || docketIdentities(text)[0]?.value || referenceField(text, [
     /(?:^|\n)[ \t]*[^:\n]{0,45}?\b(?:delivery[ \t]+docket|works?[ \t]+docket|job[ \t]+docket|docket|dkt|ticket|delivery[ \t]+note)[ \t]*(?:(?:no\.?|number|num|id|#)[ \t]*){0,2}(?:[:#=-][ \t]*|[ \t]+)([a-z0-9][a-z0-9\-/.]{2,})/im,
     /(?:^|\n)\s*(?:run sheet|document|reference|ref)\s*(?:no\.?|number|num|id|#)?\s*[:#=-]?\s*([a-z0-9][a-z0-9\-/.]{2,})/im,
   ]) || (isTfnswPlantSheet ? tfnswFormReference(text) : "") || filenameReference(fileName);
-  const date = findWorkDate(text, fileName);
+  const signOffDate = findSignOffDate(text);
+  const table = parseResourceTable(text, signOffDate);
+  const labourRows = table.rows.filter((row) => !row.plant);
+  const date = findWorkDate(text, table.rows);
+  const jobReference = findJobReference(text);
+  const contractReference = findContractReference(text);
   const extractedClient = readableField(text, [
     /(?:^|\n)\s*(?:client name|customer name|account name|ordered by|sold to|client|customer|principal|hirer)\s*[:#=-]?\s*([^\n]+)/im,
   ]);
-  const client = isTfnswPlantSheet ? "Transport for NSW" : extractedClient;
-  const project = readableField(text, [
-    /(?:^|\n)\s*(?:project name|job location|job site|job name|work location|delivery address|site address|project|site|location|works)\s*[:#=-]?\s*([^\n]+)/im,
+  const header = headerClientProject(text);
+  const labelledProject = readableField(text, [
+    /(?:^|\n)[ \t]*(?:project name|job location|job site|job name|work location|delivery address|site address)[ \t]*[:#=-]?[ \t]*([^\n]+)/im,
+    // A bare word is only a label when followed by a delimiter, so the heading "WORKS DOCKET" is not a project.
+    /(?:^|\n)[ \t]*(?:project|site|location|works)[ \t]*[:#=-][ \t]*([^\n]+)/im,
   ]);
-  const crew = readableField(text, [
+  const client = isTfnswPlantSheet ? "Transport for NSW" : extractedClient || header.client;
+  const project = labelledProject || (extractedClient ? "" : header.project);
+  const inferred = [
+    !isTfnswPlantSheet && !extractedClient && header.client && "client / project split from the header line",
+    date.from === "rows" && table.rows.some((row) => row.yearInferred) && "work date year taken from the sign-off date",
+  ].filter(Boolean) as string[];
+  const crew = labourRows.length ? [...new Set(labourRows.map((row) => row.name.replace(/\s*\(.*?\)\s*/g, " ").trim()))].join(", ").slice(0, 160) : readableField(text, [
     /(?:^|\n)\s*(?:crew name|crew|employee name|employee|operator|driver|team|supervisor|leading hand)\s*[:#=-]?\s*([^\n]+)/im,
   ]);
   const vehicle = referenceField(text, [
     /(?:^|\n)\s*(?:vehicle\s*\/?\s*rego|vehicle\s*registration|truck\s*rego|rego(?:\s*\/\s*tfnsw item)?|registration|vehicle|fleet|plant no|unit no|machine no)\s*(?:no\.?|number|id)?\s*[:#=-]?\s*([a-z0-9][a-z0-9 /-]{1,30})/im,
   ]);
   const poNumber = referenceField(text, [
-    /(?:^|\n)\s*(?:purchase order|p\.?o\.?|work order|wol|order|contract)\s*(?:no\.?|number|#)?\s*[:#=-]?\s*([a-z0-9][a-z0-9\-/.]{2,})/im,
+    /(?:^|\n)\s*(?:purchase order|p\.?o\.?|work order|wol|order)\s*(?:no\.?|number|#)?\s*[:#=-]?\s*([a-z0-9][a-z0-9\-/.]{2,})/im,
   ]);
-  const startTime = parseTime(text, "start|from|commence|time in|arrival|on site");
-  const finishTime = parseTime(text, "finish|to|end|time out|departure|off site");
+  const tableStarts = labourRows.map((row) => row.start).sort();
+  const tableFinishes = labourRows.map((row) => row.finish).sort();
+  const startTime = tableStarts[0] ?? parseTime(text, "start|from|commence|time in|arrival|on site");
+  const finishTime = tableFinishes[tableFinishes.length - 1] ?? parseTime(text, "finish|to|end|time out|departure|off site");
 
   const breakValue = field(text, [
     /(?:^|\n)\s*(?:unpaid break|meal break|break|lunch)\s*[:#=-]?\s*([\d.]+\s*(?:minutes?|mins?|hours?|hrs?|hr)?)/im,
   ]);
   let breakHours = parseNumber(breakValue);
   if (/min/i.test(breakValue)) breakHours /= 60;
+  // Per-person break from the resource rows when they all agree.
+  const rowBreaks = [...new Set(labourRows.map((row) => row.breakHours))];
+  if (rowBreaks.length === 1) breakHours = rowBreaks[0];
 
   const explicitHours = numberField(text, [
     /(?:^|\n)\s*(?:total labour hours|labour hours|crew hours|worked hours|total hours|hours worked|machine hours|engine hours)\s*[:#=-]?\s*([\d,.]+)/im,
@@ -326,7 +496,10 @@ export function parseDocket(
     /\b(\d{1,2})\s*(?:person|people|worker|controller)s?\b/i,
   ]);
   const shiftHours = hoursBetween(startTime, finishTime, breakHours);
-  const labourHours = explicitHours || (shiftHours * Math.max(1, crewCount || 1));
+  // Resource rows are the evidence: three 10-hour rows are 30 labour hours. Travel is a separate quantity and is not added.
+  const rowHours = Math.round(labourRows.reduce((sum, row) => sum + row.hours, 0) * 100) / 100;
+  const travelHours = Math.round(labourRows.reduce((sum, row) => sum + row.travelHours, 0) * 100) / 100;
+  const labourHours = labourRows.length ? rowHours : explicitHours || (shiftHours * Math.max(1, crewCount || 1));
   const { quantity, unit } = quantityDetails(text);
   const amount = numberField(text, [
     /(?:^|\n)\s*(?:total amount|amount ex\.?\s*gst|total ex\.?\s*gst|net total|subtotal|docket value|invoice total|value)\s*[:#=-]?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/im,
@@ -366,21 +539,36 @@ export function parseDocket(
     `Detected format: ${profile}.`,
     sourceParts.length ? `Source: ${sourceParts.join(", ")}.` : "",
     missing.length ? `Check ${missing.join(", ")} against the original.` : "",
-    !date.found ? 'Work date is a filing placeholder only; confirm the actual date from the original.' : '',
+    !date.found ? 'No work date was found on the docket, so none has been filled in; enter it from the original.' : '',
+    date.from === "rows" && "multiple" in date && date.multiple ? `Rows are dated ${date.value} to ${date.last}; the earliest is used as the work date.` : '',
+    signOffDate ? `Signed off ${signOffDate}.` : '',
+    labourRows.length ? `${labourRows.length} resource ${labourRows.length === 1 ? "row" : "rows"}: ${rowHours} labour hours${travelHours ? `, ${travelHours} travel hours kept separate` : ""}. Rates, amounts and PO not shown on the docket stay blank.` : '',
+    inferred.length ? `Check against the original: ${inferred.join("; ")}.` : '',
   ].filter(Boolean).join(" ");
   const fieldConfidence: Record<string, number> = {
     docketNo: docketNo ? Math.min(99, ocrScore + 8) : 12,
-    workDate: date.found ? Math.min(99, ocrScore + 5) : 15,
+    workDate: !date.found ? 15 : inferred.some((note) => note.startsWith("work date")) ? Math.min(70, ocrScore) : Math.min(99, ocrScore + 5),
     client: client ? Math.min(98, ocrScore) : 18,
     project: project ? Math.min(98, ocrScore - 2) : 18,
-    vehicle: vehicle ? Math.min(98, ocrScore - 3) : 25,
+    vehicle: vehicle || table.vehicles.length ? Math.min(98, ocrScore - 3) : 25,
     poNumber: poNumber ? Math.min(97, ocrScore - 1) : 20,
     quantity: quantity ? Math.min(98, ocrScore) : 18,
     amount: amount ? Math.min(97, ocrScore - 2) : 30,
   };
-  const lineItems = quantity > 0 ? [{ description: profile, quantity, unit, rate: amount && quantity ? Math.round(amount / quantity * 100) / 100 : 0, amount, valueSource: amount ? "document" : "pending-rate-match" }] : [];
+  const resourceItems: Array<Record<string, unknown>> = labourRows.length ? [
+    ...table.rows.filter((row) => !row.plant || row.hours > 0).map((row) => ({
+      kind: row.plant ? "plant" : "labour", description: `${row.role}${row.name ? ` — ${row.name.replace(/\s*\(.*?\)\s*/g, " ").trim()}` : ""}`,
+      workDate: row.date, startTime: row.start, finishTime: row.finish, breakHours: row.breakHours,
+      quantity: row.hours, unit: "hr", rate: row.rate, amount: row.amount, valueSource: "unpriced",
+    })),
+    ...table.rows.filter((row) => row.travelHours > 0).map((row) => ({
+      kind: "travel", description: `Travel — ${row.name.replace(/\s*\(.*?\)\s*/g, " ").trim()}`,
+      workDate: row.date, quantity: row.travelHours, unit: "hr", rate: null, amount: null, valueSource: "unpriced",
+    })),
+  ] : [];
+  const lineItems = resourceItems.length ? resourceItems : quantity > 0 ? [{ description: profile, quantity, unit, rate: amount && quantity ? Math.round(amount / quantity * 100) / 100 : 0, amount, valueSource: amount ? "document" : "pending-rate-match" }] : [];
   // Mandatory-field presence always overrides the aggregate OCR score.
-  const ready = confidence >= 78 && missing.length === 0;
+  const ready = confidence >= 78 && missing.length === 0 && inferred.length === 0;
 
   return {
     id: crypto.randomUUID(),
@@ -389,13 +577,13 @@ export function parseDocket(
     client,
     project,
     crew,
-    vehicle,
+    vehicle: vehicle || table.vehicles.join(", ").slice(0, 80),
     startTime,
     finishTime,
     breakHours: Math.round(breakHours * 100) / 100,
     labourHours: Math.round(labourHours * 100) / 100,
     quantity,
-    quantityUnit: unit,
+    quantityUnit: labourRows.length && !quantity ? "hr" : unit,
     amount,
     poNumber,
     notes,
@@ -407,7 +595,11 @@ export function parseDocket(
     sourceCrop: context.sectionNumber && context.sectionCount && context.sectionCount > 1 ? `section-${context.sectionNumber}-of-${context.sectionCount}` : "full-page",
     fieldConfidence,
     lineItems,
-    links: {},
+    links: {
+      ...(jobReference ? { jobReference } : {}),
+      ...(contractReference ? { contractReference } : {}),
+      ...(signOffDate ? { signOffDate } : {}),
+    },
     extractionMethod: "local-ocr",
     profileId: profile,
   };
@@ -446,5 +638,69 @@ export function parseDocketPage(candidates:DocketCandidate[],fileName:string,con
     }
     if(evidence.length){result.notes=primary.notes+' '+evidence.join('. ');result.confidence=Math.min(result.confidence,75);}
     return result;
+  });
+}
+
+// ---- Digital PDF text ------------------------------------------------------------------------------------------------
+/**
+ * Whether a PDF page's embedded text is readable. This is separate from whether every docket field was understood: a readable page
+ * with missing fields goes to review, it does not trigger OCR. OCR is for pages with no usable text layer (scans, photos).
+ */
+export function isReadablePdfText(text: string) {
+  const compact = text.replace(/\s/g, "");
+  if (compact.length < 80) return false;
+  const labels = text.match(/docket|ticket|date|client|customer|project|site|quantity|total|hours?|job|contract|start|finish|signed|worker/gi)?.length ?? 0;
+  const printable = compact.match(/[a-z0-9.,:;/()$%&'"+\-]/gi)?.length ?? 0;
+  const words = text.match(/\b[a-z]{3,}\b/gi)?.length ?? 0;
+  return labels >= 2 && words >= 8 && printable / compact.length >= 0.85;
+}
+
+// ---- Whole-document assembly -------------------------------------------------------------------------------------------
+export type DocketPage = { text: string; confidence: number; candidates?: DocketCandidate[]; pageNumber: number; pageCount: number };
+
+const TITLE_WORDS = new RegExp(String.raw`\b${DOCKET_LABEL}\b|\btimesheet\b|\btime sheet\b`, "i");
+
+/** A page (or section) with no docket identity continues the previous docket when it says so, or has no header of its own. */
+function isContinuation(text: string) {
+  if (/\b(?:continued|continuation|cont['’]?d)\b/i.test(text)) return true;
+  const pageOf = text.match(/\bpage[ \t]*(\d{1,3})[ \t]*(?:of|\/)[ \t]*\d{1,3}\b/i);
+  if (pageOf && Number(pageOf[1]) > 1) return true;
+  const headerLabels = text.match(/(?:^|\n)[ \t]*(?:client|customer|project|job location|site|date|work date)[ \t]*[:#=-]/gi)?.length ?? 0;
+  return !TITLE_WORDS.test(text) && headerLabels < 2;
+}
+
+/**
+ * Turns the pages of one file into dockets. A docket is a genuine identity ("Docket number: N"), so a file may hold one docket over
+ * several pages, several dockets on one page, or several dockets over several pages. A page with no identity that says it continues
+ * (or has no header of its own) joins the previous docket; a repeated identity on the next page joins it too. Nothing is split on a
+ * heading or on the page count.
+ */
+export function parseDocketDocument(pages: DocketPage[], fileName: string) {
+  const parsed: Array<{ record: DocketRecord; pages: number[]; rawParts: string[]; confidence: number }> = [];
+  for (const page of pages) {
+    const records = parseDocketPage(page.candidates?.length ? page.candidates : [page], fileName, { pageNumber: page.pageNumber, pageCount: page.pageCount });
+    records.forEach((record, index) => {
+      const last = parsed[parsed.length - 1];
+      const sameIdentity = last && record.docketNo !== "UNREAD" && record.docketNo === last.record.docketNo;
+      const continues = last && index === 0 && page.pageNumber > 1 && record.docketNo === "UNREAD" && isContinuation(record.rawText);
+      if (last && (sameIdentity || continues)) {
+        last.pages.push(page.pageNumber);
+        last.rawParts.push(record.rawText);
+        last.confidence = Math.min(last.confidence, record.confidence);
+        return;
+      }
+      parsed.push({ record, pages: [page.pageNumber], rawParts: [record.rawText], confidence: record.confidence });
+    });
+  }
+  return parsed.map(({ record, pages: used, rawParts, confidence }) => {
+    if (used.length < 2) return record;
+    const first = used[0], lastPage = used[used.length - 1];
+    const merged = parseDocket(rawParts.join("\n"), fileName, confidence, { pageNumber: first, pageCount: pages[0]?.pageCount });
+    return {
+      ...merged,
+      sourcePage: first,
+      sourceCrop: `pages-${first}-to-${lastPage}`,
+      notes: merged.notes.replace(/Source: [^.]*\.\s*/, "") + ` Source: pages ${used.join(", ")} of ${pages[0]?.pageCount ?? used.length}.`,
+    };
   });
 }

@@ -591,6 +591,18 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const report=await json(await call('/api/reports/v1','GET',undefined,A.cookie),200);assert(report.commercial.totals.currentContract>=f.currentContract);assert.equal(report.pipeline.conversionPct,100);
  console.log('PASS E: docket approval posts cost idempotently + reversal, variation lifecycle and lock, claim limits, no double docket claim, internal approval → submit → certify → invoice (GST) → payment, forecast/control, estimate vs actual, reports');
 
+ // ---------------------------------------------------------------- Docket parsing accuracy: undated dockets and parsed references survive saving
+ step='Docket parsing accuracy';
+ {const post=async rec=>{const f=new FormData();f.set('records',JSON.stringify([rec]));return (await json(await call('/api/dockets','POST',f,A.cookie),200)).dockets[0];};
+  const undatedDocket=await post({docketNo:`PARSE-${suffix}`,workDate:'',client:'Example Builder Group',project:'Sample Road Upgrade Stage 2',status:'review',links:{jobReference:'8123',contractReference:'X100 - ZZ001',signOffDate:'2026-09-28'},labourHours:30,lineItems:[{kind:'labour',description:'TC — Alex Example',quantity:10,unit:'hr',rate:null,amount:null,valueSource:'unpriced'}],amount:0});
+  assert.equal(undatedDocket.workDate,'','an unknown work date is stored as unknown, not as today');
+  const [[row]]=await db.execute('SELECT work_date,links,source_key FROM dockets WHERE id=?',[undatedDocket.id]);assert.equal(row.work_date,'');assert.deepEqual(JSON.parse(row.links),{jobReference:'8123',contractReference:'X100 - ZZ001',signOffDate:'2026-09-28'},'job reference, contract reference and sign-off date are kept distinct');
+  for(const month of ['2020-01',today.slice(0,7)]){const list=(await json(await call('/api/dockets?month='+month,'GET',undefined,A.cookie),200)).dockets;assert(list.some(x=>x.id===undatedDocket.id),'undated dockets are listed in every month for review ('+month+')');}
+  await json(await call('/api/dockets','PUT',{...undatedDocket,status:'approved'},A.cookie),422,'an undated docket cannot be approved');
+  const fixed=await json(await call('/api/dockets','PUT',{...undatedDocket,workDate:'2026-09-23',status:'review'},A.cookie),200);assert.equal(fixed.docket.workDate,'2026-09-23');
+  assert.equal((await db.execute('SELECT work_date FROM dockets WHERE id=?',[undatedDocket.id]))[0][0].work_date,'2026-09-23');
+  const [[unpriced]]=await db.execute("SELECT line_items FROM dockets WHERE id=?",[undatedDocket.id]);assert.equal(JSON.parse(unpriced.line_items)[0].amount,null,'absent amounts stay unknown');
+  console.log('PASS docket parsing: unknown dates are stored unknown and listed for review, approval refused until dated, references kept distinct, unpriced rows stay unknown');}
  // ---------------------------------------------------------------- Scenario G
  step='G tenant attack';
  const attacks=[['GET',`/api/tenders/workspace?id=${tenderId}`],['GET',`/api/projects/workspace?id=${projectId}`],['GET',`/api/projects/control?id=${projectId}`],['GET',`/api/commercial/claims?projectId=${projectId}`],['GET',`/api/hseq/swms?id=${sw.swmsId}`],['GET',`/api/documents?id=${insuranceDoc.id}`],['GET',`/api/tenders/export?id=${tenderId}`],['GET',`/api/registers/risks?parentId=${projectId}`],['GET',`/api/registers/requirements?parentId=${tenderId}`]];

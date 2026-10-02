@@ -36,7 +36,7 @@ async function handleGET(request: Request) {
           source_name AS sourceName, raw_text AS rawText, source_page AS sourcePage, source_crop AS sourceCrop, field_confidence AS fieldConfidence, line_items AS lineItems, links, extraction_method AS extractionMethod, profile_id AS profileId,
           created_at AS createdAt, updated_at AS updatedAt
         FROM dockets
-        WHERE organisation_id = ? AND work_date >= ? AND work_date < ? AND lower(status) != 'archived'
+        WHERE organisation_id = ? AND ((work_date >= ? AND work_date < ?) OR work_date = '') AND lower(status) != 'archived'
         ORDER BY work_date DESC, created_at DESC`,
       )
       .bind(currentOrganisationId(), start, end)
@@ -60,9 +60,8 @@ function parseRecord(value: FormDataEntryValue | Record<string, unknown> | null)
       : value ?? {};
   return {
     docketNo: cleanText(raw.docketNo, 80) || "UNREAD",
-    workDate: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.workDate ?? ""))
-      ? String(raw.workDate)
-      : new Date().toISOString().slice(0, 10),
+    // An unknown work date stays unknown: never today's date. Undated dockets are listed in every month for review.
+    workDate: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.workDate ?? "")) ? String(raw.workDate) : "",
     client: cleanText(raw.client, 160),
     project: cleanText(raw.project, 200),
     crew: cleanText(raw.crew, 160),
@@ -119,7 +118,7 @@ async function handlePOST(request: Request) {
       const verdict = checkUpload(file.name, bytes, DOCKET_UPLOAD_NAME);
       if (!verdict.ok) return jsonError(verdict.reason, verdict.status);
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-120);
-      sourceKey = `dockets/${records[0].workDate.slice(0, 7)}/${crypto.randomUUID()}-${safeName}`;
+      sourceKey = `dockets/${records[0].workDate.slice(0, 7) || "undated"}/${crypto.randomUUID()}-${safeName}`;
       await bucket.put(sourceKey, bytes, {
         httpMetadata: { contentType: verdict.contentType },
       });
@@ -191,7 +190,8 @@ async function handlePUT(request: Request) {
     const id = cleanText(raw.id, 80);
     if (!id) return jsonError("A docket ID is required.");
     const record = parseRecord(raw);
-    const missing = record.status === "ready" ? mandatoryMissing(record) : [];
+    // Approving posts cost against the work date, so an undated docket cannot be approved either.
+    const missing = record.status === "ready" ? mandatoryMissing(record) : record.status === "approved" && !record.workDate ? ["Work date"] : [];
     if (missing.length) {
       const now = new Date().toISOString();
       await db.prepare("INSERT INTO audit_events (id,organisation_id,name,status,metadata,created_at) VALUES (?,?,?,?,?,?)")

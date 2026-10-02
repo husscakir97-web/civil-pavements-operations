@@ -19,14 +19,16 @@ export async function modifyColumnState(db,sql){
  const parsed=parseModify(sql);if(!parsed)return null;
  const key=`${parsed.table}.${parsed.column}`,rule=SUPPORTED.get(key);
  if(!rule||rule.after.type!==parsed.type||rule.after.nullable!==parsed.nullable)return null;
- const [rows]=await db.execute('SELECT COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT,EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?',[parsed.table,parsed.column]);
+ const [rows]=await db.execute('SELECT COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT,EXTRA,COLUMN_COMMENT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?',[parsed.table,parsed.column]);
  if(!rows.length)throw new Error(`Unexpected schema for ${key}: column not found; manual database recovery required, nothing was changed`);
  const actual={type:String(rows[0].COLUMN_TYPE).toLowerCase(),nullable:rows[0].IS_NULLABLE==='YES'};
  // MariaDB reports the default of a nullable column as the text 'NULL'; MySQL as SQL NULL.
  const noDefault=rows[0].COLUMN_DEFAULT===null||(actual.nullable&&String(rows[0].COLUMN_DEFAULT).toUpperCase()==='NULL');
- const plain=noDefault&&!rows[0].EXTRA;
+ const comment=String(rows[0].COLUMN_COMMENT??'');
+ // A MODIFY without COMMENT silently drops an existing one, so a commented column is never accepted as either the original or the target definition.
+ const plain=noDefault&&!rows[0].EXTRA&&comment==='';
  const same=(a,b)=>a.type===b.type&&a.nullable===b.nullable;
  if(plain&&same(actual,rule.after))return true;
  if(plain&&same(actual,rule.before))return false;
- throw new Error(`Unexpected schema for ${key}: found ${describe(actual)}${plain?'':' with a default or extra attributes'}, expected ${describe(rule.before)} (not yet applied) or ${describe(rule.after)} (applied); manual database recovery required, nothing was changed`);
+ throw new Error(`Unexpected schema for ${key}: found ${describe(actual)}${plain?'':comment!==''?' with a column comment':' with a default or extra attributes'}, expected ${describe(rule.before)} (not yet applied) or ${describe(rule.after)} (applied); manual database recovery required, nothing was changed`);
 }

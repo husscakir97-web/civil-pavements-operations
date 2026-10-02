@@ -71,11 +71,11 @@ install/build/start settings and environment variables, then redeploy.
 
    | Live column | Meaning | Next start |
    |---|---|---|
-   | `decimal(15,2) NOT NULL`, no default | DDL never ran | runs the `MODIFY`, marks the step complete |
-   | `decimal(15,2) NULL`, no default | DDL ran, completion not recorded | logs `Recovered 0024_workshop_service_due.sql step 2: already applied`, marks the step complete, does not run it again |
-   | anything else (other type or size, a default, extra attributes, column missing) | unexpected schema | stops with `Unexpected schema for asset_meter_readings.next_service … nothing was changed`; no DDL is run and the step stays incomplete |
+   | `decimal(15,2) NOT NULL`, no default, no comment | DDL never ran | runs the `MODIFY`, marks the step complete |
+   | `decimal(15,2) NULL`, no default, no comment | DDL ran, completion not recorded | logs `Recovered 0024_workshop_service_due.sql step 2: already applied`, marks the step complete, does not run it again |
+   | anything else (other type or size, a default, extra attributes, a non-empty column comment in either state, column missing) | unexpected schema | stops with `Unexpected schema for asset_meter_readings.next_service … nothing was changed`; no DDL is run and the step stays incomplete |
 
-   Only that one statement is recognised; any other interrupted `MODIFY` still stops with "manual database
+   A column comment is refused because the `MODIFY` would silently discard it. Only that one statement is recognised; any other interrupted `MODIFY` still stops with "manual database
    recovery required". Checksums are always verified first, and the check never marks a step complete
    unless the column already has the target definition. An unexpected-schema stop needs a person to compare the
    column with the table above and restore it (or contact the maintainers); do not edit the journal tables.

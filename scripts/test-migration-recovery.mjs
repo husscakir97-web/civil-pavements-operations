@@ -62,6 +62,8 @@ try{
  for(const [label,ddl,expect] of [
   ['wrong type','ALTER TABLE `asset_meter_readings` MODIFY `next_service` decimal(10,2) NOT NULL','decimal(10,2) NOT NULL'],
   ['unexpected default',"ALTER TABLE `asset_meter_readings` MODIFY `next_service` decimal(15,2) NOT NULL DEFAULT 0",'default or extra'],
+  ['comment on the original definition',"ALTER TABLE `asset_meter_readings` MODIFY `next_service` decimal(15,2) NOT NULL COMMENT 'finance review'",'column comment'],
+  ['comment on the target definition',"ALTER TABLE `asset_meter_readings` MODIFY `next_service` decimal(15,2) NULL COMMENT 'finance review'",'column comment'],
   ['wrong type and nullability','ALTER TABLE `asset_meter_readings` MODIFY `next_service` varchar(20) NULL','varchar(20) NULL'],
  ]){
   const db=await prepare(base+'_rec3_test');await db.query('DELETE FROM asset_meter_readings');await db.query(ddl);await journalUpTo(db,STEP);
@@ -79,7 +81,7 @@ try{
  // A changed migration file is still caught by the checksum, and the recovery path never bypasses it.
  {const db=await prepare(base+'_rec3_test');await journalUpTo(db,STEP);await db.query("UPDATE app_migration_steps SET sha256=REPEAT('0',64) WHERE name=? AND step=?",[NAME,STEP]);
   const r=await run(base+'_rec3_test');assert.notEqual(r.code,0);assert(r.log.includes('Migration checksum changed'),r.log);assert.equal((await column(db)).IS_NULLABLE,'NO');await db.end();}
- console.log('PASS unexpected schema refused (wrong type, unexpected default, wrong type+nullability, missing column, untracked) with the database untouched; checksum still enforced');
+ console.log('PASS unexpected schema refused (wrong type, unexpected default, comment on the original or target definition, wrong type+nullability, missing column, untracked) with the database untouched; checksum still enforced');
  // The recovery check only claims the statement it knows.
  {const {modifyColumnState,parseModify}=await import('./migrate-recovery.mjs');
   assert.equal(await modifyColumnState(admin,'ALTER TABLE `dockets` MODIFY COLUMN `organisation_id` varchar(191) NOT NULL;'),null);

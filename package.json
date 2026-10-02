@@ -23,6 +23,7 @@
     "test:mysql": "node --env-file-if-exists=.env scripts/test-mysql.mjs",
     "test:migration-recovery": "node --env-file-if-exists=.env scripts/test-migration-recovery.mjs",
     "test:fresh": "node --env-file-if-exists=.env scripts/test-fresh-start.mjs",
+    "test:connected-workflow": "node --env-file-if-exists=.env scripts/connected-job-workflow.mjs",
     "test:v1": "node --env-file-if-exists=.env scripts/test-v1-journey.mjs",
     "test:backfill": "node --env-file-if-exists=.env scripts/test-resource-backfill.mjs && node --env-file-if-exists=.env scripts/test-document-backfill.mjs && node --env-file-if-exists=.env scripts/test-business-unit-backfill.mjs",
     "knowledge:import-platform": "node --env-file-if-exists=.env scripts/import-platform-knowledge.mjs"

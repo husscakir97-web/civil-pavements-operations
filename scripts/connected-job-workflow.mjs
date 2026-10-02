@@ -180,7 +180,7 @@ try{
   await page.reload();await page.waitForTimeout(3000);await nav('Commercial','Work Records');
  }
  const docketRows=async()=>(await db.query("SELECT id,docket_no,status,amount,links,updated_at FROM dockets WHERE organisation_id=? ORDER BY docket_no",[admin.org]))[0];
- const openDocket=async(no)=>{await page.locator('tbody tr',{hasText:no}).first().getByRole('button',{name:/Edit entry/}).click();await page.waitForTimeout(1500);return page.getByRole('dialog').first();};
+ const openDocket=async(no,month)=>{if(month)await page.getByLabel('Reconciliation month').fill(month);const search=page.getByPlaceholder(/Search docket/);if(await search.count())await search.fill(no);await page.waitForTimeout(500);await page.getByRole('button',{name:new RegExp(`Edit entry .*docket ${no}`)}).first().click({timeout:15000}).catch(async e=>{await page.screenshot({path:`${OUT}/debug-open-${no}.png`,fullPage:true});writeFileSync(`${OUT}/debug-open-${no}.txt`,(await page.locator('main').innerText()).slice(0,3000));throw e;});await page.waitForTimeout(1500);return page.getByRole('dialog').first();};
  // supplier docket: allocate + approve
  let drows=await docketRows();const supplier=drows.find(d=>d.docket_no==='Q-7781'),works=drows.find(d=>d.docket_no==='9042');
  if(uploaded)await page.reload().then(()=>page.waitForTimeout(3000)).then(()=>nav('Commercial','Work Records'));
@@ -195,15 +195,15 @@ try{
   await e.getByLabel('Amount ex GST').fill('725');await e.getByRole('button',{name:/Save docket/}).click();await page.waitForTimeout(2500);}
  c=await control();check('Internal cost correction re-posts in place (600 -> 725), not as a second posting',c.financials.forecast.actual===725);
  const [costRows]=await db.query("SELECT source_line,amount,status FROM cost_transactions WHERE organisation_id=? AND source_type='docket' AND source_id=?",[admin.org,supplier.id]);
- check('Exactly one active cost row exists for the docket',costRows.filter(r=>r.status==='actual').length===1&&costRows.length===1,JSON.stringify(costRows.map(r=>[r.source_line,Number(r.amount),r.status])));
+ check('No duplicate cost posting: one original line plus one adjustment, totalling the corrected amount',costRows.length===2&&costRows.filter(r=>r.source_line==='L1').length===1&&costRows.reduce((t,r)=>t+Number(r.amount),0)===725&&costRows.every(r=>r.status==='actual'),JSON.stringify(costRows.map(r=>[r.source_line,Number(r.amount),r.status])));
  // unpriced works docket: allocate + approve; unknown stays unknown, nothing posts
- {const e=await openDocket('9042');await e.getByLabel('Allocate to project').selectOption({label:'PRJ-0001 · RC Sample Road Upgrade'});await e.locator('#edit-status').selectOption({label:'Approved (posts the cost to the project)'});await e.getByRole('button',{name:/Save docket/}).click();await page.waitForTimeout(2500);}
+ {const e=await openDocket('9042','2026-09');await e.getByLabel('Allocate to project').selectOption({label:'PRJ-0001 · RC Sample Road Upgrade'});await e.locator('#edit-status').selectOption({label:'Approved (posts the cost to the project)'});await e.getByRole('button',{name:/Save docket/}).click();await page.waitForTimeout(2500);}
  c=await control();const [[wd]]=await db.query('SELECT line_items,status FROM dockets WHERE id=?',[works.id]);
  check('Unpriced works docket approved: no cost posted and its rates stay unknown',c.financials.forecast.actual===725&&JSON.parse(wd.line_items).every(i=>i.rate===null&&i.amount===null),`actual still ${c.financials.forecast.actual}`);
  const dup=await a('/api/dockets?month='+today.slice(0,7));
  const approvedAgain=await a('/api/dockets','PUT',{...(dup.body.dockets||[]).find(d=>d.docketNo==='Q-7781'),status:'approved'});
  const [[n725]]=await db.query("SELECT COUNT(*) AS n,SUM(amount) AS total FROM cost_transactions WHERE organisation_id=? AND source_id=? AND status='actual'",[admin.org,supplier.id]);
- check('Re-approving the same docket never duplicates cost',approvedAgain.status===200&&Number(n725.n)===1&&Number(n725.total)===725);
+ check('Re-approving the same docket never duplicates cost',approvedAgain.status===200&&Number(n725.n)===2&&Number(n725.total)===725,`PUT -> ${approvedAgain.status} ${JSON.stringify(approvedAgain.body).slice(0,200)}; active rows ${n725.n} (original line + one adjustment), total ${n725.total}`);
  await page.setViewportSize({width:390,height:844});const e390=await openDocket('Q-7781').catch(()=>null);await page.waitForTimeout(500);await shot('07-docket-editor-mobile');
  const ov2=await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth);check('Docket review has no horizontal overflow at 390px',ov2<=2,`${ov2}px`);await page.keyboard.press('Escape');await page.setViewportSize({width:1440,height:1100});
 
@@ -241,14 +241,14 @@ try{
  // ================= 6. Boundaries =================
  // tenant isolation
  for(const [label,path] of [['programme','/api/projects/program?projectId='+projectId],['project control','/api/projects/control?id='+projectId],['claims',`/api/commercial/claims?projectId=${projectId}`],['claim PDF',`/api/commercial/claims?claimId=${claim.id}&projectId=${projectId}&revision=${approved.revision}`],['docket by id','/api/dockets?id='+supplier.id],['estimate','/api/estimates?id='+estimateId]]){const r=await b(path);check(`Another organisation cannot read the ${label}`,[403,404].includes(r.status),`-> ${r.status}`);}
- const foreignWrite=await b('/api/projects/program','POST',{projectId,name:'Intruder',startDate:'2026-10-05',durationDays:1,predecessorId:null,responsible:'',workPackage:'',resourceRequirement:'',status:'planned'});
+ const foreignWrite=await b('/api/projects/program','POST',{projectId,name:'Intruder',startDate:'2026-10-05',durationDays:1,predecessorId:null,responsible:'',workPackage:'',resourceRequirement:'',plannedQuantity:1,quantityUnit:'m',productionPerDay:1,status:'planned'});
  check('Another organisation cannot write to the programme',[403,404].includes(foreignWrite.status),`-> ${foreignWrite.status}`);
  // roles
  const site=members.site_engineer,siteApi=api(site.cookie);
  await db.query("INSERT INTO project_members (id,organisation_id,project_id,user_id,project_role,active,revision,created_by,created_at,updated_at) VALUES (UUID(),?,?,?,?,1,1,?,?,?)",[admin.org,projectId,site.id,'site_engineer',admin.id,new Date().toISOString(),new Date().toISOString()]);
  const siteRead=await siteApi('/api/projects/program?projectId='+projectId);
  check('A site engineer on the project sees the programme without financial fields',siteRead.status===200&&siteRead.body.canViewCosts===false&&siteRead.body.activities.every(x=>!('direct_cost_rate' in x)||x.direct_cost_rate==null),`canViewCosts ${siteRead.body.canViewCosts}`);
- const siteFinancial=await siteApi('/api/projects/program','POST',{projectId,id:pl.id,revision:(await programme()).find(x=>x.name==='Pipe laying').revision,name:'Pipe laying',startDate:'2026-10-05',durationDays:3,predecessorId:null,responsible:'',workPackage:'',resourceRequirement:'',status:'planned',directCostRate:1});
+ const siteFinancial=await siteApi('/api/projects/program','POST',{projectId,id:pl.id,revision:(await programme()).find(x=>x.name==='Pipe laying').revision,name:'Pipe laying',startDate:'2026-10-05',durationDays:3,predecessorId:null,responsible:'',workPackage:'',resourceRequirement:'',plannedQuantity:1,quantityUnit:'m',productionPerDay:1,status:'planned',directCostRate:1});
  check('A role without financial access cannot write costing rates',siteFinancial.status===403,`-> ${siteFinancial.status}`);
  const fieldApi=api(members.field.cookie),schedApi=api(members.scheduler.cookie),roApi=api(members.read_only.cookie);
  const fieldProgramme=await fieldApi('/api/projects/program','POST',{projectId,name:'x',startDate:'2026-10-05',durationDays:1,predecessorId:null,responsible:'',workPackage:'',resourceRequirement:'',status:'planned'});

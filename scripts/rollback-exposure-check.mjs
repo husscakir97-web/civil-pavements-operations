@@ -5,7 +5,7 @@
 // Shows: (1) the OLD build returns direct_cost_rate to a site engineer once 0025 data exists, (2) after `contain` the same request is
 // refused and no rate remains, (3) after `release` the old build serves the programme again with the rates gone.
 import {spawn,spawnSync} from 'node:child_process';
-import {existsSync,mkdtempSync,rmSync} from 'node:fs';
+import {existsSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {connect} from './mysql-config.mjs';
@@ -39,7 +39,8 @@ try{
  const before=await seen();
  check('HAZARD REPRODUCED: the previous build returns direct_cost_rate to a site engineer once 0025 data exists',before.status===200&&Number(before.rate)===95,JSON.stringify(before));
  const tool=(...a)=>spawnSync(process.execPath,['scripts/programme-costing-containment.mjs',...a],{env,encoding:'utf8'});
- const state=join(dir,'state.json'),contained=tool('contain','--state',state,'--confirm');
+ const state=join(dir,'state.json'),backup=join(dir,'backup.sql');writeFileSync(backup,'-- synthetic rehearsal backup (disposable database)');
+ const contained=tool('contain','--state',state,'--backup-file',backup,'--approved-by','Rehearsal operator, test',  '--confirm');
  check('Containment runs and verifies',contained.status===0&&/Remaining exposed rows: 0; organisations still able to open Projects: 0/.test(contained.stdout),contained.stdout.trim().split('\n').pop());
  const during=await seen();
  check('While contained, the previous build refuses the programme to the site engineer (404) and no rate is returned',during.status===404&&during.rate===undefined,JSON.stringify(during));

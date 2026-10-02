@@ -18,7 +18,7 @@ try{
  const [schema]=await db.query('SELECT COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME IN (?)',['program_activities',columns]);assert.equal(schema.length,5);
  assert.equal(schema.find(c=>c.COLUMN_NAME==='productive_hours_per_day').COLUMN_TYPE,'decimal(6,2)');
  assert.equal(schema.find(c=>c.COLUMN_NAME==='direct_cost_rate').COLUMN_TYPE,'decimal(15,2)');
- assert.equal(schema.find(c=>c.COLUMN_NAME==='cost_rate_basis').COLUMN_DEFAULT,'hour');
+ assert.equal(String(schema.find(c=>c.COLUMN_NAME==='cost_rate_basis').COLUMN_DEFAULT).replace(/^'|'$/g,''),'hour'); // MariaDB reports the literal quoted, MySQL 8 does not
  assert.equal(schema.find(c=>c.COLUMN_NAME==='cost_rate_basis').IS_NULLABLE,'NO');
  for(const c of schema.filter(c=>c.COLUMN_NAME!=='cost_rate_basis'))assert.equal(c.IS_NULLABLE,'YES');
  // Rewind only this disposable fixture's five additions to an existing 0024 database.

@@ -36,11 +36,12 @@ export async function claimable(projectId:string,conn?:PoolConnection){
  const org=actor().organisationId;await project(projectId,conn);
  const baseline=await one('SELECT id,contract_value FROM project_baselines WHERE organisation_id=? AND project_id=? ORDER BY revision LIMIT 1',[org,projectId],conn);
  const variations=await query("SELECT id,reference,title,approved_value FROM project_variations WHERE organisation_id=? AND project_id=? AND status='approved'",[org,projectId],conn);
- const dockets=await query("SELECT d.id,d.docket_no,d.work_date,d.amount FROM dockets d WHERE d.organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(d.links,'$.jobId'))=? AND d.status='approved' AND NOT EXISTS (SELECT 1 FROM claim_lines l WHERE l.organisation_id=d.organisation_id AND l.exclusive_key=CONCAT('docket:',d.id)) AND NOT EXISTS (SELECT 1 FROM claim_items i WHERE i.organisation_id=d.organisation_id AND i.docket_id=d.id) ORDER BY d.work_date",[org,projectId],conn);
+ const dockets=await query("SELECT d.id,d.docket_no,d.work_date,d.updated_at FROM dockets d WHERE d.organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(d.links,'$.jobId'))=? AND d.status='approved' AND NOT EXISTS (SELECT 1 FROM claim_lines l WHERE l.organisation_id=d.organisation_id AND l.exclusive_key=CONCAT('docket:',d.id)) AND NOT EXISTS (SELECT 1 FROM claim_items i WHERE i.organisation_id=d.organisation_id AND i.docket_id=d.id) ORDER BY d.work_date",[org,projectId],conn);
  const lines:Row[]=[];
  if(baseline){const prev=await previousClaimed(conn,'contract',baseline.id);lines.push({lineType:'contract',sourceId:baseline.id,description:'Original contract works',contractValue:Number(baseline.contract_value),previousClaimed:prev,remaining:r2(Number(baseline.contract_value)-prev)});}
  for(const v of variations){const prev=await previousClaimed(conn,'variation',v.id);lines.push({lineType:'variation',sourceId:v.id,description:`${v.reference} ${v.title}`,contractValue:Number(v.approved_value),previousClaimed:prev,remaining:r2(Number(v.approved_value)-prev)});}
- for(const d of dockets)lines.push({lineType:'docket',sourceId:d.id,description:`Docket ${d.docket_no} (${d.work_date})`,contractValue:Number(d.amount),previousClaimed:0,remaining:Number(d.amount)});
+ // Approval establishes reviewed evidence, not a client charge. Never offer supplier cost as revenue.
+ for(const d of dockets)lines.push({lineType:'docket',sourceId:d.id,description:`Docket ${d.docket_no} (${d.work_date})`,contractValue:null,previousClaimed:0,remaining:null,billingRequired:true,docketVersion:d.updated_at});
  return lines;
 }
 
@@ -55,7 +56,7 @@ export async function retentionSummary(projectId:string,conn?:PoolConnection){
  return {...terms(p),...await heldExcluding(projectId,null,conn)};
 }
 
-export type ClaimLineInput={lineType:'contract'|'variation'|'docket'|'other';sourceId?:string|null;description?:string;thisClaim:number};
+export type ClaimLineInput={lineType:'contract'|'variation'|'docket'|'other';sourceId?:string|null;description?:string;thisClaim:number;billingBasis?:{confirmed:boolean;reference:string;expectedUpdatedAt:string}};
 export async function createClaim(projectId:string,input:{period:string;claimDate?:string|null;notes?:string|null;lines:ClaimLineInput[];retentionRelease?:{amount:number;reason:string}|null}){
  const a=actor();if(!can(a.role,'claim.edit'))fail(403,'You are not authorised to prepare claims.');
  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.period))fail(400,'Choose a claim period (YYYY-MM).');
@@ -68,14 +69,22 @@ export async function createClaim(projectId:string,input:{period:string;claimDat
   const open=await one("SELECT id FROM progress_claims WHERE organisation_id=? AND project_id=? AND status IN ('draft','internal_approval')",[a.organisationId,projectId],conn);
   if(open)fail(409,'Finish or delete the open draft claim before starting another.');
   const available=await claimable(projectId,conn);
-  const id=uuid(),now=nowIso(),rows:Row[]=[];
+  const id=uuid(),now=nowIso(),rows:Row[]=[],billingConfirmations:Row[]=[];
   for(const l of lines){
    if(l.lineType==='other'){if(!l.description?.trim())fail(422,'Describe each other claim line.');rows.push({line_type:'other',source_id:null,exclusive_key:null,description:l.description.trim(),contract_value:0,previous_claimed:0,this_claim:r2(l.thisClaim),claimed_to_date:r2(l.thisClaim)});continue;}
    const src=available.find(x=>x.lineType===l.lineType&&x.sourceId===l.sourceId);
    if(!src)fail(409,l.lineType==='docket'?'A selected docket is not approved for this project or has already been claimed.':'A selected line is not claimable.');
-   if(l.lineType==='docket'&&r2(l.thisClaim)!==r2(src!.contractValue))fail(422,'Dockets are claimed in full. Adjust the docket before claiming a different amount.');
+   if(l.lineType==='docket'){
+    const basis=l.billingBasis,reference=String(basis?.reference||'').trim();
+    if(basis?.confirmed!==true||reference.length<10||reference.length>200||!Number.isFinite(l.thisClaim)||r2(l.thisClaim)<=0)fail(422,'Confirm a separately agreed client charge excluding GST and its agreement or rate reference. A supplier cost is not a billing basis.');
+    if(!basis.expectedUpdatedAt||basis.expectedUpdatedAt!==src!.docketVersion)fail(409,'This docket changed. Refresh and confirm its client charge again.');
+    const amount=r2(l.thisClaim);
+    rows.push({line_type:'docket',source_id:l.sourceId,exclusive_key:`docket:${l.sourceId}`,description:`${src!.description} - Client charge: ${reference}`,contract_value:amount,previous_claimed:0,this_claim:amount,claimed_to_date:amount});
+    billingConfirmations.push({docketId:l.sourceId,docketVersion:basis.expectedUpdatedAt,amountExGst:amount,reference,confirmedBy:a.userId,confirmedAt:now});
+    continue;
+   }
    let calc;try{calc=claimLine(src!.contractValue,src!.previousClaimed,r2(l.thisClaim));}catch(e){fail(422,`${src!.description}: ${(e as Error).message}`);}
-   rows.push({line_type:l.lineType,source_id:l.sourceId,exclusive_key:l.lineType==='docket'?`docket:${l.sourceId}`:null,description:src!.description,contract_value:calc!.contractValue,previous_claimed:calc!.previousClaimed,this_claim:calc!.thisClaim,claimed_to_date:calc!.claimedToDate});
+   rows.push({line_type:l.lineType,source_id:l.sourceId,exclusive_key:null,description:src!.description,contract_value:calc!.contractValue,previous_claimed:calc!.previousClaimed,this_claim:calc!.thisClaim,claimed_to_date:calc!.claimedToDate});
   }
   const n=await one<{n:number}>('SELECT COALESCE(MAX(number),0)+1 AS n FROM progress_claims WHERE organisation_id=? AND project_id=?',[a.organisationId,projectId],conn);
   const gross=r2(rows.reduce((s,r)=>s+Number(r.this_claim),0));
@@ -86,7 +95,7 @@ export async function createClaim(projectId:string,input:{period:string;claimDat
   const docketIds=rows.filter(r=>r.line_type==='docket').map(r=>r.source_id);
   // The project row is locked above, which is also what a docket reallocation locks first. Every docket must still be approved and in this project when claimed.
   if(docketIds.length){const claimedNow=await exec("UPDATE dockets SET status='included_claim',updated_at=? WHERE organisation_id=? AND id IN (?) AND status='approved' AND JSON_UNQUOTE(JSON_EXTRACT(links,'$.jobId'))=?",[now,a.organisationId,docketIds,projectId],conn);if(claimedNow!==new Set(docketIds).size)fail(409,'A selected docket changed while the claim was prepared. Refresh and try again.');}
-  await audit({event:'claim.created',entityType:'claim',entityId:id,projectId,summary:`Claim ${n?.n} (${input.period}) prepared: gross ${gross.toFixed(2)}, retention ${ret!.withheld.toFixed(2)}${ret!.released?`, release ${ret!.released.toFixed(2)}`:''}, net ${ret!.net.toFixed(2)} for ${p.name}`,after:{gross,lines:rows.length,retention:ret}},conn);
+  await audit({event:'claim.created',entityType:'claim',entityId:id,projectId,summary:`Claim ${n?.n} (${input.period}) prepared: gross ${gross.toFixed(2)}, retention ${ret!.withheld.toFixed(2)}${ret!.released?`, release ${ret!.released.toFixed(2)}`:''}, net ${ret!.net.toFixed(2)} for ${p.name}`,after:{gross,lines:rows.length,retention:ret,billingConfirmations}},conn);
   return {claimId:id,number:Number(n?.n||1),grossAmount:gross,retentionWithheld:ret!.withheld,retentionReleased:ret!.released,netAmount:ret!.net};
  });
 }
@@ -190,6 +199,40 @@ export async function invoiceAction(invoiceId:string,action:'issue'|'void'|'paym
 
 /** Seam guard: variations flow into claims only when commercial is fully entitled. */
 export async function assertCommercialWritable(){if(!await seamEnabled(actor().organisationId,'commercial'))fail(403,'Commercial is read-only for your organisation.');}
+
+/** Client review copy of the approved claim, before certification or invoicing. */
+export async function claimPdf(claimId:string,projectId:string,expectedRevision:number){
+ const a=actor();
+ if(!can(a.role,'commercial.view'))fail(403,'You are not authorised to view commercial claims.');
+ if(!claimId||!projectId||!Number.isSafeInteger(expectedRevision)||expectedRevision<1)fail(400,'A claim, project and revision are required.');
+ // Capture the claim and its immutable lines while holding the same row lock used by
+ // transitions/deletion. Release before rendering. A stale screen must refresh first.
+ const snapshot=await tx(async conn=>{
+  const c=await one('SELECT * FROM progress_claims WHERE organisation_id=? AND id=? AND project_id=? FOR UPDATE',[a.organisationId,claimId,projectId],conn);
+  if(!c)fail(404,'Claim not found.');
+  if(Number(c.revision)!==expectedRevision)fail(409,'This claim changed. Refresh before downloading it.');
+  if(!['submitted','certified','invoiced','paid'].includes(c.status)||!c.approved_by||!c.approved_at)fail(409,'Approve and submit the claim before downloading a client review copy.');
+  const p=await one('SELECT name,project_number,client_name,contract_number FROM jobs WHERE organisation_id=? AND id=?',[a.organisationId,projectId],conn);
+  if(!p)fail(404,'Project not found.');
+  const lines=await query('SELECT description,this_claim FROM claim_lines WHERE organisation_id=? AND claim_id=? AND project_id=? ORDER BY created_at,id',[a.organisationId,claimId,projectId],conn);
+  if([c.gross_amount,c.retention_withheld,c.retention_released,c.net_amount,...lines.map(l=>l.this_claim)].some(n=>n==null||!Number.isFinite(Number(n))))fail(409,'This claim has incomplete amounts and cannot be exported.');
+  return {c,p,lines};
+ });
+ const {c,p,lines}=snapshot,brand=await organisationBranding(a.organisationId);
+ const aud=(n:unknown)=>`$${Number(n).toLocaleString('en-AU',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+ const number=`Claim-${c.number}`;
+ const bytes=await renderDocument({company:brand,title:'Progress claim - client review',number,revision:c.revision,status:stateLabel('claim',c.status),date:c.claim_date,
+  approval:null,control:'Claimed amounts in AUD excluding GST. Client review copy - not a tax invoice.',
+  blocks:[
+   {text:'Approved claim for client review and certification. These are the original claimed amounts, not certified amounts or a payment demand. All amounts exclude GST.'},
+   {rows:[['Client',p.client_name||'-'],['Project',[p.project_number,p.name].filter(Boolean).join(' ')],['Contract',p.contract_number||'-'],['Claim period',c.period],['Approved on',String(c.approved_at).slice(0,10)]]},
+   {heading:'Claimed work',table:{columns:['Description','This claim (ex GST)'],widths:[375,140],align:['left','right'],rows:lines.map(l=>[l.description,aud(l.this_claim)])}},
+   {heading:'Claim summary',rows:[['Gross claimed',aud(c.gross_amount)],['Retention withheld',aud(c.retention_withheld)],['Retention released',aud(c.retention_released)],['Net claimed (ex GST)',aud(c.net_amount)]]},
+   ...(c.retention_release_reason?[{heading:'Retention release reason',text:String(c.retention_release_reason)}]:[]),
+  ]});
+ const projectFile=String(p.project_number||projectId).replace(/[^A-Za-z0-9_-]/g,'_').slice(0,60)||'project';
+ return new Response(Buffer.from(bytes),{headers:{'Content-Type':'application/pdf','Content-Disposition':`attachment; filename="Client-review-${projectFile}-${number}-rev-${expectedRevision}.pdf"`,'Cache-Control':'private, no-store'}});
+}
 
 /** Tax invoice PDF from the stored invoice and its certified claim (amounts are never recalculated here). */
 export async function invoicePdf(invoiceId:string){

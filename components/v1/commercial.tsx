@@ -8,9 +8,9 @@ import {allowedTransitions} from '@/lib/platform/workflow';
 import {useNav} from './nav';
 import {retention,gst,type Forecast} from '@/lib/platform/finance';
 
-type Line={lineType:string;sourceId:string|null;description:string;contractValue:number;previousClaimed:number;remaining:number};
+type Line={lineType:string;sourceId:string|null;description:string;contractValue:number|null;previousClaimed:number;remaining:number|null;docketVersion?:string};
 type Retention={enabled:boolean;pct:number;cap:number|null;withheld:number;released:number;held:number};
-type Claim={id:string;number:number;period:string;status:string;grossAmount:number;retentionWithheld:number;retentionReleased:number;retentionReleaseReason:string|null;netAmount:number;gstOnNet:number;certifiedRetention:number|null;certifiedNet:number|null;certifiedAmount:number|null;variance:number|null;submittedAt:string|null;certifiedAt:string|null;lines:Array<Line&{id:string;thisClaim:number;claimedToDate:number}>};
+type Claim={id:string;revision:number;number:number;period:string;status:string;grossAmount:number;retentionWithheld:number;retentionReleased:number;retentionReleaseReason:string|null;netAmount:number;gstOnNet:number;certifiedRetention:number|null;certifiedNet:number|null;certifiedAmount:number|null;variance:number|null;submittedAt:string|null;certifiedAt:string|null;lines:Array<Line&{contractValue:number;id:string;thisClaim:number;claimedToDate:number}>};
 type Invoice={id:string;claimId:string|null;invoiceNumber:string;invoiceDate:string;dueDate:string|null;amountExGst:number;gst:number;total:number;status:string;paidAmount:number;outstanding:number};
 
 const MoneyRow=({label,value,total,hint,tone}:{label:string;value:ReactNode;total?:boolean;hint?:string;tone?:string})=><div className={`flex items-baseline justify-between gap-3 py-1.5 text-sm ${total?'border-t border-slate-300 font-semibold':''}`}><span className={total?'':'text-slate-600'}>{label}{hint&&<span className="block text-xs font-normal text-slate-500">{hint}</span>}</span><span className={`tabular-nums ${tone||''}`}>{value}</span></div>;
@@ -50,7 +50,7 @@ export function ProjectCommercial({projectId,closed,onChanged}:{projectId:string
    rowActions={r=>{
     if(String(r.status)!=='approved'||closed||!can('claim.edit'))return null;
     const line=claimState.claimable.find(l=>l.lineType==='variation'&&l.sourceId===r.id);
-    if(!line||line.remaining<=0)return <span className="text-xs text-slate-500">Fully claimed</span>;
+    if(!line||(line.remaining??0)<=0)return <span className="text-xs text-slate-500">Fully claimed</span>;
     return <Btn variant="secondary" className="min-h-9 py-1" disabled={claimState.openClaim} title={claimState.openClaim?'Finish or delete the open claim first':undefined} onClick={()=>setPreset(`variation:${r.id}`)}>Include in next claim</Btn>;
    }}/>
   <ClaimsPanel key={tick} projectId={projectId} closed={closed} preset={preset} onPresetUsed={()=>setPreset(null)} onData={setClaimState} onChanged={()=>{reload();onChanged?.();}}/>
@@ -90,6 +90,7 @@ function ClaimsPanel({projectId,closed,onChanged,preset,onPresetUsed,onData}:{pr
     {c.retentionReleaseReason&&<p className="mt-1 text-xs text-slate-500">Retention release: {c.retentionReleaseReason}</p>}
     <table className="mt-2 w-full text-xs"><thead className="text-left text-slate-500"><tr><th className="py-1">Line</th><th>Value</th><th>Previous</th><th>This claim</th><th>To date</th><th>Remaining</th></tr></thead><tbody>{c.lines.map(l=><tr key={l.id}><td className="py-1 pr-2">{l.description}</td><td>{money(l.contractValue,true)}</td><td>{money(l.previousClaimed,true)}</td><td>{money(l.thisClaim,true)}</td><td>{money(l.claimedToDate,true)}</td><td>{money(l.contractValue-l.claimedToDate,true)}</td></tr>)}</tbody></table>
     <div className="mt-2 flex flex-wrap gap-2">
+     {['submitted','certified','invoiced','paid'].includes(c.status)&&<a className="text-sm underline" href={`/api/commercial/claims?claimId=${encodeURIComponent(c.id)}&projectId=${encodeURIComponent(projectId)}&revision=${c.revision}`}>Client review PDF (ex GST)</a>}
      {moves.map(t=><Btn key={t.to} variant="secondary" busy={busy} onClick={()=>void post({action:'transition',claimId:c.id,to:t.to})}>{t.label}</Btn>)}
      {c.status==='draft'&&can('claim.edit')&&<Btn variant="danger" busy={busy} onClick={()=>{if(confirm('Delete this draft claim? Dockets are released back to approved.'))void post({action:'delete',claimId:c.id});}}>Delete draft</Btn>}
      {c.status==='submitted'&&can('claim.approve')&&<Btn variant="secondary" busy={busy} onClick={()=>setActing({claimId:c.id,kind:'certify'})}>Record certification</Btn>}
@@ -125,18 +126,25 @@ function ClaimBuilder({projectId,lines,retention:terms,preset,onDone}:{projectId
  const [release,setRelease]=useState(''),[reason,setReason]=useState('');
  const [period,setPeriod]=useState(new Date().toISOString().slice(0,7));
  const key=(l:Line)=>`${l.lineType}:${l.sourceId}`;
- const [amounts,setAmounts]=useState<Record<string,string>>(()=>{const l=lines.find(x=>key(x)===preset);return l?{[key(l)]:String(l.lineType==='docket'?l.contractValue:l.remaining)}:{};});
+ const [amounts,setAmounts]=useState<Record<string,string>>(()=>{const l=lines.find(x=>key(x)===preset);return l&&l.lineType!=='docket'?{[key(l)]:String(l.remaining??'')}:{};});
+ const [basis,setBasis]=useState<Record<string,{reference:string;confirmed:boolean}>>({});
  const gross=Math.round(lines.reduce((n,l)=>n+(Number(amounts[key(l)])||0),0)*100)/100;
  // Same deterministic functions the server uses; the saved claim is authoritative.
  const preview=(()=>{try{const ret=retention({enabled:terms.enabled,pct:terms.pct,cap:terms.cap},gross,terms.held,Number(release)||0);return {...ret,gst:gst(ret.net)};}catch(e){return {error:(e as Error).message};}})();
  const chosen=lines.filter(l=>Number(amounts[key(l)]));
+ const billingIncomplete=chosen.some(l=>l.lineType==='docket'&&(!basis[key(l)]?.confirmed||(basis[key(l)]?.reference.trim().length??0)<10));
  const submit=(send:boolean)=>run(async()=>{
-  const created=await api<{claimId:string}>('/api/commercial/claims',{method:'POST',body:{action:'create',projectId,period,lines:chosen.map(l=>({lineType:l.lineType,sourceId:l.sourceId,thisClaim:Number(amounts[key(l)])})),retentionRelease:Number(release)?{amount:Number(release),reason}:null}});
+  const created=await api<{claimId:string}>('/api/commercial/claims',{method:'POST',body:{action:'create',projectId,period,lines:chosen.map(l=>({lineType:l.lineType,sourceId:l.sourceId,thisClaim:Number(amounts[key(l)]),...(l.lineType==='docket'?{billingBasis:{confirmed:basis[key(l)]?.confirmed===true,reference:basis[key(l)]?.reference||'',expectedUpdatedAt:l.docketVersion||''}}:{})})),retentionRelease:Number(release)?{amount:Number(release),reason}:null}});
   if(send)await api('/api/commercial/claims',{method:'POST',body:{action:'transition',claimId:created.claimId,to:'internal_approval'}});
  },onDone);
- const lineRow=(l:Line)=><li key={key(l)} className={`grid items-center gap-2 rounded-lg border p-3 text-sm sm:grid-cols-[1fr_9rem] ${Number(amounts[key(l)])?'border-[#172633] bg-slate-50':''}`}><div><p className="font-medium">{l.description}</p><p className="text-xs text-slate-500">{l.lineType==='docket'?`Approved docket · ${money(l.contractValue,true)}`:`Value ${money(l.contractValue,true)} · claimed ${money(l.previousClaimed,true)} · remaining ${money(l.remaining,true)}`}</p></div>
-  {l.lineType==='docket'?<label className="flex min-h-11 items-center gap-2"><input type="checkbox" className="size-5" checked={Boolean(amounts[key(l)])} onChange={e=>setAmounts(a=>({...a,[key(l)]:e.target.checked?String(l.contractValue):''}))}/>Claim in full</label>
-  :<div className="flex items-center gap-1"><input aria-label={`Amount for ${l.description}`} className={field} type="number" step="0.01" max={l.remaining} value={amounts[key(l)]||''} onChange={e=>setAmounts(a=>({...a,[key(l)]:e.target.value}))}/>{l.remaining>0&&!amounts[key(l)]&&<button type="button" className="whitespace-nowrap text-xs underline" onClick={()=>setAmounts(a=>({...a,[key(l)]:String(l.remaining)}))}>All</button>}</div>}</li>;
+ const lineRow=(l:Line)=><li key={key(l)} className={`grid items-center gap-2 rounded-lg border p-3 text-sm sm:grid-cols-[1fr_9rem] ${Number(amounts[key(l)])?'border-[#172633] bg-slate-50':''}`}><div><p className="font-medium">{l.description}</p><p className="text-xs text-slate-500">{l.lineType==='docket'?'Approved evidence - client charge required':`Value ${money(l.contractValue,true)} · claimed ${money(l.previousClaimed,true)} · remaining ${money(l.remaining,true)}`}</p></div>
+  {l.lineType==='docket'?<div className="grid gap-2 sm:col-span-2">
+   <p className="text-xs text-slate-600">Enter the separately agreed client charge. Supplier cost and docket approval do not establish billability.</p>
+   <Field label="Agreed client charge (ex GST)"><input className={field} type="number" min="0.01" step="0.01" value={amounts[key(l)]||''} onChange={e=>{setAmounts(a=>({...a,[key(l)]:e.target.value}));setBasis(b=>({...b,[key(l)]:{reference:b[key(l)]?.reference||'',confirmed:false}}));}}/></Field>
+   <Field label="Client agreement or contract rate reference"><input className={field} maxLength={200} value={basis[key(l)]?.reference||''} onChange={e=>setBasis(b=>({...b,[key(l)]:{reference:e.target.value,confirmed:false}}))}/></Field>
+   <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="size-5" checked={basis[key(l)]?.confirmed===true} onChange={e=>setBasis(b=>({...b,[key(l)]:{reference:b[key(l)]?.reference||'',confirmed:e.target.checked}}))}/>I confirm this separately agreed client charge excludes GST and is not copied from supplier cost.</label>
+  </div>
+  :<div className="flex items-center gap-1"><input aria-label={`Amount for ${l.description}`} className={field} type="number" step="0.01" max={l.remaining??undefined} value={amounts[key(l)]||''} onChange={e=>setAmounts(a=>({...a,[key(l)]:e.target.value}))}/>{(l.remaining??0)>0&&!amounts[key(l)]&&<button type="button" className="whitespace-nowrap text-xs underline" onClick={()=>setAmounts(a=>({...a,[key(l)]:String(l.remaining)}))}>All</button>}</div>}</li>;
  return <form className="grid gap-5 p-5" onSubmit={e=>{e.preventDefault();void submit(true);}}>
   <Field label="Claim period"><input className={field} type="month" value={period} onChange={e=>setPeriod(e.target.value)}/></Field>
   <div className="grid gap-4"><h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Claimable work</h3>
@@ -157,7 +165,7 @@ function ClaimBuilder({projectId,lines,retention:terms,preset,onDone}:{projectId
    <p className="mt-2 text-xs text-slate-500">Figures are confirmed when the claim is saved.</p>
   </section>
   <ErrorState error={error}/>
-  <div className="flex flex-wrap gap-2"><Btn busy={busy} disabled={!gross&&!Number(release)} type="submit">Submit for internal approval</Btn><Btn variant="secondary" busy={busy} type="button" disabled={!gross&&!Number(release)} onClick={()=>void submit(false)}>Save as draft</Btn></div>
+  <div className="flex flex-wrap gap-2"><Btn busy={busy} disabled={billingIncomplete||(!gross&&!Number(release))} type="submit">Submit for internal approval</Btn><Btn variant="secondary" busy={busy} type="button" disabled={billingIncomplete||(!gross&&!Number(release))} onClick={()=>void submit(false)}>Save as draft</Btn></div>
  </form>;
 }
 

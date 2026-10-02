@@ -102,6 +102,6 @@ const asphalt=parseDocket('Docket No: ASP-1\nDate: 10/09/2026\nClient: Example C
 assert.equal(asphalt.profileId,'Asphalt / profiling');assert.equal(asphalt.quantity,120);
 const tc=parseDocket('Docket No: TC123\nDate: 09/09/2026\nClient: Example Civil\nProject: Test Road\nTraffic control\nStart: 19:00\nFinish: 05:00\nBreak: 30 mins\nCrew size: 5','t.pdf',99);
 assert.equal(tc.labourHours,47.5);assert.equal(tc.profileId,'Traffic control');
-const mixedPage='Docket No: ASP-1\nDate: 10/09/2026\nClient: Abergeldie\nProject: Carlisle St\nQuantity: 120 t\n\nDelivery docket 55\nDate: 10/09/2026\nClient: Downer\nProject: Rosehill\nQuantity: 20 t';
+const mixedPage='Docket No: ASP-1\nDate: 10/09/2026\nClient: Example Civil\nProject: Carlisle St\nQuantity: 120 t\n\nDelivery docket 55\nDate: 10/09/2026\nClient: Downer\nProject: Rosehill\nQuantity: 20 t';
 assert.equal(splitDocketText(mixedPage).length,2);assert.deepEqual(parseDocketPage([{text:mixedPage,confidence:95}],'m.pdf').map(r=>r.docketNo),['ASP-1','55']);
 console.log('Passed: docket accuracy — identities not headings, work vs sign-off date, job/contract references, resource rows and travel, readable digital text without OCR, continuation and multi-docket assembly, scanned alternates, existing layouts.');

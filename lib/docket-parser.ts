@@ -227,7 +227,7 @@ export function findContractReference(text: string) {
 }
 
 // ---- Docket identity -------------------------------------------------------------------------------------------------
-// A docket is identified by a labelled number ("Docket number: 4742"), never by a heading ("WORKS DOCKET") or the page count.
+// A docket is identified by a labelled number ("Docket number: 9042"), never by a heading ("WORKS DOCKET") or the page count.
 const DOCKET_LABEL = String.raw`(?:delivery[ \t]+docket|works?[ \t]+docket|job[ \t]+docket|docket|dkt|ticket|delivery[ \t]+note)`;
 const IDENTITY_LINE = new RegExp(String.raw`^[ \t]*([^:\n]{0,45}?)\b${DOCKET_LABEL}[ \t]*(?:(?:no\.?|number|num|id|#)[ \t]*){0,2}(?:[:#=-][ \t]*|[ \t]+)([a-z0-9][a-z0-9\-/.]{1,})`, "i");
 // Other numbers that sit next to the word "docket" but are not this docket's identity.

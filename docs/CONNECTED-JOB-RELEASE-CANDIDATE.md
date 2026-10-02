@@ -28,7 +28,11 @@ Boundaries checked by the driver: tenant isolation (read/write), field/site/sche
 
 ## Release readiness
 - Backup the production MySQL database first.
-- Migration 0025 only adds nullable/defaulted columns to `program_activities` (forward-only). The previous app build ignores them, so an app rollback to the prior commit is safe without a DB restore. Restore from backup only as a last resort.
+- Migration 0025 only adds nullable/defaulted columns to `program_activities` (forward-only, no data is changed). Roll **forward** (fix and redeploy) rather than back wherever possible.
+- **Rollback caution (programme costing).** The previous build returns every `program_activities` column to every programme reader. Once anyone has saved costing assumptions, rolling the app back would expose `direct_cost_rate`, `cost_rate_basis` and the `source_estimate_*` references to roles that must not see money (for example site and project engineers). A plain app rollback is therefore safe only **before** any costing assumption is saved. After that, do one of the following *before* the old build serves traffic, with the backup taken above:
+  1. Contain without data loss: set the `projects` entitlement to `disabled` for affected organisations (programme routes then return 404), roll back, and re-enable only after rolling forward again.
+  2. Or remove the financial values from the old build's reach, then roll back: `UPDATE program_activities SET direct_cost_rate=NULL, source_estimate_revision_id=NULL, source_estimate_item_id=NULL WHERE direct_cost_rate IS NOT NULL OR source_estimate_revision_id IS NOT NULL OR source_estimate_item_id IS NOT NULL;` The saved assumptions are then recoverable only from the backup, so keep it until the roll-forward is verified.
+  Restoring the whole database is a last resort and discards everything saved since the backup.
 - `main` deploys automatically: merge only with owner approval; confirm email, AI, ABR and billing adapters remain off.
 - After deploy: sign in, open a project programme, open an activity drawer, open Work Records.
 

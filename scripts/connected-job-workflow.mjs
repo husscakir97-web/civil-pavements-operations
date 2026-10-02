@@ -156,8 +156,12 @@ try{
  const approvedRev=afterEdit.revisions.find(r=>r.id===baseline.revisionId);
  check('Approved estimate revision is protected from edits',estLocked.status!==200||(approvedRev&&approvedRev.directCost===baseline.directCost&&approvedRev.sellPrice===baseline.sellPrice),`PUT -> ${estLocked.status}; approved revision still direct ${approvedRev?.directCost}, sell ${approvedRev?.sellPrice}; estimate state now ${afterEdit.state}`);
  await page.setViewportSize({width:390,height:844});await page.waitForTimeout(500);
- await page.getByRole('button',{name:/Details/}).first().click().catch(()=>{});await page.waitForTimeout(800);await shot('04-programme-drawer-mobile');
- const overflow=await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth);check('Programme drawer has no horizontal overflow at 390px',overflow<=2,`${overflow}px`);
+ // The measurement only counts if the drawer really opened: a failed open must fail the check, not pass on the page underneath.
+ await page.getByRole('button',{name:/Details/}).first().click();await page.waitForTimeout(800);await shot('04-programme-drawer-mobile');
+ const drawerOpen=await page.getByRole('dialog',{name:/Activity details/}).isVisible();
+ const overflow=await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth);
+ const drawerFits=drawerOpen&&await page.getByRole('dialog',{name:/Activity details/}).evaluate(d=>d.scrollWidth<=d.clientWidth+2);
+ check('Programme drawer opens at 390px and has no horizontal overflow',drawerOpen&&drawerFits&&overflow<=2,`open ${drawerOpen}, page overflow ${overflow}px`);
  await page.keyboard.press('Escape');await page.waitForTimeout(400);if(await page.getByRole('dialog',{name:/Activity details/}).count())await page.getByRole('dialog',{name:/Activity details/}).getByRole('button',{name:/Cancel|Close/}).first().click();await page.setViewportSize({width:1440,height:1100});await page.reload();await page.waitForTimeout(2500);
 
  // ================= 4. Dockets: upload (UI) -> review -> allocate -> approve -> actual cost =================
@@ -204,8 +208,14 @@ try{
  const approvedAgain=await a('/api/dockets','PUT',{...(dup.body.dockets||[]).find(d=>d.docketNo==='Q-7781'),status:'approved'});
  const [[n725]]=await db.query("SELECT COUNT(*) AS n,SUM(amount) AS total FROM cost_transactions WHERE organisation_id=? AND source_id=? AND status='actual'",[admin.org,supplier.id]);
  check('Re-approving the same docket never duplicates cost',approvedAgain.status===200&&Number(n725.n)===2&&Number(n725.total)===725,`PUT -> ${approvedAgain.status} ${JSON.stringify(approvedAgain.body).slice(0,200)}; active rows ${n725.n} (original line + one adjustment), total ${n725.total}`);
- await page.setViewportSize({width:390,height:844});const e390=await openDocket('Q-7781').catch(()=>null);await page.waitForTimeout(500);await shot('07-docket-editor-mobile');
- const ov2=await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth);check('Docket review has no horizontal overflow at 390px',ov2<=2,`${ov2}px`);await page.keyboard.press('Escape');await page.setViewportSize({width:1440,height:1100});
+ await page.setViewportSize({width:390,height:844});
+ // A failed attempt to open the record must fail the check (previously the error was swallowed and the page underneath was measured).
+ let e390=null,openError='';try{e390=await openDocket('Q-7781');}catch(e){openError=String(e.message||e).split('\n')[0].slice(0,120);}
+ await page.waitForTimeout(500);await shot('07-docket-editor-mobile');
+ const editorOpen=Boolean(e390)&&await e390.isVisible()&&(await e390.getByLabel('Amount ex GST').count())>0;
+ const ov2=await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth);
+ const editorFits=editorOpen&&await e390.evaluate(d=>d.scrollWidth<=d.clientWidth+2);
+ check('Docket editor opens at 390px and has no horizontal overflow',editorOpen&&editorFits&&ov2<=2,editorOpen?`page overflow ${ov2}px`:`editor did not open ${openError}`);await page.keyboard.press('Escape');await page.setViewportSize({width:1440,height:1100});
 
  // ================= 5. Separately agreed client charge -> claim -> approval -> client-review PDF (UI) =================
  await nav('Projects');await page.getByText('RC Sample Road Upgrade').first().click();await page.waitForTimeout(2000);

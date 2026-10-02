@@ -339,7 +339,10 @@ export function parseResourceTable(text: string, signOff = "") {
       const ambiguous = values.length > 0 && !reliable && !singleTotal;
       const breakHours = named.break ?? 0;
       const computed = Math.round(hoursBetween(start, finish, breakHours) * 100) / 100;
-      const lastValue = [...numeric].reverse().find((value) => value != null && value > 0 && value <= 24) ?? null;
+      // When the columns cannot be trusted, the printed last value is kept only if it is a believable total for those times (no more than the
+      // start/finish span, and no more than 1.5 h below it for a break). Otherwise the span itself is used, and the row is flagged either way.
+      const span = Math.round(hoursBetween(start, finish, 0) * 100) / 100;
+      const lastValue = [...numeric].reverse().find((value) => value != null && value > 0 && value <= 24 && value >= span - 1.5 && value <= span + 0.25) ?? null;
       const stated = named.total ?? named.hours ?? (ambiguous ? lastValue : null);
       const hours = stated ?? computed;
       rows.push({
@@ -450,7 +453,7 @@ const HEADER_KEYS: Record<string, RegExp> = {
 };
 const isTitleLine = (line: string) => {
   const value = line.trim();
-  return value.length > 0 && value.length <= 40 && !/\d/.test(value) && new RegExp(String.raw`\b${DOCKET_LABEL}\b`, "i").test(value);
+  return value.length > 0 && value.length <= 40 && !/[\d:]/.test(value) && new RegExp(String.raw`\b${DOCKET_LABEL}\b`, "i").test(value);
 };
 
 /** Index (into `lines`) where a docket's own block starts: its identity line plus the header lines and title directly above it. */
@@ -477,25 +480,41 @@ export function splitDocketText(rawText: string) {
   for (const line of lines) { lineStarts.push(offset); offset += line.length + 1; }
   const lineOf = (index: number) => lineStarts.findIndex((start, i) => index >= start && index < (lineStarts[i + 1] ?? Infinity));
 
-  const identityLines: number[] = [];
+  // A boundary is a different identity, or the same number starting a new document from a DIFFERENT supplier on the same page (a new title line
+  // whose issuer differs from the one above). The same number repeated by the same supplier (or with no supplier evidence) is not a boundary.
+  const boundaries: Array<{ line: number; start?: number }> = [];
   let current = "";
+  let previousLine = -1;
+  let blockHead = 0;
   for (const identity of docketIdentities(text)) {
-    if (identity.value === current) continue;
-    identityLines.push(lineOf(identity.index));
-    current = identity.value;
+    const line = lineOf(identity.index);
+    if (identity.value !== current) {
+      boundaries.push({ line });
+      current = identity.value;
+      blockHead = boundaries.length === 1 ? 0 : line;
+    } else {
+      const titleLine = lines.findIndex((value, i) => i > previousLine && i < line && isTitleLine(value));
+      if (titleLine >= 0 && compareIssuers(issuerKey(lines.slice(blockHead, titleLine).join("\n")), issuerKey(lines.slice(titleLine).join("\n"))) === "different") {
+        boundaries.push({ line, start: titleLine });
+        blockHead = titleLine;
+      }
+    }
+    previousLine = line;
   }
+  const identityLines = boundaries.map((boundary) => boundary.line);
   if (identityLines.length < 2) return [text];
 
   // Header-first pages print client/project lines above the docket number; identity-first pages print them below it.
   const firstDirect = blockStartLine(lines, identityLines[0], true);
   const headerFirst = lines.slice(firstDirect, identityLines[0]).some((line) => HEADER_LINE.test(line.trim()));
-  const starts = identityLines.map((line, index) => index === 0 ? 0 : Math.max(blockStartLine(lines, line, headerFirst), identityLines[index - 1] + 1));
+  const starts = boundaries.map((boundary, index) => index === 0 ? 0 : boundary.start ?? Math.max(blockStartLine(lines, boundary.line, headerFirst), identityLines[index - 1] + 1));
   const commonLines = lines.slice(0, identityLines[0]);
   const common = commonLines.join("\n");
   const segments = starts.map((start, index) => {
     const body = lines.slice(start, starts[index + 1] ?? lines.length);
     if (index === 0) return body.join("\n").trim();
-    if (!common || common.length >= 700) return body.join("\n").trim();
+    // A block that begins with its own title (another supplier's whole document) has its own header and inherits nothing.
+    if (!common || common.length >= 700 || boundaries[index].start !== undefined) return body.join("\n").trim();
     const inherited: string[] = [];
     const kept = commonLines.filter((line) => {
       const key = Object.entries(HEADER_KEYS).find(([, pattern]) => pattern.test(line.trim()))?.[0];
@@ -551,7 +570,7 @@ export function parseDocket(
   const inheritedHeader = text.match(/^\[inherited from page header: ([^\]]+)\]/m)?.[1];
   if (inheritedHeader) inferred.push(`${inheritedHeader} taken from the page header shared by several dockets`);
   const tableWarnings = [
-    table.ambiguous && "resource table columns could not be matched reliably; printed totals were kept as read and break/travel were not inferred",
+    table.ambiguous && "resource table columns could not be matched reliably; a printed total was kept only where it fits the start/finish times, otherwise the start/finish span without a break was used, and break/travel were not inferred",
     table.rows.some((row) => row.mismatch) && `${table.rows.filter((row) => row.mismatch).length} resource row(s) show a total that differs from start/finish minus break; the printed total was kept`,
   ].filter(Boolean) as string[];
   const crew = labourRows.length ? [...new Set(labourRows.map((row) => row.name.replace(/\s*\(.*?\)\s*/g, " ").trim()))].join(", ").slice(0, 160) : readableField(text, [
@@ -710,7 +729,10 @@ export function docketCandidateScore(candidate:DocketCandidate) {
   const d=parseDocket(candidate.text,'',candidate.confidence);
   return (d.docketNo!=='UNREAD'?30:0)+(d.client?20:0)+(d.project?10:0)
     +((d.fieldConfidence?.workDate||0)>20?15:0)+(d.vehicle?8:0)+(d.poNumber?8:0)
-    +(d.startTime&&d.finishTime?10:0)+Math.max(0,candidate.confidence)*0.2;
+    +(d.startTime&&d.finishTime?10:0)
+    // Quantitative evidence (resource rows, hours, quantity) is worth more than a clean header: a read without it must not beat one that has it.
+    +(d.lineItems?.some(i=>i.kind==='labour')?25:0)+(d.labourHours>0?10:0)+(d.quantity>0?10:0)
+    +Math.max(0,candidate.confidence)*0.2;
 }
 
 export function parseDocketPage(candidates:DocketCandidate[],fileName:string,context:SourceContext={}) {
@@ -734,6 +756,9 @@ export function parseDocketPage(candidates:DocketCandidate[],fileName:string,con
     if(groups[0].length===1&&groups.slice(1).some(g=>g.length===1&&g[0].docketNo!=='UNREAD'&&primary.docketNo!=='UNREAD'&&g[0].docketNo!==primary.docketNo)){
       result.fieldConfidence.docketNo=35;result.status='review';evidence.push('OCR passes disagree on docket number; verify original');
     }
+    // Never drop quantitative evidence silently: another read of this page has labour rows or hours the chosen read lacks.
+    {const richer=groups.slice(1).flatMap(group=>group).find(d=>(d.docketNo===primary.docketNo||groups[0].length===1)&&d.lineItems?.some(i=>i.kind==='labour')&&!primary.lineItems?.some(i=>i.kind==='labour'));
+     if(richer)evidence.push(`another read of this page has ${richer.lineItems?.filter(i=>i.kind==='labour').length||0} labour row(s) and ${richer.labourHours} labour hours that the chosen read does not; they were not copied, check the hours against the original`);}
     if(evidence.length){result.notes=primary.notes+' '+evidence.join('. ');result.confidence=Math.min(result.confidence,75);result.warnings=[...(primary.warnings||[]),...evidence.map(e=>e.replace(/\.?$/,'.'))];result.status='review';}
     return result;
   });
@@ -893,3 +918,27 @@ const appendWarnings = (notes: string, all: string[], own: string[]) => {
   const extra = all.filter((warning) => !notes.includes(warning) && !own.includes(warning));
   return extra.length ? `${notes} ${extra.join(" ")}`.trim() : notes;
 };
+
+// ---- Matching a re-read file back to a saved record ---------------------------------------------------------------------------
+/**
+ * Which re-read docket is the saved one? By source provenance first (page and section), then supplier identity, then the docket number. The
+ * number alone is never enough: two suppliers can use the same one. If more than one docket still fits, nothing is chosen: the caller must ask.
+ */
+export function matchReprocessedDocket(found: DocketRecord[], saved: { docketNo?: string; sourcePage?: number; sourceCrop?: string; rawText?: string }) {
+  const sameSection = found.filter((d) => saved.sourcePage != null && d.sourcePage === saved.sourcePage && d.sourceCrop === saved.sourceCrop);
+  const samePage = found.filter((d) => saved.sourcePage != null && d.sourcePage === saved.sourcePage);
+  const coversPage = found.filter((d) => saved.sourcePage != null && (d.pages ?? [d.sourcePage]).includes(saved.sourcePage));
+  let pool = sameSection.length ? sameSection : samePage.length ? samePage : coversPage.length ? coversPage : found;
+  if (saved.rawText && pool.length > 1) {
+    const mine = issuerKey(saved.rawText);
+    const compatible = pool.filter((d) => compareIssuers(mine, issuerKey(d.rawText)) !== "different");
+    if (compatible.length) pool = compatible;
+    const same = pool.filter((d) => compareIssuers(mine, issuerKey(d.rawText)) === "same");
+    if (same.length) pool = same;
+  }
+  if (saved.docketNo && saved.docketNo !== "UNREAD" && pool.length > 1) {
+    const byNumber = pool.filter((d) => d.docketNo.toUpperCase() === saved.docketNo!.toUpperCase());
+    if (byNumber.length) pool = byNumber;
+  }
+  return { match: pool.length === 1 ? pool[0] : undefined, candidates: pool, ambiguous: pool.length > 1 };
+}

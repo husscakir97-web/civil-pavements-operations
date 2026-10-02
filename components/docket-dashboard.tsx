@@ -53,6 +53,7 @@ import {can} from '@/lib/platform/permissions';
 import {
   parseDocket,
   parseDocketDocument,
+  matchReprocessedDocket,
   isReadablePdfText,
   docketCandidateScore,
   type DocketCandidate,
@@ -328,7 +329,8 @@ async function readPdf(
     });
     pages.push({
       text: result.text,
-      candidates: [...(result.candidates||[result]), ...(embeddedText.trim()?[{text:embeddedText,confidence:99}]:[])],
+      // Run OCR: the native text is comparison-only (see nativeText below) and never competes with what OCR read.
+      candidates: [...(result.candidates||[result]), ...(!options.forceOcr&&embeddedText.trim()?[{text:embeddedText,confidence:99}]:[])],
       confidence: result.confidence,
       pageNumber,
       pageCount: pdfDocument.numPages,
@@ -383,6 +385,7 @@ export function DocketDashboard() {
   // The dockets actually created by this upload (as returned by the server), shown for review.
   const [uploadedRecords, setUploadedRecords] = useState<Docket[]>([]);
   // After "Run OCR" on a PDF with readable text: the native text and what each read produced, for side-by-side review.
+  const [reprocessChoice, setReprocessChoice] = useState<{ record: Docket; candidates: Docket[]; forceOcr: boolean; nativeText: string; nativeFound: Docket[] } | null>(null);
   const [compare, setCompare] = useState<{ nativeText: string; native?: Docket; ocr: Docket } | null>(null);
   const [editing, setEditing] = useState<Docket | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -696,6 +699,16 @@ export function DocketDashboard() {
     }
   }
 
+  // Opens the re-read docket as a REVIEW DRAFT only. The saved record is not touched until the user saves it.
+  function finishReprocess(record: Docket, parsed: Docket, forceOcr: boolean, nativeText: string, nativeFound: Docket[]) {
+    // The PDF's own text is kept for comparison with what OCR read; it is never applied to the record.
+    const nativeMatch = matchReprocessedDocket(nativeFound, { docketNo: parsed.docketNo, sourcePage: parsed.sourcePage, sourceCrop: parsed.sourceCrop, rawText: parsed.rawText }).match;
+    setCompare(forceOcr && nativeText ? { nativeText, native: nativeMatch, ocr: parsed } : null);
+    if(!window.confirm('Review newly extracted fields? This replaces the open draft only. Saved values remain unchanged until you choose Save changes.'))return;
+    setEditing({...record,...parsed,workDate:parsed.workDate||record.workDate,id:record.id,status:'review',links:record.links,notes:parsed.notes+' New OCR draft from original source; review before saving.'});
+    toast.success(forceOcr?'OCR draft ready. Compare it with the PDF text, then check the fields before saving.':'New OCR draft ready. Check the fields before saving.');
+  }
+
   async function docketAction(action: string, record: Docket) {
     if(action==='reparse'){
       if(!record.rawText.trim()){toast.error('No saved OCR text. Use Reprocess to scan the original.');return;}
@@ -722,16 +735,14 @@ export function DocketDashboard() {
       const pages=file.type==='application/pdf'?await readPdf(file,getWorker,()=>{},()=>{},{forceOcr}):[{...await recogniseDocketCanvas(await getWorker(),await imageToCanvas(file),()=>{}),pageNumber:1,pageCount:1}];
       // Whole-file assembly, so a docket that spans pages is read as one. The matching docket is chosen by number, then by its first page.
       const found=parseDocketDocument(pages,record.sourceName);
-      const parsed=(record.docketNo&&record.docketNo!=='UNREAD'?found.find(d=>d.docketNo.toUpperCase()===record.docketNo.toUpperCase()):undefined)??found.find(d=>d.sourcePage===(record.sourcePage||1));
-      if(!parsed)throw new Error('No readable text found. Saved data is unchanged.');
-      // The PDF's own text is kept for comparison with what OCR read; it is never applied to the record.
+      // Which docket in the re-read file is this record? Provenance (page/section), then supplier, then number. If more than one fits, ask: never guess.
+      const matched=matchReprocessedDocket(found,record);
+      if(!matched.candidates.length)throw new Error('No readable text found. Saved data is unchanged.');
       const nativePages=pages.filter(p=>p.nativeText);
       const nativeFound=nativePages.length?parseDocketDocument(nativePages.map(p=>({text:p.nativeText as string,confidence:99,pageNumber:p.pageNumber,pageCount:p.pageCount,method:'pdf-text'})),record.sourceName):[];
-      const nativeMatch=nativeFound.find(d=>d.docketNo===parsed.docketNo)??nativeFound.find(d=>d.sourcePage===parsed.sourcePage);
-      setCompare(forceOcr&&nativePages.length?{nativeText:nativePages.map(p=>`[page ${p.pageNumber}]\n${p.nativeText}`).join('\n'),native:nativeMatch,ocr:parsed}:null);
-      if(!window.confirm('Review newly extracted fields? This replaces the open draft only. Saved values remain unchanged until you choose Save changes.'))return;
-      setEditing({...record,...parsed,workDate:parsed.workDate||record.workDate,id:record.id,status:'review',links:record.links,notes:parsed.notes+' New OCR draft from original source; review before saving.'});
-      toast.success(forceOcr?'OCR draft ready. Compare it with the PDF text, then check the fields before saving.':'New OCR draft ready. Check the fields before saving.');
+      const nativeText=nativePages.map(p=>`[page ${p.pageNumber}]\n${p.nativeText}`).join('\n');
+      if(matched.ambiguous){setReprocessChoice({record,candidates:matched.candidates,forceOcr,nativeText,nativeFound});toast.info('More than one docket in the file fits this record. Choose which one to use; nothing has been changed.');return;}
+      finishReprocess(record,matched.match as Docket,forceOcr,nativeText,nativeFound);
     } catch(e) { toast.error(e instanceof Error?e.message:'Reprocessing failed. Saved data is unchanged.'); }
     finally { if(worker)await (worker as OcrWorker).terminate(); }
   }
@@ -1089,6 +1100,26 @@ export function DocketDashboard() {
         </div>
       </div>
 
+      <Dialog open={!!reprocessChoice} onOpenChange={(open) => !open && setReprocessChoice(null)}>
+        <DialogContent className="sm:max-w-lg" data-testid="reprocess-choice">
+          <DialogHeader>
+            <DialogTitle>Which docket is this record?</DialogTitle>
+            <DialogDescription>The file holds more than one docket that could be this one. Choose the one to open as a review draft; the saved record is not changed until you save it.</DialogDescription>
+          </DialogHeader>
+          <ul className="space-y-2">
+            {(reprocessChoice?.candidates ?? []).map((candidate, index) => (
+              <li key={index} className="flex items-center justify-between gap-3 rounded-lg border p-3 text-sm">
+                <div className="min-w-0">
+                  <p className="font-medium">Docket {candidate.docketNo} · {candidate.sourceCrop?.startsWith("pages-") ? `pages ${candidate.sourceCrop.replace("pages-", "").split("+").join(", ")}` : `page ${candidate.sourcePage ?? "?"}`}</p>
+                  <p className="truncate text-xs text-slate-500">{[candidate.client, candidate.project].filter(Boolean).join(" — ") || "Client and project not read"}{candidate.labourHours ? ` · ${candidate.labourHours} labour hrs` : ""}</p>
+                </div>
+                <Button size="xs" variant="outline" onClick={() => { const choice = reprocessChoice; setReprocessChoice(null); if (choice) finishReprocess(choice.record, candidate, choice.forceOcr, choice.nativeText, choice.nativeFound); }}>Use this one</Button>
+              </li>
+            ))}
+          </ul>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={uploadOpen} onOpenChange={(open) => !processing && setUploadOpen(open)}>
         <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
@@ -1241,6 +1272,7 @@ export function DocketDashboard() {
                       ))}
                     </tbody>
                   </table>
+                  {(compare.native?.labourHours ?? 0) > 0 && !(compare.ocr.labourHours > 0) && <p role="alert" className="mt-2 rounded bg-amber-100 p-2 text-xs font-medium text-amber-900">The PDF text has {compare.native?.labourHours} labour hours that OCR did not read. Nothing was copied; enter the hours from the original if they are right.</p>}
                   <details className="mt-2"><summary className="cursor-pointer text-xs font-medium text-blue-900">Show the PDF text</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-white p-2 text-[11px]" data-testid="native-text">{compare.nativeText}</pre></details>
                 </div>
               )}

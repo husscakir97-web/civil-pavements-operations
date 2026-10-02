@@ -53,3 +53,12 @@ keeps honouring it. The PDF's own text is kept beside the OCR result in a compar
 - `PUT /api/dockets` locks the docket row in a transaction and rejects (409) a save whose `expectedUpdatedAt` is not the current version, so a stale editor cannot overwrite corrections or
   undo an approval. `GET /api/dockets?id=` returns the current record (own organisation only); the review dialog and the upload list always load it from there.
 - A work date is required for **ready** and **approved** on create (`POST`, whole batch rejected before anything is written), update (`PUT`) and in the cost seam. Rejections write nothing.
+
+## Review round 3
+- **Same page, same number, different supplier.** A repeated number is a new docket when a new title line starts a block whose issuer (ABN, else the first plain line) differs from the one above;
+  both records are flagged. The same supplier repeating its number or title, or a `continued` block, is still one docket.
+- **Reprocess finds its own docket.** The re-read file is matched to the saved record by provenance (page and section), then supplier identity, then docket number, never by number alone.
+  If more than one docket still fits, a chooser asks; nothing is guessed and nothing changes until the user saves the draft.
+- **Run OCR keeps native text comparison-only.** It is not an extraction candidate; the comparison panel shows both reads and warns when the PDF text has hours OCR did not read. Outside Run
+  OCR, candidate scoring counts resource rows, hours and quantity, and a chosen read that lacks resource rows another read has is flagged (nothing is copied in).
+- **Damaged table rows** (e.g. a row split by OCR) are not given a stray break value as their total: the start/finish span is used and the table is flagged.

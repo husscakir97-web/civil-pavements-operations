@@ -6,7 +6,7 @@ import ts from 'typescript';
 
 const load=file=>ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;
 const parser=await import(`data:text/javascript;base64,${Buffer.from(load('../lib/docket-parser.ts')).toString('base64')}`);
-const {parseDocket,splitDocketText,parseDocketDocument,parseDocketPage,isReadablePdfText,docketIdentities}=parser;
+const {parseDocket,splitDocketText,parseDocketDocument,parseDocketPage,isReadablePdfText,docketIdentities,matchReprocessedDocket}=parser;
 const works=readFileSync(new URL('./fixtures/dockets/works-docket-1p.txt',import.meta.url),'utf8').trim();
 const lines=works.split('\n');
 
@@ -92,7 +92,7 @@ const makeReader=(textLayer)=>{let ocr=0;const fakePage={getTextContent:async()=
 // ---- Mixed PDFs: an explicit local "Run OCR" runs OCR on readable-label pages, keeps the native text and records the choice.
 {const r=makeReader(labelsOnly);const pages=await r.read({forceOcr:true});
  assert.equal(r.ocrCalls(),1,'Run OCR scans a page even though its text is readable');assert.equal(pages[0].method,'local-ocr:run');assert.equal(pages[0].nativeText,labelsOnly,'the native text is kept for comparison');
- assert(pages[0].candidates.some(c=>c.text===labelsOnly),'the native text stays a candidate so differences are flagged');
+ assert(!pages[0].candidates.some(c=>c.text===labelsOnly),'in Run OCR mode the native text is comparison-only: it is not an extraction candidate');
  const normal=makeReader(labelsOnly);const np=await normal.read();assert.equal(normal.ocrCalls(),0);assert.equal(np[0].method,'pdf-text');
  const records=parseDocketDocument(pages,'mixed.pdf');assert.equal(records[0].extractionMethod,'local-ocr:run','the choice is stored with the record');
  assert.equal(parseDocketDocument(np,'mixed.pdf')[0].extractionMethod,'pdf-text');}
@@ -190,11 +190,81 @@ const warned=(r,re)=>assert((r.warnings||[]).some(w=>re.test(w))||re.test(r.note
  // duplicate column names are ambiguous
  const dup=works.replace('Start  Finish  First  Travel  LAFHA  Total\non site  on site  Break','Start  Finish  Break  Break  LAFHA  Total');
  const dd=parseDocket(dup,'d.pdf',99);assert.equal(dd.labourHours,30);warned(dd,/columns/i);
+ // a row split by OCR leaves one stray value: it is not taken as the total (0.50 is a break), the span is used and the table is flagged
+ const split=works.replace('TC  : Alex Example  23/09 7:00  17:30  0.50  0.05  -  10.00','TC  : Alex Example  23/09 7:00  17:30  0.50');
+ const sp=parseDocket(split,'s.pdf',99);assert.equal(sp.labourHours,30.5,'span 10.5 for the damaged row plus two printed 10-hour rows');assert.equal(sp.status,'review');warned(sp,/columns/i);assert(sp.lineItems.filter(i=>i.kind==='labour').every(i=>i.quantity>=10));
  // printed total disagrees with the times: the printed total is kept and flagged
  const off=works.replace('0.50  0.05  -  10.00','0.50  0.05  -  9.00');
  const o=parseDocket(off,'o.pdf',99);assert.equal(o.labourHours,29,'the printed total is not rewritten');warned(o,/differ|times/i);assert.equal(o.status,'review');
  // the original layout is untouched
  assert.equal(parseDocket(works,'w.pdf',99).labourHours,30);assert(!/columns could not/i.test(parseDocket(works,'w.pdf',99).notes));
+}
+
+
+// ======================= Review round 3 =======================
+const supplierB=works.replace('Example Traffic Services','Other Supplier Pty Ltd').replace('ABN  00 000 000 000','ABN  11 111 111 111').replace('Example Builder Group','Other Builder Group').replace('Sample Road Upgrade Stage 2','Other Road Works').replace('0.50  0.05  -  10.00','0.50  0.05  -  9.50').replace('0.50  3.00  -  10.00','0.50  3.00  -  9.50').replace('0.50  2.00  -  10.00','0.50  2.00  -  9.50');
+{// 1. two complete dockets from different suppliers sharing a number on ONE page
+ const onePage=`${works}\n${supplierB}`;
+ assert.equal(splitDocketText(onePage).length,2,'a different supplier starts a new docket even with the same number');
+ const records=parseDocketDocument([page(onePage,1,1)],'same-page.pdf');
+ assert.equal(records.length,2);assert.deepEqual(records.map(r=>r.docketNo),['9042','9042']);
+ assert.deepEqual(records.map(r=>r.client),['Example Builder Group','Other Builder Group'],'each keeps its own header');assert.deepEqual(records.map(r=>r.labourHours),[30,28.5]);
+ assert(records.every(r=>r.status==='review'),'both are flagged');records.forEach(r=>warned(r,/same docket number/i));
+ assert.deepEqual(records.map(r=>r.sourceCrop),['section-1-of-2','section-2-of-2']);
+ // supplier identity by name when there is no ABN
+ const noAbn=t=>t.replace(/^ABN .*\n/m,'');
+ assert.equal(splitDocketText(`${noAbn(works)}\n${noAbn(supplierB)}`).length,2,'supplier names are enough when neither has an ABN');
+ // genuine continuation of the same supplier on the same page is still one docket
+ assert.equal(splitDocketText(`${works}\nWORKS DOCKET (continued)\nDocket number: 9042\nPage 2 of 2\nTC  : Quinn Continued  24/09 7:00  15:00  0.50  -  -  7.50`).length,1);
+ assert.equal(splitDocketText(`${works}\nWORKS DOCKET\nDocket number: 9042`).length,1,'the same supplier repeating its number and title is not a new docket');
+ assert.equal(splitDocketText(`${works}\nWORKS DOCKET\nExample Traffic Services\nABN  00 000 000 000\nDocket number: 9042`).length,1,'the same ABN is the same supplier');
+ // a page-spanning pair stays separate across pages as before
+ assert.equal(parseDocketDocument([page(works,1,2),page(supplierB,2,2)],'x.pdf').length,2);
+}
+
+{// 2. Reprocess matching: provenance and supplier first, the number alone never
+ const found=parseDocketDocument([page(works,1,2),page(supplierB,2,2)],'x.pdf');
+ assert.deepEqual(found.map(r=>[r.docketNo,r.sourcePage,r.client]),[['9042',1,'Example Builder Group'],['9042',2,'Other Builder Group']]);
+ const old=found.find(d=>d.docketNo.toUpperCase()==='9042');assert.equal(old.sourcePage,1,'the old number-first selection would pick supplier A');
+ const savedB={docketNo:'9042',sourcePage:2,sourceCrop:'full-page',rawText:supplierB};
+ const b=matchReprocessedDocket(found,savedB);assert.equal(b.ambiguous,false);assert.equal(b.match.client,'Other Builder Group','supplier B is matched to B');
+ const savedA=matchReprocessedDocket(found,{docketNo:'9042',sourcePage:1,sourceCrop:'full-page',rawText:works});assert.equal(savedA.match.client,'Example Builder Group');
+ // an earlier wrong extraction (UNREAD, wrong crop) still matches by page
+ assert.equal(matchReprocessedDocket(found,{docketNo:'UNREAD',sourcePage:2,sourceCrop:'section-1-of-1',rawText:'garbled'}).match.client,'Other Builder Group');
+ // supplier identity breaks a tie that provenance cannot (both dockets on the same page with the same number)
+ const sameDoc=parseDocketDocument([page(`${works}\n${supplierB}`,1,1)],'x.pdf');
+ assert.equal(matchReprocessedDocket(sameDoc,{docketNo:'9042',sourcePage:1,sourceCrop:'full-page',rawText:supplierB}).match.client,'Other Builder Group');
+ // no provenance and no supplier evidence: ambiguous, nothing chosen
+ const none=matchReprocessedDocket(found,{docketNo:'9042'});assert.equal(none.match,undefined);assert.equal(none.ambiguous,true);assert.equal(none.candidates.length,2);
+ assert.equal(matchReprocessedDocket([],{docketNo:'9042'}).candidates.length,0);
+ // the dashboard uses the matcher and asks when ambiguous
+ const source=readFileSync(new URL('../components/docket-dashboard.tsx',import.meta.url),'utf8');
+ assert(source.includes('matchReprocessedDocket(found,record)')&&source.includes('if(matched.ambiguous){setReprocessChoice('),'Reprocess uses provenance and asks when ambiguous');
+ assert(!/found\.find\(d=>d\.docketNo\.toUpperCase\(\)===record\.docketNo\.toUpperCase\(\)\)/.test(source),'no number-first selection remains');
+ assert(source.includes('data-testid="reprocess-choice"'));
+}
+
+{// 3. Run OCR: native text is comparison-only; quantitative evidence is never discarded silently
+ const nativeHeader=works.split('\n').filter(l=>!/^(TC|Ute)\s*:/.test(l)).join('\n')+'\nWork date: 23/09/2026\nStart: 07:00\nFinish: 17:30\nVehicle: TST01A';
+ // the harness: native readable text with complete headers/times and no rows, OCR text with the scanned rows
+ const makeMixed=()=>{const fakePage={getTextContent:async()=>({items:[]}),getViewport:()=>({width:100,height:100}),render:()=>({promise:Promise.resolve()})};
+  const win={pdfjsLib:{getDocument:()=>({promise:Promise.resolve({numPages:1,getPage:async()=>fakePage})})}};
+  return new Function('window','document','loadPdfReader','textFromPdfItems','hasUsefulPdfText','recogniseDocketCanvas','PDF_READER_OPTIONS',`${functionJs}; return readPdf;`)(win,{createElement:()=>({getContext:()=>({})})},async()=>{},()=>nativeHeader,isReadablePdfText,async()=>({text:works,confidence:80,score:1,candidates:[{text:works,confidence:80}]}),{isEvalSupported:false});};
+ const read=makeMixed();
+ const forced=await read({arrayBuffer:async()=>new ArrayBuffer(0)},async()=>({}),()=>{},()=>{},{forceOcr:true});
+ assert.equal(forced[0].nativeText,nativeHeader,'the native text is kept for comparison');assert(!forced[0].candidates.some(c=>c.text===nativeHeader),'but is not an extraction candidate');
+ const forcedRecord=parseDocketDocument(forced,'mixed.pdf')[0];
+ assert.equal(forcedRecord.labourHours,30,'the scanned rows give the totals');assert.equal(forcedRecord.lineItems.filter(i=>i.kind==='labour').length,3);assert.equal(forcedRecord.lineItems.filter(i=>i.kind==='travel').reduce((n,i)=>n+i.quantity,0),5.05);assert.equal(forcedRecord.extractionMethod,'local-ocr:run');
+ // the old behaviour (native competing at 99) lost the rows: 10.5 hours, no rows
+ const competing=parseDocketPage([{text:works,confidence:80},{text:nativeHeader,confidence:99}],'x.pdf',{pageNumber:1,pageCount:1})[0];
+ assert.equal(competing.labourHours,30,'even when the native text does compete, the read with resource rows wins');
+ // nothing is dropped silently: the chosen read lacks hours that another read has
+ const headerOnly='Docket No: R-5\nClient: Example Civil\nProject: Test Road\nDate: 14/09/2026\nStart: 07:00\nFinish: 15:00';
+ const rowsOnly='TC  : Pat Example  14/09 7:00  15:00  0.50  -  -  7.50\nWorker:  Pat Example';
+ const flagged=parseDocketPage([{text:headerOnly,confidence:99},{text:rowsOnly,confidence:70}],'x.pdf',{pageNumber:1,pageCount:1})[0];
+ assert.equal(flagged.status,'review');warned(flagged,/another read of this page has/i);assert.notEqual(flagged.labourHours,7.5,'unseen rows are not copied in');
+ // unknown stays unknown, not a silent zero total: no rows anywhere
+ const unknown=parseDocket('Docket No: R-6\nClient: Example Civil\nProject: Test Road\nDate: 14/09/2026','x.pdf',99);assert.equal(unknown.labourHours,0,'no rows and no times: no hours are invented');
 }
 
 console.log('Passed: docket accuracy — identities not headings, work vs sign-off date, job/contract references, resource rows and travel, readable digital text without OCR, continuation and multi-docket assembly, scanned alternates, existing layouts.');

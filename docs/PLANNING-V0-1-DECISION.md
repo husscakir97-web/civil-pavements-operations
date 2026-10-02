@@ -36,6 +36,8 @@ Dated leave, resource reservations/bookings, optimisation, real-time co-editing,
 - `test:migration-recovery`: real runner for 0026 (fresh install, upgrade from 0025, `organisation_id` + index on all eight tables, unknown stays `NULL`, idempotent restart). `test:planning` (`scripts/planning-journey.mjs`, production build, real MySQL-compatible database, 62 checks): server contract, redaction in JSON and CSV, ownership scope, tenant isolation, Estimating-only organisation, the full browser journey (create, add blocks, connect, drawer edits, drag, save, reload in flowchart and timeline, cycle refused, shared cost once, scenarios, stale save, approved estimate untouched) and desktop/390px overflow with screenshots inspected.
 - Full gate (security audit, lint, typecheck, `npm test`, pruned build, `test:fresh`, `test:migration-recovery`, `db:migrate` ×2, backfill, `test:mysql`, `test:v1`, connected-job driver) passed on the final code. `scripts/test-v1-logic.cjs` was updated for an intended rule: Planning appears under Pipeline for Estimating.
 
+- After merging the PR 62 corrections (head `2dc0472`) the application was rebuilt and `test:planning` rerun on the final PR 63 code: 62 passed, 0 failed; `test:migration-recovery` also passed. The merge changed only test scripts and documentation.
+
 ## Limitations of v0.1
 - No UI yet to link a plan to an estimate, tender or project, or to pick an existing worker/plant record (the API and schema accept and validate them).
 - Plan access is organisation or owner-only; no per-person sharing. No deletion of plans or scenarios (archive plan only through the API).

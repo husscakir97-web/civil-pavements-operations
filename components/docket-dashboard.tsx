@@ -47,7 +47,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import {loadPdfReader,loadTesseract,type OcrWorker} from '@/lib/document-readers';
+import {loadPdfReader,loadTesseract,PDF_READER_OPTIONS,type OcrWorker} from '@/lib/document-readers';
 import {PaidAiScan} from '@/components/paid-ai-scan';
 import {useWorkspaceBrand} from '@/components/workspace-brand';
 import {can} from '@/lib/platform/permissions';
@@ -277,13 +277,13 @@ function hasUsefulPdfText(text: string) {
 
 async function readPdf(
   file: File,
-  worker: OcrWorker,
+  getWorker: () => Promise<OcrWorker>,
   setOcrProgress: (handler: (message: { status: string; progress: number }) => void) => void,
   onProgress: (progress: number, message: string) => void,
 ) {
   await loadPdfReader();
   if (!window.pdfjsLib) throw new Error("PDF reader unavailable");
-  const pdfDocument = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const pdfDocument = await window.pdfjsLib.getDocument({ ...PDF_READER_OPTIONS, data: await file.arrayBuffer() }).promise;
   if (pdfDocument.numPages > 60) throw new Error("PDFs can contain up to 60 pages.");
   const pages: OcrPage[] = [];
   for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
@@ -319,7 +319,7 @@ async function readPdf(
         onProgress(Math.max(8, Math.round(pageProgress * 80)), `Scanning page ${pageNumber} of ${pdfDocument.numPages}`);
       }
     });
-    const result = await recogniseDocketCanvas(worker, canvas, (progress, message) => {
+    const result = await recogniseDocketCanvas(await getWorker(), canvas, (progress, message) => {
       passProgress = progress;
       const pageProgress = (pageNumber - 1 + progress) / pdfDocument.numPages;
       onProgress(Math.max(8, Math.round(pageProgress * 80)), `${message} — page ${pageNumber} of ${pdfDocument.numPages}`);
@@ -485,7 +485,8 @@ export function DocketDashboard() {
     const uploaded: Docket[] = [];
     let progressHandler: (message: { status: string; progress: number }) => void = () => undefined;
     let worker: OcrWorker | null = null;
-    try {
+    async function getWorker() {
+      if (worker) return worker;
       await loadTesseract();
       if (!window.Tesseract) throw new Error("OCR unavailable");
       worker = await window.Tesseract.createWorker("eng", 1, {
@@ -498,6 +499,9 @@ export function DocketDashboard() {
         legacyLang: true,
         logger: (message) => progressHandler(message),
       });
+      return worker;
+    }
+    try {
       for (const [fileIndex, item] of pending.entries()) {
         if (item.state === "done") continue;
         try {
@@ -514,7 +518,7 @@ export function DocketDashboard() {
                 });
               }
             };
-            const result = await recogniseDocketCanvas(worker, canvas, (progress, message) => {
+            const result = await recogniseDocketCanvas(await getWorker(), canvas, (progress, message) => {
               passProgress = progress;
               updatePending(item.id, {
                 progress: Math.max(8, Math.round(progress * 80)),
@@ -525,7 +529,7 @@ export function DocketDashboard() {
           } else if (item.file.type === "application/pdf") {
             pages = await readPdf(
               item.file,
-              worker,
+              getWorker,
               (handler) => { progressHandler = handler; },
               (progress, message) => updatePending(item.id, { progress, message }),
             );
@@ -566,7 +570,7 @@ export function DocketDashboard() {
     } catch {
       toast.error("OCR could not start. Check your connection and try again.");
     } finally {
-      if (worker) await worker.terminate().catch(() => undefined);
+      if (worker) await (worker as OcrWorker).terminate().catch(() => undefined);
       setProcessing(false);
     }
   }
@@ -656,11 +660,15 @@ export function DocketDashboard() {
       const response=await fetch('/api/dockets/file?id='+encodeURIComponent(record.id));
       if(!response.ok)throw new Error('The original file could not be opened.');
       const blob=await response.blob(), file=new File([blob],record.sourceName,{type:blob.type});
-      await loadTesseract();
-      if(!window.Tesseract)throw new Error('OCR could not load.');
-      worker=await window.Tesseract.createWorker('eng',1,{legacyCore:true,legacyLang:true,logger:()=>{}});
+      async function getWorker() {
+        if (worker) return worker;
+        await loadTesseract();
+        if(!window.Tesseract)throw new Error('OCR could not load.');
+        worker=await window.Tesseract.createWorker('eng',1,{legacyCore:true,legacyLang:true,logger:()=>{}});
+        return worker;
+      }
       toast.info('Reading the original document again…');
-      const pages=file.type==='application/pdf'?await readPdf(file,worker,()=>{},()=>{}):[{...await recogniseDocketCanvas(worker,await imageToCanvas(file),()=>{}),pageNumber:1,pageCount:1}];
+      const pages=file.type==='application/pdf'?await readPdf(file,getWorker,()=>{},()=>{}):[{...await recogniseDocketCanvas(await getWorker(),await imageToCanvas(file),()=>{}),pageNumber:1,pageCount:1}];
       const page=pages.find(p=>p.pageNumber===(record.sourcePage||1));
       if(!page)throw new Error('Source page was not found.');
       const sections=splitDocketText(page.text);
@@ -671,7 +679,7 @@ export function DocketDashboard() {
       setEditing({...record,...parsed,id:record.id,status:'review',links:record.links,notes:parsed.notes+' New OCR draft from original source; review before saving.'});
       toast.success('New OCR draft ready. Check the fields before saving.');
     } catch(e) { toast.error(e instanceof Error?e.message:'Reprocessing failed. Saved data is unchanged.'); }
-    finally { if(worker)await worker.terminate(); }
+    finally { if(worker)await (worker as OcrWorker).terminate(); }
   }
 
   const completedFiles = pending.filter((item) => item.state === "done").length;

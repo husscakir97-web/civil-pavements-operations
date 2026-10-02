@@ -88,3 +88,5 @@ try{
   assert.equal(await modifyColumnState(admin,'ALTER TABLE `asset_meter_readings` MODIFY `next_service` decimal(15,2) NOT NULL'),null,'only the supported target definition is recognised');
   assert.equal(parseModify('DROP TABLE x'),null);console.log('PASS recovery check is limited to the supported statement');}
 }finally{for(const n of created)await admin.query('DROP DATABASE IF EXISTS '+identifier(n)).catch(()=>{});await admin.end();}
+
+await import('./test-program-costing-migration.mjs');

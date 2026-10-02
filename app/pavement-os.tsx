@@ -44,6 +44,7 @@ const TendersView = dynamic(() => loaders.pipeline().then(m => m.TendersView), {
 const EstimatesQuotes = dynamic(() => loaders.estimates().then(m => m.EstimatesQuotes), { loading });
 const ProjectsView = dynamic(() => loaders.projects().then(m => m.ProjectsView), { loading });
 const OperationsPage = dynamic(() => loaders.operations().then(m => m.OperationsPage), { loading });
+const Planning = dynamic(() => import("@/components/v1/planning").then(m => m.Planning), { loading });
 const Program = dynamic(() => import("@/components/v1/program").then(m => m.Program), { loading });
 const Workshop = dynamic(() => import("@/components/v1/workshop").then(m => m.Workshop), { loading });
 const JobsPlanning = dynamic(() => import("@/components/jobs-planning").then(m => m.JobsPlanning), { loading });
@@ -165,7 +166,7 @@ function WorkspaceShell() {
   else if (k === "Home") content = <HomeV1 />;
   else if (k === "Today") content = <FieldToday />;
   else if (k === "CRM") content = <ClientsRegister key={route.id || "all"} initialQuery={route.id} />;
-  else if (k === "Pipeline") content = sub === "Tenders" ? <TendersView /> : sub === "Estimates" ? <EstimatesQuotes key={route.id || "all"} initialEstimateId={route.id} /> : <OpportunitiesView key={route.id || "all"} />;
+  else if (k === "Pipeline") content = sub === "Tenders" ? <TendersView /> : sub === "Planning" ? <Planning /> : sub === "Estimates" ? <EstimatesQuotes key={route.id || "all"} initialEstimateId={route.id} /> : <OpportunitiesView key={route.id || "all"} />;
   else if (k === "Projects") content = sub === "Programme" ? <Program /> : <ProjectsView />;
   else if (k === "Schedule") content = <JobsPlanning key={`schedule-${route.id || "all"}`} page="Planning" initialJobId={route.id} onBack={route.id ? () => navigate("Projects", "Projects", route.id) : undefined} />;
   else if (k === "Resources") content = sub === "Workshop" ? <Workshop /> : sub === "Crews" ? other(["crews"]) : sub === "Suppliers & Subcontractors" ? other(["suppliers", "subcontractors"]) : sub === "Depots" ? <DepotsArea /> : <ResourcesArea key={`${sub}-${route.id || ""}`} only initial={sub === "Plant & Equipment" ? "plant" : "workers"} initialQuery={route.id} />;

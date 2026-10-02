@@ -89,7 +89,7 @@ const areas=(role,mods)=>appNav.navFor(access(role,mods)).map(a=>a.key);
 const subs=(role,area,mods)=>(appNav.navFor(access(role,mods)).find(a=>a.key===area)?.subs||[]).map(s=>s.key);
 assert.deepEqual(areas('admin'),['Home','CRM','Pipeline','Projects','Schedule','Resources','Commercial','IMS & HSEQ','Documents','Reports','Admin']);
 assert(!areas('admin').some(k=>ENGINES.some(e=>e.key===k)),'no engine names in primary navigation');
-assert.deepEqual(subs('admin','Pipeline'),['Opportunities','Tenders','Estimates']);
+assert.deepEqual(subs('admin','Pipeline'),['Opportunities','Tenders','Estimates','Planning']);
 assert.deepEqual(subs('admin','Resources'),['People','Plant & Equipment','Crews','Suppliers & Subcontractors','Depots','Workshop']);
 assert.deepEqual(subs('admin','Documents'),['All Documents','Company Library'],'Documents opens with the cross-workspace file view, while Company Library remains separate');
 assert.deepEqual(areas('project_engineer'),['Home','Today','CRM','Projects','Schedule','Resources','IMS & HSEQ','Documents','Reports']);
@@ -106,7 +106,10 @@ assert.deepEqual(subs('admin','Reports',['ims']),['Lifecycle']);
 assert.deepEqual(areas('admin',['operations']),['Home','CRM','Schedule','Resources','Documents','Reports','Admin']);
 assert.deepEqual(subs('admin','Resources',['operations']),['People','Plant & Equipment','Crews','Suppliers & Subcontractors','Depots']);
 assert.deepEqual(areas('admin',['pipeline','estimating']),['Home','CRM','Pipeline','Documents','Reports','Admin']);
-assert.deepEqual(subs('admin','Pipeline',['estimating']),['Estimates']);
+assert.deepEqual(subs('admin','Pipeline',['estimating']),['Estimates','Planning']);
+// Planning v0.1 is Estimating-owned: a standalone estimator keeps it with every other module off; a role without estimating access never sees it.
+assert.deepEqual(subs('estimator','Pipeline',['estimating']),['Estimates','Planning']);
+assert(!subs('admin','Pipeline',['projects','commercial']).includes('Planning'),'Planning needs the Estimating module');
 assert.deepEqual(subs('admin','Admin',['ims']),['Company','Divisions','Civil Knowledge','Team & Permissions','Integrations','Settings'],'rates hidden without estimating');
 assert.equal(appNav.canOpen(access('site_engineer'),'Commercial'),false);assert.equal(appNav.canOpen(access('admin',['ims']),'Schedule'),false);
 // Legacy routes and bookmarks translate to the new areas, keeping record id and tab.

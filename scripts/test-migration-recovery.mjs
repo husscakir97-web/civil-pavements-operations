@@ -90,3 +90,4 @@ try{
 }finally{for(const n of created)await admin.query('DROP DATABASE IF EXISTS '+identifier(n)).catch(()=>{});await admin.end();}
 
 await import('./test-program-costing-migration.mjs');
+await import('./test-planning-migration.mjs');

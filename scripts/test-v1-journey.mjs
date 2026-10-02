@@ -594,7 +594,7 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
 
  // ---------------------------------------------------------------- Docket allocation (office-uploaded dockets carry no project)
  step='Docket allocation';
- {const org=memberA.organisation_id;
+ {const org=memberA.organisation_id,blockStart=new Date().toISOString();
   const mk=async(name,extra={})=>{const f=new FormData();f.set('records',JSON.stringify([{docketNo:`ALLOC-${name}-${suffix}`,workDate:today,client:'Supplier Pty Ltd',project:'Allocation test',amount:1000,lineItems:[{description:'AC14 asphalt supply',quantity:5,unit:'t',rate:200,amount:1000}],status:'review',...extra}]));return (await json(await call('/api/dockets','POST',f,A.cookie),200)).docket;};
   // Edits carry the version they were made against; by default the current stored version (stale-edit tests pass their own).
   const version=async id=>(await db.execute('SELECT updated_at FROM dockets WHERE id=?',[id]))[0][0]?.updated_at;
@@ -711,7 +711,8 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
    const [claimRes,moveRes]=await Promise.all([call('/api/commercial/claims','POST',{action:'create',projectId:pc,period:today.slice(0,7),lines:[{lineType:'docket',sourceId:d.id,thisClaim:1000}]},A.cookie),put(d,{links:{jobId:p3},allocationReason:'Racing the claim'})]);
    const final=(await db.execute('SELECT status,links FROM dockets WHERE id=?',[d.id]))[0][0],job=JSON.parse(final.links).jobId,[claimLines]=await db.execute("SELECT project_id FROM claim_lines WHERE source_id=? AND line_type='docket'",[d.id]);
    if(final.status==='included_claim'){assert.equal(job,pc,'a claimed docket stays in the claim project');assert.equal(claimLines.length,1);assert.equal(moveRes.status,409);assert.deepEqual(await actual(d.id),[[pc,'L1']]);}
-   else{assert.equal(job,p3,'the move won');assert.equal(claimLines.length,0,'no claim line for a docket that moved');assert.notEqual(claimRes.status,200);assert.deepEqual(await actual(d.id),[[p3,'L1@1']]);}}
+   else{assert.equal(job,p3,'the move won');assert.equal(claimLines.length,0,'no claim line for a docket that moved');assert.notEqual(claimRes.status,200);assert.deepEqual(await actual(d.id),[[p3,'L1@1']]);}
+   await db.execute('DELETE FROM claim_lines WHERE organisation_id=? AND project_id=?',[org,pc]);await db.execute('DELETE FROM progress_claims WHERE organisation_id=? AND project_id=?',[org,pc]);}
   // Closure: allocation into a project that is closing waits for the project lock and then sees it closed.
   {const d=await mk('closing');const holder=await connect();
    try{await holder.query('START TRANSACTION');await holder.query('SELECT id FROM jobs WHERE organisation_id=? AND id=? FOR UPDATE',[org,p3]);
@@ -754,6 +755,8 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
    const ok=await json(await put(d,{links:{jobId:p1}},accounts.cookie),200);assert.deepEqual(await stored(d.id),{jobId:p1});
    const q2=await json(await call('/api/dockets?unallocated=1','GET',undefined,accounts.cookie),200);assert(!q2.dockets.some(x=>x.id===d.id),'allocated: gone from the queue');
    const au=await audits('docket.allocated',d.id);assert.equal(au.length,1);}
+  // This block writes many docket audit rows; remove them so the later audit-feed checks (latest 200 events) still see the platform events they assert.
+  await db.execute("DELETE FROM audit_log WHERE organisation_id=? AND entity_type IN ('docket','project') AND created_at>=? AND event_type LIKE 'docket.%'",[org,blockStart]);
  }
  // ---------------------------------------------------------------- Scenario G
  step='G tenant attack';

@@ -250,13 +250,11 @@ async function handlePUT(request: Request) {
       if (jobOf(stored) !== firstFrom) throw new Refusal("This docket's project changed while you were saving. Reload it and try again.", 409);
       const allocation = nextAllocationLinks(stored, sent ?? stored);
       const reason = cleanText(raw.allocationReason, 500);
-      const unapproving = previous.status === "approved" && record.status !== "approved";
-      // A stale form must not overwrite someone else's allocation or status: changes to the project, or leaving Approved, carry the version they were made against.
-      if (allocation.changed || unapproving) {
-        const expected = cleanText(raw.expectedUpdatedAt, 64);
-        if (!expected) throw new Refusal("Reload the docket before changing its project or status (expectedUpdatedAt is required).", 422);
-        if (expected !== String(previous.updatedAt ?? "")) throw new Refusal("This docket was changed by someone else since you opened it. Reload it and try again.", 409);
-      }
+      // A stale form must not overwrite someone else's allocation or status: a change of project requires the version it was made against, and any
+      // request that supplies one is checked against the locked row.
+      const expected = cleanText(raw.expectedUpdatedAt, 64);
+      if (allocation.changed && !expected) throw new Refusal("Reload the docket before changing its project (expectedUpdatedAt is required).", 422);
+      if (expected && expected !== String(previous.updatedAt ?? "")) throw new Refusal("This docket was changed by someone else since you opened it. Reload it and try again.", 409);
       if (allocation.changed) {
         if (allocation.to) {
           const job = jobs.find((j) => j.id === allocation.to);

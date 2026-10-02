@@ -14,3 +14,21 @@ Office-uploaded dockets (OCR / scans) carry no project (`links: {}`); field dock
 - Shift picker and category-aware accrual netting (a docket that references a shift still suppresses that shift's whole field-record accrual).
 - GST basis and explicit docket-line categories (still regex-assigned).
 - Labelling of cost figures as incomplete operational cost; a remaining-work forecast.
+
+## Concurrency and consistency
+
+Saving a docket is one database transaction that locks, in a fixed order, the project rows involved (by id) and then the docket, and re-reads
+everything under those locks. Claims and project closure lock the project first too, so a reallocation, a claim and a closure cannot interleave:
+
+- **Stale edits.** Changing the project requires `expectedUpdatedAt` (the docket's last-updated stamp when the form was opened); any request that
+  sends it is checked against the locked row. A stale form gets 409 and changes nothing, so it cannot overwrite a newer allocation, its history or a claim status.
+  The docket row update also requires the status it was read with.
+- **Concurrent reallocations.** One wins; the other gets 409. The ledger has one set of current rows and one history step.
+- **Claims.** A claim locks the project, takes only dockets that are still approved and in that project, and fails (409, rolled back) if any selected docket changed.
+  A docket in a claim cannot be moved or returned to review (409).
+- **Closure.** Allocating into a project that closes first is refused (409); moving posted cost out of a closed project is refused for any resulting status.
+- **Approved → Review with a move or clear.** Needs a reason and `docket.approve`, reverses the posted cost (history kept) and writes the same `docket.reallocated` audit
+  (before/after project, reason, "returned to review").
+- **Projects disabled or read-only.** Moving or clearing a posted allocation is refused (409) before anything is written: the docket, ledger and audit are unchanged.
+
+Tests: the "Docket allocation" block in `scripts/test-v1-journey.mjs` (real MySQL: parallel PUTs, project-lock interleaving with a claim and with closure, claim vs move race).

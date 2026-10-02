@@ -41,7 +41,7 @@ The driver signs up a fresh throwaway user via `/api/auth/sign-up/email` from th
 
 API-only: `curl -X POST localhost:3100/api/auth/sign-up/email -H 'content-type: application/json' -H 'origin: http://localhost:3100' -d '{"name":"x","email":"x@example.invalid","password":"Very-strong-test-password-42"}'` returns a session cookie (`better-auth.session_token`); mutating requests need the matching `origin` header (CSRF check).
 
-Stop: `pkill -f "next start"; mysqladmin -uroot shutdown`.
+Stop: `fuser -k 3100/tcp; mysqladmin -uroot shutdown` (not `pkill -f "next start"` — that pattern matches your own shell and kills it, exit 144).
 
 ## Run (human path)
 

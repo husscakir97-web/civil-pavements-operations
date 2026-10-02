@@ -16,8 +16,11 @@ import {renderDocument,organisationBranding} from '@/lib/platform/pdf';
 const actor=()=>actorContext.getStore()!;
 const r2=round2;
 
-async function project(projectId:string,conn?:PoolConnection,forWrite=false){
- const p=await one('SELECT id,name,stage,contract_value,metadata,retention_enabled,retention_pct,retention_cap_amount FROM jobs WHERE organisation_id=? AND id=?',[actor().organisationId,projectId],conn);
+// lock takes the project row lock (FOR UPDATE) as the FIRST read of the transaction: it waits behind closure and docket edits, then reads the
+// committed latest row. Later consistent reads in the same transaction therefore start their snapshot after the lock, never before it.
+// Lock order everywhere is: project row, then docket rows.
+async function project(projectId:string,conn?:PoolConnection,forWrite=false,lock=false){
+ const p=await one('SELECT id,name,stage,contract_value,metadata,retention_enabled,retention_pct,retention_cap_amount FROM jobs WHERE organisation_id=? AND id=?'+(lock?' FOR UPDATE':''),[actor().organisationId,projectId],conn);
  if(!p)fail(404,'Project not found.');
  if(forWrite&&p!.stage==='closed')fail(409,'This project is closed. Reopen it before claiming.');
  return p!;
@@ -61,8 +64,7 @@ export async function createClaim(projectId:string,input:{period:string;claimDat
  if(release&&!input.retentionRelease?.reason?.trim())fail(422,'Give the reason for releasing retention (for example practical completion).');
  if(!lines.length&&!release)fail(422,'Add at least one claim line with a value, or a retention release.');
  return tx(async conn=>{
-  const p=await project(projectId,conn,true);
-  await exec('SELECT id FROM jobs WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,projectId],conn);
+  const p=await project(projectId,conn,true,true);
   const open=await one("SELECT id FROM progress_claims WHERE organisation_id=? AND project_id=? AND status IN ('draft','internal_approval')",[a.organisationId,projectId],conn);
   if(open)fail(409,'Finish or delete the open draft claim before starting another.');
   const available=await claimable(projectId,conn);

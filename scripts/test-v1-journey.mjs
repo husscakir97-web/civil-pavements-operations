@@ -721,6 +721,39 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
     await holder.query("UPDATE jobs SET stage='closed' WHERE organisation_id=? AND id=?",[org,p3]);await holder.query('COMMIT');
     assert.equal((await allocating).status,409,'allocation after closure is refused');}finally{await holder.end();}
    assert.deepEqual(await stored(d.id),{},'the docket was not allocated');await db.execute("UPDATE jobs SET stage='active' WHERE organisation_id=? AND id=?",[org,p3]);}
+  // Claims take the project lock before their first read. A claim queued behind closure must see the closed project, and a claim queued behind a
+  // same-project amount edit must use the committed amount (REPEATABLE READ would otherwise pin a snapshot taken before the lock).
+  {const clean=async pid=>{await db.execute('DELETE FROM claim_lines WHERE organisation_id=? AND project_id=?',[org,pid]);await db.execute('DELETE FROM progress_claims WHERE organisation_id=? AND project_id=?',[org,pid]);};
+   const claimBody=(pid,id,amount)=>({action:'create',projectId:pid,period:today.slice(0,7),lines:[{lineType:'docket',sourceId:id,thisClaim:amount}]});
+   // (a) Closure wins first: the waiting claim is rejected and nothing is written.
+   {const pc=(await json(await call('/api/projects','POST',{name:'Claim vs closure'},A.cookie),201)).projectId;const d=await mkApproved('claimclosure',pc);
+    const before={docket:(await db.execute('SELECT status,amount,updated_at FROM dockets WHERE id=?',[d.id]))[0][0],cost:await rows(d.id)};
+    const closer=await connect();
+    try{await closer.query('START TRANSACTION');await closer.query('SELECT id FROM jobs WHERE organisation_id=? AND id=? FOR UPDATE',[org,pc]);
+     let settled=false;const claiming=call('/api/commercial/claims','POST',claimBody(pc,d.id,1000),A.cookie).then(r=>{settled=true;return r;});
+     await new Promise(r=>setTimeout(r,800));assert.equal(settled,false,'the claim waits for the project lock');
+     await closer.query("UPDATE jobs SET stage='closed' WHERE organisation_id=? AND id=?",[org,pc]);await closer.query('COMMIT');
+     const res=await claiming;assert.equal(res.status,409,'a claim that waited behind closure is rejected: '+res.status);assert.match((await res.json()).error,/closed/i);}finally{await closer.end();}
+    assert.equal((await db.execute('SELECT COUNT(*) AS n FROM progress_claims WHERE organisation_id=? AND project_id=?',[org,pc]))[0][0].n,0,'no claim was created');
+    assert.equal((await db.execute('SELECT COUNT(*) AS n FROM claim_lines WHERE organisation_id=? AND project_id=?',[org,pc]))[0][0].n,0,'no claim lines were written');
+    const after={docket:(await db.execute('SELECT status,amount,updated_at FROM dockets WHERE id=?',[d.id]))[0][0],cost:await rows(d.id)};assert.deepEqual(after,before,'the docket and its ledger rows are untouched');
+    await db.execute("UPDATE jobs SET stage='active' WHERE organisation_id=? AND id=?",[org,pc]);}
+   // (b) A permitted amount edit of the same project wins first: the claim uses the committed amount.
+   {const pc=(await json(await call('/api/projects','POST',{name:'Claim vs amount edit'},A.cookie),201)).projectId;const d=await mkApproved('claimamount',pc);
+    const holder=await connect();let edit,claiming;
+    try{await holder.query('START TRANSACTION');await holder.query('SELECT id FROM jobs WHERE organisation_id=? AND id=? FOR UPDATE',[org,pc]);
+     const newItems=[{description:'AC14 asphalt supply',quantity:5,unit:'t',rate:250,amount:1250}];
+     edit=put({...d,status:'approved',links:{jobId:pc}},{amount:1250,lineItems:newItems});
+     await new Promise(r=>setTimeout(r,600));
+     claiming=call('/api/commercial/claims','POST',claimBody(pc,d.id,1250),A.cookie);
+     await new Promise(r=>setTimeout(r,600));await holder.query('COMMIT');}finally{await holder.end();}
+    assert.equal((await edit).status,200,'the amount edit committed first');
+    const res=await claiming;assert.equal(res.status,201,'the claim used the committed amount: '+res.status+' '+JSON.stringify(await res.clone().json().catch(()=>({}))));
+    const [[line]]=await db.execute("SELECT this_claim FROM claim_lines WHERE organisation_id=? AND source_id=? AND line_type='docket'",[org,d.id]);assert.equal(Number(line.this_claim),1250,'the claim line carries the edited amount');
+    assert.equal((await db.execute('SELECT status FROM dockets WHERE id=?',[d.id]))[0][0].status,'included_claim');
+    assert.deepEqual((await rows(d.id)).filter(r=>r.status==='actual').map(r=>Number(r.amount)),[1250],'the ledger carries the edited amount too');
+    await clean(pc);}
+  }
   // Approved → Review combined with moving or clearing the project keeps the allocation audit, reason and closed-project rules.
   {const d=await mkApproved('roundtrip',p1);
    await json(await put(d,{status:'review',links:{jobId:p2}}),422,'a reason is still required');

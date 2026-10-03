@@ -4,7 +4,7 @@
 //   Dry run (read-only; works with a SELECT-only database user; touches nothing):
 //     node scripts/import-demo-tenant.mjs --organisation-id <id> [--seed-date 2026-10-05] [--out plan.json]
 //   Apply (test environments only, see below):
-//     node scripts/import-demo-tenant.mjs --organisation-id <id> --apply --plan-hash <hash from a fresh dry run> --baseline <file> --base-url http://127.0.0.1:PORT
+//     node scripts/import-demo-tenant.mjs --organisation-id <id> --apply --plan-hash <hash from a fresh dry run> --baseline <file> [--baseline-sha256 <hash, required when resuming>] --base-url http://127.0.0.1:PORT
 //
 // What it does: adds demonstration records through the application's own API (state machines, approvals, audit trail), found and
 // resumed by deterministic natural keys. What it never does: delete or overwrite any record, rename the organisation, edit the
@@ -17,11 +17,11 @@
 // bypasses these. Running against a hosted tenant is separate, explicitly approved work.
 //
 // The plan hash binds an apply to the plan that was reviewed. It is NOT proof of approval, of a valid backup or of a restore.
-import {writeFileSync,existsSync,readFileSync} from 'node:fs';
+import {writeFileSync,existsSync} from 'node:fs';
 import {connect} from './mysql-config.mjs';
 import {assertReadOnlySql} from './live-tenant-inventory.mjs';
 import {buildPlan,DIVISIONS} from './demo/import-plan.mjs';
-import {guardedCall,guardedDb,snapshot,compare} from './demo/import-guards.mjs';
+import {guardedCall,guardedDb,snapshot,compare,writeBaseline,loadBaseline,schemaShape} from './demo/import-guards.mjs';
 import {verifyImport} from './demo/import-verify.mjs';
 
 const arg=(name,fallback)=>{const i=process.argv.indexOf(name);return i>=0?process.argv[i+1]:fallback;};
@@ -58,8 +58,14 @@ const readOnly=async fn=>{ // every plan query runs in one consistent, server-en
 const render=plan=>{
  console.log(`\nDemonstration import plan for organisation ${org} (seed date ${plan.seedDate})\n`);
  for(const g of plan.groups)console.log(`  ${g.group.padEnd(26)} create ${String(g.create).padStart(3)}   skip ${String(g.skip).padStart(3)}   conflict ${String(g.conflict).padStart(3)}`);
- console.log(`\n  total: create ${plan.totals.create}, skip ${plan.totals.skip}, conflict ${plan.totals.conflict}`);
- console.log('  also created by the stages (keyed to the demo records above): estimates, projects, claims, invoices, risks, SWMS, ITPs, programme, scenarios, workshop orders, service events, cost transactions, project members.');
+ console.log(`\n  keyed records: create ${plan.totals.create}, skip ${plan.totals.skip}, conflict ${plan.totals.conflict}`);
+ console.log('\n  EVERY table apply can write to (direct records and everything hanging from them), measured from a reference import:');
+ console.log(`  ${'table'.padEnd(26)}${'kind'.padEnd(9)}${'parent'.padEnd(10)}${'expected'.padStart(9)}${'present'.padStart(9)}${'to create'.padStart(10)}`);
+ for(const r of plan.scope.records)console.log(`  ${r.table.padEnd(26)}${r.kind.padEnd(9)}${(r.parent||'-').padEnd(10)}${String(r.expected).padStart(9)}${String(r.present).padStart(9)}${String(r.toCreate).padStart(10)}`);
+ console.log(`  ${'total'.padEnd(45)}${String(plan.scope.recordTotals.expected).padStart(9)}${String(plan.scope.recordTotals.present).padStart(9)}${String(plan.scope.recordTotals.toCreate).padStart(10)}   (${plan.scope.recordTotals.tables} tables; per-parent keys are in --out)`);
+ console.log(`  attachments/files: ${plan.scope.attachmentsAndFiles.expected} — ${plan.scope.attachmentsAndFiles.note}`);
+ console.log('  written by the application on first use only if missing (never modified): '+Object.entries(plan.scope.bootstrapIfMissing).map(([t,v])=>`${t} (${v.presentInTenant} present)`).join(', '));
+ console.log('  append-only audit/event bookkeeping (counts vary with retries): '+Object.entries(plan.scope.bookkeepingAppendOnly).map(([t,v])=>`${t} (+~${v.referenceRowsAdded})`).join(', '));
  for(const c of plan.conflicts)console.log(`  CONFLICT  ${c.group}: ${c.key} — ${c.reason}`);
  for(const b of plan.blockers)console.log(`  BLOCKER   ${b}`);
  console.log(`\n  nothing is deleted or overwritten; the owner's login, memberships, company profile, billing and other tenants are not touched.\n  planHash: ${plan.planHash}\n`);
@@ -95,11 +101,13 @@ try{
   const ctx={db,org,user:owner,base,call,form,must,one,all,log:(...a)=>console.log(...a),SEED_DATE,d:n=>addDays(SEED_DATE,n),addDays,created:{},ids:{},note:(k,n=1)=>{ctx.created[k]=(ctx.created[k]||0)+n;},tag:createHash('sha1').update(org).digest('hex').slice(0,8)};
   const {STAGES,hydrate}=await import('./demo/stages.mjs');
 
-  // The baseline is the state of the whole database BEFORE the first change. A resumed import reuses it, so the final comparison is
-  // always against the original pre-import state, never against records this tool created in an earlier, interrupted run.
+  // The baseline is the state of the whole database BEFORE the first change, stored as salted digests only (no raw records, no
+  // secrets; session and token tables are never read). A resumed import reuses it, so the final comparison is always against the
+  // original pre-import state, never against records an earlier, interrupted run created. On resume the file must match the SHA-256
+  // the operator was shown when it was created, be owner-only, name this organisation and schema, and be internally consistent.
   const baselineFile=arg('--baseline');let before;
-  if(existsSync(baselineFile)){const saved=JSON.parse(readFileSync(baselineFile,'utf8'));if(saved.organisationId!==org){console.error('Refusing to apply: the baseline file belongs to a different organisation. Nothing was changed.');process.exit(2);}before=saved.snapshot;console.log('Resuming: comparing against the saved pre-import baseline.');}
-  else{before=await snapshot(raw);writeFileSync(baselineFile,JSON.stringify({organisationId:org,takenAt:new Date().toISOString(),snapshot:before}),{mode:0o600});console.log('Pre-import baseline saved.');}
+  if(existsSync(baselineFile)){before=loadBaseline(baselineFile,arg('--baseline-sha256'),org,await schemaShape(raw));console.log('Resuming: comparing against the verified pre-import baseline.');}
+  else{before=await snapshot(raw);const sha=writeBaseline(baselineFile,org,before);console.log(`Pre-import baseline saved (digests only). Baseline sha256: ${sha}\nKeep this value: resuming an interrupted import requires --baseline-sha256 ${sha}`);}
   const divisionsStage=async c=>{
    for(const [code,name,description] of DIVISIONS){
     const have=await c.one('SELECT id FROM business_units WHERE organisation_id=? AND code=? AND name=? AND description=?',[org,code,name,description]);
@@ -122,10 +130,10 @@ try{
    const result=await readOnly(q=>verifyImport(q,org,console.log));failed+=result.failed;
    if(arg('--manifest'))writeFileSync(arg('--manifest'),JSON.stringify({seedDate:SEED_DATE,organisationId:org,created:ctx.created,counts:result.counts,totals:result.totals},null,1));
   }
-  const after=await snapshot(raw),drift=compare(before,after);
-  console.log(`Existing rows changed: ${drift.changed.length}; removed: ${drift.removed.length}`);
+  const after=await snapshot(raw,before.salt),drift=compare(before,after);
+  console.log(`Existing rows changed: ${drift.changedRows}; removed: ${drift.removedRows}`);
   for(const x of [...drift.changed,...drift.removed].slice(0,40))console.log('  '+x);
-  if(drift.changed.length||drift.removed.length)failed++;
+  if(drift.changedRows||drift.removedRows)failed++;
   process.exitCode=failed?1:0;
  }
 }catch(e){console.error(e.code==='NO_ORG'?e.message:'Import failed: '+String(e.message).replace(/\s+/g,' ').slice(0,300));process.exitCode=1;}

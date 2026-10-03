@@ -12,19 +12,25 @@ Dry run (read-only; a SELECT-only database user is enough; changes nothing):
 node scripts/import-demo-tenant.mjs --organisation-id <organisation id> --out plan.json
 ```
 
-It prints, per group, what would be **created**, what already exists and is ours (**skip**), and what **conflicts**. Exit code 0 = clean
+It prints, per group, what would be **created**, what already exists and is ours (**skip**), and what **conflicts**. It then lists **every table apply can write to** (51 tables, 584 rows for the full dataset): direct records, and everything that hangs from them — estimates and bid reviews under tenders; projects, baselines, members, claims, claim lines, invoices, risks, SWMS, ITPs, programme, cost transactions under projects; scenarios, activities and costs under plans; service events, workshop orders and meter readings under plant — each with expected, present and to-create counts. `--out` adds the planned parent key for every row (for example `DEMO-T-001 #2` for a claim). It also shows tables the application writes on first use only if missing (entitlements, profile, rate library), the append-only audit and event tables, and states that no attachments or files are created. Exit code 0 = clean
 plan, 3 = conflicts or blockers (nothing may be applied), 2 = refused or bad input. The plan carries a `planHash`.
 
 Apply (test environments only):
 
 ```
-node scripts/import-demo-tenant.mjs --organisation-id <id> --apply --plan-hash <hash from a fresh dry run> --base-url http://127.0.0.1:PORT
+node scripts/import-demo-tenant.mjs --organisation-id <id> --apply --plan-hash <hash from a fresh dry run> --baseline <file> --base-url http://127.0.0.1:PORT
 ```
+
+The first apply writes the baseline file and prints its SHA-256. Resuming an interrupted import needs `--baseline-sha256 <that value>`.
 
 with `DEMO_SEED_EMAIL` / `DEMO_SEED_PASSWORD` of an administrator **of that organisation**. Apply refuses unless the database name ends
 in `_test`, the database and the app are on this machine, `NODE_ENV` is not production, no external integration is configured
 (`EMAIL_ENABLED`, SMTP, billing, AI, SMS, ABR), the plan hash matches a plan computed just now, the plan has no conflicts or blockers,
 and the sign-in is an administrator of the named organisation. There is no flag that bypasses any of this.
+
+## How the scope is known
+
+`docs/DEMO-IMPORT-FOOTPRINT.json` is **measured, not hand-written**: the test imports the dataset into an empty tenant, records every table that gained rows and how many rows hang from each demonstration parent, and fails if any table gained rows that the footprint does not list, if the committed file differs from the measurement, or if a populated tenant gains a different number of rows than the plan said. A tenant that has records attached to demonstration parents beyond the dataset is a blocker.
 
 ## What it guarantees
 
@@ -38,10 +44,29 @@ and the sign-in is an administrator of the named organisation. There is no flag 
 - **Repeats and interruptions are safe.** Every record is found by a deterministic key and only created when missing. After an
   interruption the old plan hash is refused (the tenant changed); a fresh dry run shows the partly imported tenant as skip/create and
   the apply resumes.
-- **Self-check.** Before and after an apply, every row of every table (all tenants) is hashed. Any pre-existing row that changed or
-  disappeared fails the run. Only session and verification rows are excluded, because signing in creates them.
+- **Self-check against a baseline of digests only.** Before the first change, every row of every table (all tenants) is reduced to salted
+  HMAC-SHA-256 digests of its id and its content. The baseline file (mode 0600, never overwritten) holds table names, row counts, a
+  random salt, a schema digest and those digests, plus the operator-supplied organisation id: no passwords, hashes, tokens, session
+  contents, names, addresses, rates, free text or raw record ids. Session and verification tables are never read. After the import the
+  same digests are recomputed; any pre-existing row that changed or disappeared fails the run (reported by table and count).
+- **Baseline integrity on resume.** The operator is shown the file's SHA-256 when it is created and must supply it to resume; the file
+  must be owner-only, name the same organisation, match the database schema, and be internally consistent (row counts agree with the
+  digests). Any failure refuses before a single change. The SHA-256 is held outside the file, so replacing both the file and the
+  recorded value together would defeat the check; the digests are fingerprints, not secrets (the salt is in the file), so the file is
+  still not for publication.
 - **No external side effects.** The importer refuses to run with any integration configured; the app used for the test runs with email
   disabled and no provider keys.
+
+## The five demonstration team members
+
+The SQL guard permits exactly one kind of write to `users`: inserting the five members defined in `scripts/demo/projects.mjs`
+(Elena Voss, Marcus Doyle, Hana Kobayashi, Joel Mercer, Rina Patel), each with its fixed `@kestrel-demo.example.invalid` address, name
+and non-admin role. The exception exists because the dataset's records need user ids (project manager, opportunity and action owners)
+and the application can only create users by e-mailed invitation, which is not allowed here. The guard checks the address and the id
+before writing and writes only when **both are absent**: an existing row (the owner, another member, or a previously imported demo
+member) is never updated, and an address or id that belongs to someone else stops the import. No `auth_user` or `auth_account` row
+is written, no password is set, so none of the five can sign in; nothing in the guard writes to login, session or membership tables,
+and the API guard has no team, invitation, auth or admin route. They are active members in the team list; deactivate them there to hide them.
 
 ## What it does not prove
 
@@ -49,16 +74,35 @@ and the sign-in is an administrator of the named organisation. There is no flag 
 - Ownership of a plain-named record (division, shift, opportunity, plan, safety record) is a fingerprint: attached to a demo parent, or
   an exact name and description match. An owner record that deliberately copies a demo record exactly would be treated as ours and
   skipped, never overwritten.
-- Records created as a consequence (estimates, projects, claims, invoices, risks, SWMS, ITPs, programme, scenarios, workshop orders,
-  service events, cost transactions) are keyed to demo tenders, projects and plant, so they cannot collide, but they are counted only in
-  the post-import verification, not listed individually in the plan.
+- The footprint reflects the dataset as measured on the application version tested. A different application version could write
+  different bookkeeping rows; the import test must be re-run (and the footprint regenerated with `WRITE_FOOTPRINT=1`) after any change.
 - The dataset assumes the organisation holds the modules it needs (pipeline, estimating, projects, ims, operations, field, dockets,
   commercial, workshop); a disabled or read-only module is a blocker.
 - Project numbers continue the tenant's own sequence, so the demo projects will not be `PRJ-0001…` in a tenant that already has projects.
 - Business dates follow `--seed-date`; audit timestamps are the real time of the import.
 - It cannot remove the demonstration records. Removal would be separate, explicitly approved work with its own dry run.
-- Running against a hosted tenant needs separate approved work: an explicit allow-listed target, a restore-tested backup, and a
-  maintenance window. The read-only dry run and `scripts/live-tenant-inventory.mjs` are the safe first steps.
+- Running against a hosted tenant is **not enabled** and needs separate approved work (below). The read-only dry run and
+  `scripts/live-tenant-inventory.mjs` are the safe first steps.
+
+## Remaining work before any hosted apply (not implemented, not enabled)
+
+1. **A hosted execution path with its own guard.** Apply currently refuses everything but a local, `_test` database and a local app. A
+   hosted run needs a separate, explicitly approved mode: an allow-list naming the one database and app URL, a verified-integrations-off
+   check against the *hosted* app's configuration (the importer can only check its own environment today), and no generic bypass flag.
+2. **A real maintenance window and write freeze.** The baseline comparison and any fingerprint comparison of other tenants are only
+   meaningful while nobody else writes. Hosted apply needs a defined freeze and a way to confirm it.
+3. **Backup and restore evidence the tool can check.** A backup file's existence is not proof. The approved procedure must include a
+   restore into a scratch database, row-count and fingerprint comparison with the live baseline, and a named human approval recorded
+   outside this tool. The plan hash is not that evidence.
+4. **Owner-credential handling.** Apply signs in as the owner's administrator. A hosted run needs an agreed way to supply that session
+   without storing a password in an environment or a file, and an audit trail showing the import acted as that administrator.
+5. **Hosted-app side-effect proof.** Confirm on the hosted app that email, SMS, billing webhooks, AI and ABR are off and that
+   claim/PDF generation sends nothing, before the first write.
+6. **Dry run against the real tenant**, reviewed by the owner: the conflict list, the footprint table, the team-member decision, and the
+   project-number sequence consequence.
+7. **Rollback decision.** The import cannot remove what it adds. Either accept restore-from-backup as the only undo, or build a
+   separate, approved, dry-run-first removal tool keyed to the same footprint.
+8. **Re-run of the import test on the exact build to be deployed**, and a post-import verification pass on the hosted tenant.
 
 ## Tests
 

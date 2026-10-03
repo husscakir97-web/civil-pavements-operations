@@ -14,6 +14,7 @@ import {BIDS,LEADS} from './pipeline.mjs';
 import {SHIFTS} from './shifts.mjs';
 import {USERS} from './projects.mjs';
 import {DOCKETS} from './commercial.mjs';
+import {loadFootprint,presentByTable,BOOTSTRAP,BOOKKEEPING} from './import-footprint.mjs';
 
 export const DEMO_EMAIL_DOMAIN='@kestrel-demo.example.invalid';
 export const DIVISIONS=[['TC','Traffic Control','Traffic management plans, traffic controllers, VMS and arrow boards.'],['APM','Asphalt & Pavement Maintenance','Resurfacing, patching and pavement repairs.'],['PRF','Profiling','Cold planing and profiling for resurfacing programmes.']];
@@ -102,6 +103,19 @@ export async function buildPlan(q,org,seedDate){
  // they cannot collide with owner records; they are created or resumed by the stages and counted in the post-import verification.
  const conflicts=groups.flatMap(g=>g.items.filter(i=>i.state==='conflict').map(i=>({group:g.group,key:i.key,reason:i.reason})));
  const totals=groups.reduce((a,g)=>({create:a.create+g.create,skip:a.skip+g.skip,conflict:a.conflict+g.conflict}),{create:0,skip:0,conflict:0});
- const body={organisationId:org,seedDate,groups,conflicts,blockers};
+ // ---- the full scope of apply: every table it writes to, by demonstration parent, measured from a reference import ----
+ const fp=loadFootprint(),present=await presentByTable(q,org),records=[];
+ for(const [table,ref] of Object.entries(fp.tables)){
+  const have=present[table]||{},keys=[...new Set([...Object.keys(ref.byKey),...Object.keys(have)])].sort();
+  const have_n=Object.values(have).reduce((a,b)=>a+b,0),extra=keys.filter(k=>(have[k]||0)>(ref.byKey[k]||0));
+  records.push({table,kind:ref.kind,...(ref.parent?{parent:ref.parent}:{}),expected:ref.expected,present:have_n,toCreate:Math.max(0,ref.expected-have_n),byKey:keys.map(k=>({key:k,expected:ref.byKey[k]||0,present:have[k]||0}))});
+  if(extra.length)blockers.push(`${table}: more demonstration rows than the dataset defines under ${extra.slice(0,3).join(', ')}${extra.length>3?'…':''}; the tenant has records attached to demonstration parents that this import did not create.`);
+ }
+ const orgRows=async t=>Number((await one(`SELECT COUNT(*) n FROM ${t} WHERE organisation_id=?`,[org])).n);
+ const bootstrap=Object.fromEntries(await Promise.all(BOOTSTRAP.map(async t=>[t,{presentInTenant:await orgRows(t),referenceRowsIfMissing:fp.bootstrapRowsIfMissing[t]}])));
+ const bookkeeping=Object.fromEntries(await Promise.all(BOOKKEEPING.map(async t=>[t,{presentInTenant:await orgRows(t),referenceRowsAdded:fp.bookkeepingRowsApproximate[t]}])));
+ const recordTotals={tables:records.length,expected:records.reduce((a,r)=>a+r.expected,0),present:records.reduce((a,r)=>a+r.present,0),toCreate:records.reduce((a,r)=>a+r.toCreate,0)};
+ const scope={records,recordTotals,bootstrapIfMissing:bootstrap,bookkeepingAppendOnly:bookkeeping,attachmentsAndFiles:{expected:0,note:'No uploaded files, documents or attachments are created (storage and OCR are disabled); claim PDFs are generated on request and not stored.'}};
+ const body={organisationId:org,seedDate,groups,scope,conflicts,blockers};
  return {...body,totals,planHash:createHash('sha256').update(JSON.stringify(body)).digest('hex')};
 }

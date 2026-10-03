@@ -29,7 +29,8 @@ const login=async who=>{let r;for(let i=0;i<8;i++){r=await fetch(base+'/api/auth
  if(!r.ok)throw new Error('sign-in '+r.status);who.cookie=r.headers.getSetCookie().map(c=>c.split(';')[0]).join('; ');};
 const api=async(who,path,method='GET',body)=>{const res=await fetch(base+path,{method,headers:{origin:base,cookie:who.cookie,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const t=await res.text();let j;try{j=JSON.parse(t);}catch{j=t;}return {status:res.status,body:j};};
 const okay=async(p,label)=>{const r=await p;if(![200,201].includes(r.status))throw new Error(`${label} -> ${r.status} ${JSON.stringify(r.body).slice(0,200)}`);return r.body;};
-const root=sql=>spawnSync('mysql',['-e',sql],{encoding:'utf8',env:{PATH:process.env.PATH}});
+// Administrative statements run through the test's own connection when its user may (CI connects as root), else through the local root socket.
+const admin=async sql=>{try{for(const stmt of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.query(stmt);return true;}catch{return spawnSync('mysql',['-e',sql],{encoding:'utf8',env:{PATH:process.env.PATH}}).status===0;}};
 const BASELINE='/tmp/claude-0/import-baseline-'+Date.now()+'.json';
 const importer=(args,over={},opts={})=>spawnSync(process.execPath,['scripts/import-demo-tenant.mjs',...args],{env:{...env,...over},encoding:'utf8',timeout:opts.timeout||1500000});
 const text=r=>(r.stdout||'')+(r.stderr||'');
@@ -61,7 +62,7 @@ try{
  // The reference tenant's demo addresses are renamed afterwards so the populated tenant can be imported next.
  const snapC0=await snap();
  const refDry=importer(['--organisation-id',C.org],{});
- const refRun=importer(['--organisation-id',C.org,'--apply','--plan-hash',hashOf(refDry),'--baseline',BASELINE+'.ref','--base-url',base],{DEMO_SEED_EMAIL:C.email,DEMO_SEED_PASSWORD:password});
+ const refRun=importer(['--organisation-id',C.org,'--apply','--plan-hash',hashOf(refDry),'--baseline',BASELINE+'.ref'],{DEMO_SEED_EMAIL:C.email,DEMO_SEED_PASSWORD:password});
  const refSha=shaFrom(refRun);
  const refDelta=rowsGained(snapC0,await snap());
  const measured=await measureFootprint(q,C.org,refDelta);
@@ -107,19 +108,20 @@ try{
  const quiet=async(label,r,expectStatus)=>check(label,r.status===expectStatus&&same(await snap(),world0),`exit ${r.status}`);
  check('refuses to run without an explicit organisation id',importer([]).status===2);
  check('refuses an organisation id that does not exist',(()=>{const r=importer(['--organisation-id','nope']);return r.status===1&&/not found/i.test(text(r));})());
- await quiet('apply refused without a plan hash',importer(['--organisation-id',A.org,'--apply','--baseline',BASELINE,'--base-url',base],applyEnv),2);
- await quiet('apply refused with a plan hash that does not match',importer(['--organisation-id',A.org,'--apply','--plan-hash','0'.repeat(64),'--baseline',BASELINE,'--base-url',base],applyEnv),3);
+ await quiet('apply refused without a plan hash',importer(['--organisation-id',A.org,'--apply','--baseline',BASELINE],applyEnv),2);
+ await quiet('apply refused with a plan hash that does not match',importer(['--organisation-id',A.org,'--apply','--plan-hash','0'.repeat(64),'--baseline',BASELINE],applyEnv),3);
  const refusals=[['a database not ending in _test',{MYSQL_DATABASE:'import_prod'}],['a remote database host',{MYSQL_HOST:'db.example.com'}],['EMAIL_ENABLED=true',{EMAIL_ENABLED:'true'}],['a configured SMTP host',{SMTP_HOST:'smtp.example.com'}],['a configured billing provider',{BILLING_PROVIDER:'stripe'}],['an enabled AI integration',{AI_ENABLED:'true'}],['NODE_ENV=production',{NODE_ENV:'production'}]];
- for(const [label,over] of refusals)await quiet('apply refused: '+label,importer(['--organisation-id',A.org,'--apply','--plan-hash','x','--baseline',BASELINE,'--base-url',base],{...applyEnv,...over}),2);
- await quiet('apply refused: a non-local app URL',importer(['--organisation-id',A.org,'--apply','--plan-hash','x','--baseline',BASELINE,'--base-url','https://app.example.com'],applyEnv),2);
+ for(const [label,over] of refusals)await quiet('apply refused: '+label,importer(['--organisation-id',A.org,'--apply','--plan-hash','x','--baseline',BASELINE],{...applyEnv,...over}),2);
+ await quiet('apply refused: --base-url with a remote app',importer(['--organisation-id',A.org,'--apply','--plan-hash','x','--baseline',BASELINE,'--base-url','https://app.example.com'],applyEnv),2);
+ await quiet('apply refused: --base-url with a local app the importer did not start (the importer only writes through its own isolated app)',importer(['--organisation-id',A.org,'--apply','--plan-hash','x','--baseline',BASELINE,'--base-url',base],applyEnv),2);
 
  // ---------------------------------------------------------------- read-only dry run, with a SELECT-only database user
- const ro=root(`CREATE USER IF NOT EXISTS 'imp_ro'@'127.0.0.1' IDENTIFIED BY 'ro-integration-only'; GRANT SELECT ON \`${process.env.MYSQL_DATABASE}\`.* TO 'imp_ro'@'127.0.0.1'; FLUSH PRIVILEGES;`);
- const roEnv=ro.status===0?{MYSQL_USER:'imp_ro',MYSQL_PASSWORD:'ro-integration-only'}:{};
+ const roOk=await admin(`CREATE USER IF NOT EXISTS 'imp_ro'@'%' IDENTIFIED BY 'ro-integration-only'; GRANT SELECT ON \`${process.env.MYSQL_DATABASE}\`.* TO 'imp_ro'@'%'; FLUSH PRIVILEGES`);
+ const roEnv=roOk?{MYSQL_USER:'imp_ro',MYSQL_PASSWORD:'ro-integration-only'}:{};
  const planAFile=planFile('a');
  const dry=importer(['--organisation-id',A.org,'--out',planAFile],roEnv);
  const plan1=hashOf(dry);
- check('dry run succeeds with a SELECT-only database user'+(ro.status===0?'':' (no admin access: used the app user)'),dry.status===0&&Boolean(plan1),text(dry).slice(-200));
+ check('dry run succeeds with a SELECT-only database user'+(roOk?'':' (no admin access: used the app user)'),dry.status===0&&Boolean(plan1),text(dry).slice(-200));
  check('dry run leaves every table of every tenant byte-for-byte unchanged',same(await snap(),world0));
  check('dry run lists what it would create and reports no conflicts for the owner\'s existing records',/keyed records: create \d+, skip 0, conflict 0/.test(text(dry))&&!/CONFLICT|BLOCKER/.test(text(dry)));
  {const planA=JSON.parse(readFileSync(planAFile,'utf8')),rec=Object.fromEntries(planA.scope.records.map(r=>[r.table,r]));
@@ -138,17 +140,17 @@ try{
  const conflicted=importer(['--organisation-id',A.org],roEnv);
  check('dry run refuses (exit 3) and names each of the four conflicting records',conflicted.status===3&&(text(conflicted).match(/CONFLICT/g)||[]).length===4&&/divisions: TC/.test(text(conflicted))&&/plant: DEMO-P01/.test(text(conflicted))&&/shifts: Paving Quarry Road/.test(text(conflicted))&&/team members \(no login\): elena\.voss/.test(text(conflicted)),(text(conflicted).match(/CONFLICT/g)||[]).length+' conflicts');
  const worldConflict=await snap();
- await quiet2(importer(['--organisation-id',A.org,'--apply','--plan-hash',hashOf(conflicted)||'x','--baseline',BASELINE,'--base-url',base],applyEnv),3,'apply refused while conflicts exist, nothing changed',worldConflict);
+ await quiet2(importer(['--organisation-id',A.org,'--apply','--plan-hash',hashOf(conflicted)||'x','--baseline',BASELINE],applyEnv),3,'apply refused while conflicts exist, nothing changed',worldConflict);
  for(const [t,id] of [['business_units','conf-bu'],['plant','conf-plant'],['shifts','conf-shift'],['users','conf-user']])await db.query(`DELETE FROM ${t} WHERE id=?`,[id]);
  check('after the fixture conflicts are removed the plan is clean again and identical to the first plan',hashOf(importer(['--organisation-id',A.org],roEnv))===plan1&&same(await snap(),world0));
  // a non-admin cannot be used to import, and an administrator of another tenant cannot import into this one
- {const r1=importer(['--organisation-id',A.org,'--apply','--plan-hash',plan1,'--baseline',BASELINE,'--base-url',base],{DEMO_SEED_EMAIL:NONADMIN.email,DEMO_SEED_PASSWORD:password});
-  const r2=importer(['--organisation-id',A.org,'--apply','--plan-hash',plan1,'--baseline',BASELINE,'--base-url',base],{DEMO_SEED_EMAIL:B.email,DEMO_SEED_PASSWORD:password});
+ {const r1=importer(['--organisation-id',A.org,'--apply','--plan-hash',plan1,'--baseline',BASELINE],{DEMO_SEED_EMAIL:NONADMIN.email,DEMO_SEED_PASSWORD:password});
+  const r2=importer(['--organisation-id',A.org,'--apply','--plan-hash',plan1,'--baseline',BASELINE],{DEMO_SEED_EMAIL:B.email,DEMO_SEED_PASSWORD:password});
   check('apply refused for a non-administrator and for an administrator of a different organisation',r1.status===2&&r2.status===2&&same(await snap(),world0));}
 
  // ---------------------------------------------------------------- interrupted import, then resume
  const before=await snap();
- const child=spawn(process.execPath,['scripts/import-demo-tenant.mjs','--organisation-id',A.org,'--apply','--plan-hash',plan1,'--baseline',BASELINE,'--base-url',base],{env:{...env,...applyEnv}});
+ const child=spawn(process.execPath,['scripts/import-demo-tenant.mjs','--organisation-id',A.org,'--apply','--plan-hash',plan1,'--baseline',BASELINE],{env:{...env,...applyEnv}});
  let seen='';let killed=false;
  await new Promise(resolve=>{child.stdout.on('data',d=>{seen+=d;if(!killed&&/== projects/.test(seen)){killed=true;child.kill('SIGKILL');}});child.on('exit',resolve);});
  const baselineSha=/Baseline sha256: ([0-9a-f]{64})/.exec(seen)?.[1];
@@ -157,13 +159,14 @@ try{
  const partial=await snap();
  const partialDiff=compare(before,partial);
  check('after the interruption nothing that existed before was changed or removed',partialDiff.changedRows===0&&partialDiff.removedRows===0,JSON.stringify(partialDiff).slice(0,200));
- const stale=importer(['--organisation-id',A.org,'--apply','--plan-hash',plan1,'--baseline',BASELINE,'--base-url',base],applyEnv);
+ const stale=importer(['--organisation-id',A.org,'--apply','--plan-hash',plan1,'--baseline',BASELINE,'--baseline-sha256',baselineSha],applyEnv);
  check('the old plan hash is refused after an interruption (the tenant changed), so a fresh dry run is required',stale.status===3&&/does not match/.test(text(stale)));
  const resumeFile=planFile('resume');
- const resumeDry=importer(['--organisation-id',A.org,'--out',resumeFile],roEnv),planResume=hashOf(resumeDry);
+ const withBaseline=['--baseline',BASELINE,'--baseline-sha256',baselineSha];
+ const resumeDry=importer(['--organisation-id',A.org,'--out',resumeFile,...withBaseline],roEnv),planResume=hashOf(resumeDry);
  {const pr=JSON.parse(readFileSync(resumeFile,'utf8'));check('after the interruption the plan shows, per table, what already exists and what is still to create (present + to create = expected)',pr.scope.records.every(r=>r.present+r.toCreate===r.expected)&&pr.scope.recordTotals.present>0&&pr.scope.recordTotals.toCreate>0);}
  check('a fresh dry run shows the partly imported tenant as resume: some records skipped, the rest still to create, no conflicts',resumeDry.status===0&&/skip [1-9]/.test(text(resumeDry))&&!/conflict [1-9]/.test(text(resumeDry))&&planResume!==plan1);
- const finished=importer(['--organisation-id',A.org,'--apply','--plan-hash',planResume,'--baseline',BASELINE,'--baseline-sha256',baselineSha,'--base-url',base,'--manifest','/tmp/import-manifest-a.json'],applyEnv);
+ const finished=importer(['--organisation-id',A.org,'--apply','--plan-hash',planResume,'--baseline',BASELINE,'--baseline-sha256',baselineSha,'--manifest','/tmp/import-manifest-a.json'],applyEnv);
  const failedChecks=(text(finished).match(/^FAIL /gm)||[]).length;
  check('the resumed import completes with every in-import verification passing',finished.status===0&&failedChecks===0&&/PASS  demo projects = 3/.test(text(finished)),text(finished).split('\n').filter(l=>/FAIL|failed|Refused|Import failed/.test(l)).join(' | ').slice(0,300));
  check('the import reports no existing row changed or removed',/Existing rows changed: 0; removed: 0/.test(text(finished)));
@@ -231,7 +234,7 @@ try{
  // ---------------------------------------------------------------- an unexpected record under a demonstration parent is a blocker
  {const demoClient=(await q("SELECT id FROM clients WHERE organisation_id=? AND client_code='DEMO-C1'",[A.org]))[0];
   await insertRow('client_sites',{id:'extra-site',organisation_id:A.org,client_id:demoClient.id,name:'Site added by the owner'});
-  const extra=importer(['--organisation-id',A.org],roEnv);
+  const extra=importer(['--organisation-id',A.org,...withBaseline],roEnv);
   check('a record the owner attached to a demonstration parent makes the plan refuse (exit 3, named blocker)',extra.status===3&&/BLOCKER\s+client_sites: more demonstration rows/.test(text(extra)));
   await db.query("DELETE FROM client_sites WHERE id='extra-site'");}
 
@@ -244,10 +247,10 @@ try{
  // ---------------------------------------------------------------- retries are safe
  const world1=await snap();
  const plan2File=planFile('after');
- const dry2=importer(['--organisation-id',A.org,'--out',plan2File],roEnv),plan2=hashOf(dry2);
+ const dry2=importer(['--organisation-id',A.org,'--out',plan2File,...withBaseline],roEnv),plan2=hashOf(dry2);
  {const p2=JSON.parse(readFileSync(plan2File,'utf8'));check('a dry run after the import shows nothing left to create, in the keyed records and in every footprint table',/keyed records: create 0, skip \d+, conflict 0/.test(text(dry2))&&p2.scope.recordTotals.toCreate===0&&p2.scope.records.every(r=>r.present===r.expected));}
  // baseline integrity on resume: each of these must be refused before anything is changed
- {const quietBase=async(label,args,expect)=>{const r=importer(['--organisation-id',A.org,'--apply','--plan-hash',plan2,'--base-url',base,...args],applyEnv);check(label,r.status!==0&&expect.test(text(r))&&same(await snap(),world1),`exit ${r.status}`);};
+ {const quietBase=async(label,args,expect)=>{const r=importer(['--organisation-id',A.org,'--apply','--plan-hash',plan2,...args],applyEnv);check(label,r.status!==0&&expect.test(text(r))&&same(await snap(),world1),`exit ${r.status}`);};
   const good=BASELINE,sha=baselineSha;
   await quietBase('resume refused when the baseline\'s SHA-256 is not supplied',['--baseline',good],/baseline-sha256/);
   await quietBase('resume refused when the supplied SHA-256 is wrong',['--baseline',good,'--baseline-sha256','0'.repeat(64)],/does not match/);
@@ -261,7 +264,7 @@ try{
   {const [f,s]=rewrite('schema',o=>{o.schema='f'.repeat(64);});await quietBase('resume refused when the baseline was taken against a different schema',['--baseline',f,'--baseline-sha256',s],/schema differs/);}
   {const [f,s]=rewrite('org',o=>{o.organisationId='someone-else';});await quietBase('resume refused when the baseline names a different organisation',['--baseline',f,'--baseline-sha256',s],/different organisation/);}
   await quietBase('resume refused when another tenant\'s baseline is supplied',['--baseline',BASELINE+'.ref','--baseline-sha256',refSha],/different organisation/);}
- const again=importer(['--organisation-id',A.org,'--apply','--plan-hash',plan2,'--baseline',BASELINE+'.2','--base-url',base],applyEnv);
+ const again=importer(['--organisation-id',A.org,'--apply','--plan-hash',plan2,'--baseline',BASELINE,'--baseline-sha256',baselineSha],applyEnv);
  const world2=await snap(),retryDiff=compare(world1,world2);
  const gainedRetry=Object.keys(rowsGained(world1,world2));
  check('a second apply creates nothing and changes nothing (no new rows other than audit/session bookkeeping)',again.status===0&&/Created in this run: \{\}/.test(text(again))&&retryDiff.changedRows===0&&retryDiff.removedRows===0&&gainedRetry.every(x=>/^(audit_|domain_events)/.test(x)),gainedRetry.join(','));
@@ -272,6 +275,6 @@ try{
  check('counts in the populated tenant equal the empty tenant\'s',strictSame(countsDemo,countsC));
  check('the owner\'s tenant and the second tenant never received each other\'s demonstration rows',Number((await q("SELECT COUNT(*) n FROM workers WHERE organisation_id=? AND employee_number LIKE 'DEMO-%'",[B.org]))[0].n)===0);
 }catch(e){console.error(e.stack||e);check('harness ran to completion',false,String(e.message).slice(0,300));}
-finally{server.kill();root("DROP USER IF EXISTS 'imp_ro'@'127.0.0.1'");await db.end();const failed=results.filter(x=>!x).length;console.log(`\n${results.length-failed} passed, ${failed} failed`);process.exit(failed?1:0);}
+finally{server.kill();await admin("DROP USER IF EXISTS 'imp_ro'@'%'");await db.end();const failed=results.filter(x=>!x).length;console.log(`\n${results.length-failed} passed, ${failed} failed`);process.exit(failed?1:0);}
 
 async function quiet2(r,expectStatus,label,expectedSnapshot){check(label,r.status===expectStatus&&same(await snap(),expectedSnapshot),`exit ${r.status}`);}

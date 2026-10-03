@@ -26,14 +26,15 @@ export async function workshopStage(c){
   o=await order('DEMO-P04','Roller sprinkler nozzle blocked');
  }
  // Verification must be done by a DIFFERENT authorised person, so the demo leaves repairs awaiting independent verification (a walkthrough step).
- // Meter reading + service plan due soon (P05) and an overdue plan (P07, TEST).
- if(!await one('SELECT id FROM asset_meter_readings WHERE organisation_id=? AND asset_id=?',[org,asset('DEMO-P05')])){
-  await post({action:'meter',assetId:asset('DEMO-P05'),meterType:'hours',reading:1180,note:'Weekly reading'},'meter');
-  await post({action:'plan',assetId:asset('DEMO-P05'),revision:await rev('DEMO-P05'),nextServiceMeter:1200,nextServiceDate:d(10),note:'Initial 250 h service plan'},'plan');c.note('service-plans');
- }
- if(!await one('SELECT id FROM asset_meter_readings WHERE organisation_id=? AND asset_id=?',[org,asset('DEMO-P07')])){
-  await post({action:'meter',assetId:asset('DEMO-P07'),meterType:'km',reading:48200,note:'Odometer'},'meter');
-  await post({action:'plan',assetId:asset('DEMO-P07'),revision:await rev('DEMO-P07'),nextServiceMeter:48000,nextServiceDate:d(-5),note:'TEST: service overdue (meter and date already passed).'},'plan overdue');c.note('service-plans');
+ // Meter reading + service plan due soon (P05) and an overdue plan (P07, TEST). The reading and the plan are separate substeps, each
+ // resumed from stored state (a reading recorded without its plan is completed on the next run).
+ for(const [no,meter] of [['DEMO-P05',{meterType:'hours',reading:1180,note:'Weekly reading'}],['DEMO-P07',{meterType:'km',reading:48200,note:'Odometer'}]]){
+  if(!await one('SELECT id FROM asset_meter_readings WHERE organisation_id=? AND asset_id=?',[org,asset(no)]))await post({action:'meter',assetId:asset(no),...meter},'meter');
+  if(!(await one('SELECT next_service_date FROM plant WHERE organisation_id=? AND id=?',[org,asset(no)])).next_service_date){
+   if(no==='DEMO-P05')await post({action:'plan',assetId:asset(no),revision:await rev(no),nextServiceMeter:1200,nextServiceDate:d(10),note:'Initial 250 h service plan'},'plan');
+   else await post({action:'plan',assetId:asset(no),revision:await rev(no),nextServiceMeter:48000,nextServiceDate:d(-5),note:'TEST: service overdue (meter and date already passed).'},'plan overdue');
+   c.note('service-plans');
+  }
  }
  // A completed service on the profiler (service history).
  if(!await one("SELECT id FROM asset_service_events WHERE organisation_id=? AND asset_id=? AND kind='completed'",[org,asset('DEMO-P01')])){

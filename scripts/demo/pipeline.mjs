@@ -56,17 +56,21 @@ export async function pipelineStage(c){
   c.ids['opportunity:'+l.name]=o.id;
  }
  for(const b of BIDS){
-  const at=async()=>one('SELECT id,stage,estimate_id,project_id FROM tenders WHERE organisation_id=? AND reference=?',[org,b.ref]);
+  const at=async()=>one('SELECT id,stage,estimate_id,project_id,estimated_value,approval_status FROM tenders WHERE organisation_id=? AND reference=?',[org,b.ref]);
   let t=await at();
   if(!t){
    await must(call('/api/tenders/register','POST',{title:b.title,reference:b.ref,businessUnitId:c.ids['division:'+b.division],clientId:c.ids['client:'+b.client],siteId:c.ids[`site:${b.client}:${b.site}`],dueDate:d(b.due),ownerUserId:c.ids['user:est'],estimatedValue:b.value,scopeSummary:b.scope}),[201],'tender '+b.ref);
    t=await at();c.note('tenders');
   }
   c.ids['tender:'+b.key]=t.id;
+  // Every substep below is gated on durable state (the review row, its decision, the stage), so an interrupted run resumes at the
+  // exact step that did not complete.
+  // (the review row exists once bid-review ran; decided_at is set only when bid-decision ran)
+  const review=()=>one('SELECT id,decided_at FROM tender_bid_reviews WHERE organisation_id=? AND tender_id=?',[org,t.id]);
   if(b.target==='lost'){
    if(t.stage!=='lost'){
-    await must(call('/api/tenders/workspace','POST',{action:'bid-review',id:t.id,values:{strategic_fit:'Panel client; fits Asphalt division',capacity:'Crew committed elsewhere',recommendation:'bid',recommendation_reason:'Strategic panel'}}),[200],'bid review');
-    await must(call('/api/tenders/workspace','POST',{action:'bid-decision',id:t.id,decision:'bid',reason:'Strategic panel client'}),[200],'bid decision');
+    if(!await review())await must(call('/api/tenders/workspace','POST',{action:'bid-review',id:t.id,values:{strategic_fit:'Panel client; fits Asphalt division',capacity:'Crew committed elsewhere',recommendation:'bid',recommendation_reason:'Strategic panel'}}),[200],'bid review');
+    if(!(await review()).decided_at)await must(call('/api/tenders/workspace','POST',{action:'bid-decision',id:t.id,decision:'bid',reason:'Strategic panel client'}),[200],'bid decision');
     await must(call('/api/tenders/workspace','POST',{action:'lost',id:t.id,reason:b.lostReason}),[200],'lost');c.note('tenders-lost');
    }
    continue;
@@ -74,19 +78,25 @@ export async function pipelineStage(c){
   const want=RANK.indexOf(b.target);
   const state=async()=>{const x=await at(),e=x.estimate_id?await one('SELECT workflow_state FROM estimates WHERE organisation_id=? AND id=?',[org,x.estimate_id]):null;return {...x,ws:e?.workflow_state||null};};
   let s=await state();
-  if(want>=RANK.indexOf('pricing')&&s.stage==='draft'){
-   await must(call('/api/tenders/workspace','POST',{action:'bid-review',id:t.id,values:{strategic_fit:'Good fit for the '+b.division+' division',capacity:'Crew and plant available in the window',recommendation:'bid',recommendation_reason:'Fit and capacity confirmed'}}),[200],'bid review '+b.key);
-   await must(call('/api/tenders/workspace','POST',{action:'bid-decision',id:t.id,decision:'bid',reason:'Fit and capacity confirmed'}),[200],'bid decision '+b.key);
+  if(want>=RANK.indexOf('pricing')&&['draft','reviewing'].includes(s.stage)){
+   if(!await review())await must(call('/api/tenders/workspace','POST',{action:'bid-review',id:t.id,values:{strategic_fit:'Good fit for the '+b.division+' division',capacity:'Crew and plant available in the window',recommendation:'bid',recommendation_reason:'Fit and capacity confirmed'}}),[200],'bid review '+b.key);
+   if(!(await review()).decided_at)await must(call('/api/tenders/workspace','POST',{action:'bid-decision',id:t.id,decision:'bid',reason:'Fit and capacity confirmed'}),[200],'bid decision '+b.key);
    s=await state();
   }
   if(want>=RANK.indexOf('pricing')&&!s.estimate_id){
    await must(call('/api/tenders/workspace','POST',{action:'create-estimate',id:t.id,mode:'general'}),[200],'estimate '+b.key);
    s=await state();c.note('estimates');
-   const est=(await must(call('/api/estimates?id='+s.estimate_id),[200],'get estimate')).estimate;
-   const priced=await must(call('/api/estimates','PUT',{id:s.estimate_id,data:{...est.data,clientName:est.data.clientName,projectName:b.title,workType:b.division==='PRF'?'Profiling':b.division==='TC'?'Traffic management':'Asphalt resurfacing',specification:b.scope,items:b.items,marginValue:15,overheadsPct:8,contingencyPct:3}}),[200],'price estimate '+b.key);
+  }
+  // Pricing and the tender-value update are separate substeps, each resumed from the estimate's and the tender's stored state.
+  if(want>=RANK.indexOf('pricing')&&s.estimate_id){
+   let est=(await must(call('/api/estimates?id='+s.estimate_id),[200],'get estimate')).estimate;
+   if(!(est.data.items?.length>0)){
+    await must(call('/api/estimates','PUT',{id:s.estimate_id,data:{...est.data,clientName:est.data.clientName,projectName:b.title,workType:b.division==='PRF'?'Profiling':b.division==='TC'?'Traffic management':'Asphalt resurfacing',specification:b.scope,items:b.items,marginValue:15,overheadsPct:8,contingencyPct:3}}),[200],'price estimate '+b.key);
+    est=(await must(call('/api/estimates?id='+s.estimate_id),[200],'get priced estimate')).estimate;
+   }
    // The tender's indicative value follows the priced estimate (rounded to $100), so the pipeline and the estimate tell the same story.
-   const sell=Math.round(Number(priced.totals?.sellRate||0)/100)*100;
-   if(sell>0){const cur=await one('SELECT revision FROM tenders WHERE organisation_id=? AND id=?',[org,t.id]);await must(call('/api/tenders/workspace','PATCH',{id:t.id,revision:Number(cur.revision),estimatedValue:sell}),[200],'tender value '+b.key);}
+   const sell=Math.round(Number(est.totals?.sellRate||0)/100)*100;
+   if(sell>0&&Math.abs(Number(s.estimated_value)-sell)>0.5){const cur=await one('SELECT revision FROM tenders WHERE organisation_id=? AND id=?',[org,t.id]);await must(call('/api/tenders/workspace','PATCH',{id:t.id,revision:Number(cur.revision),estimatedValue:sell}),[200],'tender value '+b.key);s=await state();}
   }
   c.ids['estimate:'+b.key]=s.estimate_id;
   if(want>=RANK.indexOf('estimate-review')&&!['review','approved'].includes(s.ws)){
@@ -99,8 +109,8 @@ export async function pipelineStage(c){
    await must(call('/api/tenders/workspace','POST',{action:'request-approval',id:t.id}),[200],'request tender approval '+b.key);s=await state();
   }
   if(want>=RANK.indexOf('submitted')&&s.stage==='approval'){
-   await must(call('/api/tenders/workspace','POST',{action:'approval-decision',id:t.id,approve:true,notes:'Approved to submit (demonstration).'}),[200],'tender approval '+b.key);
-   await must(call('/api/tenders/workspace','POST',{action:'submit',id:t.id,method:'Client portal',version:'Rev A',notes:'Submitted (demonstration; nothing was sent).'}),[200],'submit tender '+b.key);s=await state();
+   if(s.approval_status==='requested'){await must(call('/api/tenders/workspace','POST',{action:'approval-decision',id:t.id,approve:true,notes:'Approved to submit (demonstration).'}),[200],'tender approval '+b.key);s=await state();}
+   if(s.stage==='approval'&&s.approval_status==='approved'){await must(call('/api/tenders/workspace','POST',{action:'submit',id:t.id,method:'Client portal',version:'Rev A',notes:'Submitted (demonstration; nothing was sent).'}),[200],'submit tender '+b.key);s=await state();}
   }
   if(want>=RANK.indexOf('awarded')&&['submitted','clarification'].includes(s.stage)){
    await must(call('/api/tenders/workspace','POST',{action:'award',id:t.id}),[200],'award '+b.key);s=await state();c.note('awards');

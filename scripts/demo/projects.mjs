@@ -20,28 +20,48 @@ export async function seedUsers(c){
  }
 }
 
+const ITP_ITEMS=[['Pre-lay surface condition','Clean, dry, tacked','witness'],['Mix temperature at paver','Within specified range','none'],['Compaction (roller pattern and density)','Meets specified relative compaction','hold']];
+
 async function makeReady(c,projectId,label){
  const {call,must,one,org}=c;
  const reg=key=>({list:q=>call(`/api/registers/${key}${q||''}`),create:(parentId,values)=>call(`/api/registers/${key}`,'POST',{parentId,values}),update:(id,revision,values)=>call(`/api/registers/${key}`,'PATCH',{id,revision,values}),move:(id,transition)=>call(`/api/registers/${key}`,'PATCH',{id,transition})});
- if(!await one('SELECT id FROM risks WHERE organisation_id=? AND project_id=?',[org,projectId])){
-  const risk=(await must(reg('risks').create(projectId,{title:`${label}: traffic and plant interface`,category:'safety',initial_likelihood:4,initial_consequence:4,residual_likelihood:2,residual_consequence:3}),[201],'risk')).record;
-  await must(reg('risks').update(risk.id,risk.revision,{controls:'Traffic management plan, exclusion zones, spotters, pre-start briefing'}),[200],'risk controls');
-  await must(reg('risks').move(risk.id,'controlled'),[200],'risk controlled');c.note('risks');
+ // Each readiness artefact is resumed from its stored state, substep by substep, so an interruption between (for example) creating
+ // an ITP and adding its items, or creating a SWMS and issuing it, is completed on the next run rather than skipped.
+ let risk=await one('SELECT id,revision,controls,status FROM risks WHERE organisation_id=? AND project_id=?',[org,projectId]);
+ if(!risk){
+  await must(reg('risks').create(projectId,{title:`${label}: traffic and plant interface`,category:'safety',initial_likelihood:4,initial_consequence:4,residual_likelihood:2,residual_consequence:3}),[201],'risk');c.note('risks');
+  risk=await one('SELECT id,revision,controls,status FROM risks WHERE organisation_id=? AND project_id=?',[org,projectId]);
  }
- if(!await one('SELECT id FROM swms WHERE organisation_id=? AND project_id=?',[org,projectId])){
-  const sw=await must(call('/api/hseq/swms','POST',{action:'create',projectId,title:`${label}: asphalt works`,questionnaire:{activity:'Profile, tack and pave asphalt under traffic management',workSteps:['Establish traffic management','Profile existing surface','Apply tack coat','Pave and roll','Reinstate linemarking'],highRiskWork:['mobile-plant'],ppe:['Hi-vis','Safety boots','Hearing protection'],emergency:'Call 000; first aider on site',responsiblePeople:'Site supervisor'}}),[201],'swms');
-  let swms=await must(call('/api/hseq/swms?id='+sw.swmsId),[200],'swms get');
-  const content={...swms.revisions[0].content,workSteps:swms.revisions[0].content.workSteps.map(s=>({...s,hazards:s.hazards||'Moving plant, hot asphalt, live traffic',controls:s.controls||'Exclusion zone, spotters, TMP, PPE'}))};
-  swms=await must(call('/api/hseq/swms','POST',{action:'save',id:sw.swmsId,revisionId:sw.revisionId,updatedAt:swms.revisions[0].updated_at,content}),[200],'swms save');
-  for(const to of ['review','approved','issued'])swms=await must(call('/api/hseq/swms','POST',{action:'transition',id:sw.swmsId,to}),[200],'swms '+to);
-  c.note('swms');
+ if(!risk.controls){
+  await must(reg('risks').update(risk.id,Number(risk.revision),{controls:'Traffic management plan, exclusion zones, spotters, pre-start briefing'}),[200],'risk controls');
+  risk=await one('SELECT id,revision,controls,status FROM risks WHERE organisation_id=? AND project_id=?',[org,projectId]);
  }
- if(!await one('SELECT id FROM itps WHERE organisation_id=? AND project_id=?',[org,projectId])){
-  const itp=(await must(reg('itps').create(projectId,{title:`${label}: asphalt placement ITP`,activity:'Asphalt placement',specification:'Project specification (demonstration)'}),[201],'itp')).record;
-  for(const [inspection,criteria,type] of [['Pre-lay surface condition','Clean, dry, tacked','witness'],['Mix temperature at paver','Within specified range','none'],['Compaction (roller pattern and density)','Meets specified relative compaction','hold']]){
-   await must(call('/api/registers/itp_items','POST',{parentId:itp.id,values:{inspection,acceptance_criteria:criteria,point_type:type,responsibility:'Foreman'}}),[201],'itp item');
+ if(risk.status!=='controlled')await must(reg('risks').move(risk.id,'controlled'),[200],'risk controlled');
+ let sw=await one('SELECT id,status,current_revision_id FROM swms WHERE organisation_id=? AND project_id=?',[org,projectId]);
+ if(!sw){
+  await must(call('/api/hseq/swms','POST',{action:'create',projectId,title:`${label}: asphalt works`,questionnaire:{activity:'Profile, tack and pave asphalt under traffic management',workSteps:['Establish traffic management','Profile existing surface','Apply tack coat','Pave and roll','Reinstate linemarking'],highRiskWork:['mobile-plant'],ppe:['Hi-vis','Safety boots','Hearing protection'],emergency:'Call 000; first aider on site',responsiblePeople:'Site supervisor'}}),[201],'swms create');c.note('swms');
+  sw=await one('SELECT id,status,current_revision_id FROM swms WHERE organisation_id=? AND project_id=?',[org,projectId]);
+ }
+ {
+  let swms=await must(call('/api/hseq/swms?id='+sw.id),[200],'swms get');
+  if(sw.status==='draft'&&!swms.revisions[0].content.workSteps.every(x=>x.hazards&&x.controls)){
+   const content={...swms.revisions[0].content,workSteps:swms.revisions[0].content.workSteps.map(x=>({...x,hazards:x.hazards||'Moving plant, hot asphalt, live traffic',controls:x.controls||'Exclusion zone, spotters, TMP, PPE'}))};
+   swms=await must(call('/api/hseq/swms','POST',{action:'save',id:sw.id,revisionId:sw.current_revision_id,updatedAt:swms.revisions[0].updated_at,content}),[200],'swms save');
   }
-  c.note('itps');
+  const rank=['draft','review','approved','issued'];
+  for(const to of ['review','approved','issued']){
+   const cur=(await one('SELECT status FROM swms WHERE organisation_id=? AND id=?',[org,sw.id])).status;
+   if(rank.indexOf(cur)<rank.indexOf(to))await must(call('/api/hseq/swms','POST',{action:'transition',id:sw.id,to}),[200],'swms '+to);
+  }
+ }
+ let itp=await one('SELECT id FROM itps WHERE organisation_id=? AND project_id=?',[org,projectId]);
+ if(!itp){
+  const made=(await must(reg('itps').create(projectId,{title:`${label}: asphalt placement ITP`,activity:'Asphalt placement',specification:'Project specification (demonstration)'}),[201],'itp')).record;c.note('itps');
+  itp={id:made.id};
+ }
+ for(const [inspection,criteria,type] of ITP_ITEMS){
+  if(!await one('SELECT id FROM itp_items WHERE organisation_id=? AND itp_id=? AND inspection=?',[org,itp.id,inspection]))
+   await must(call('/api/registers/itp_items','POST',{parentId:itp.id,values:{inspection,acceptance_criteria:criteria,point_type:type,responsibility:'Foreman'}}),[201],'itp item');
  }
  const ims=await must(call('/api/ims?jobId='+projectId),[200],'ims');
  for(const it of ims.jobPack||ims.job_pack||[])if(!/not applicable|complete/i.test(it.status||''))await must(call('/api/ims','PATCH',{kind:'job-pack',id:it.id,status:'Not Applicable',reason:'Covered by company IMS for this scope (demonstration)'}),[200],'ims n/a');
@@ -73,12 +93,14 @@ export async function projectsStage(c){
     await must(call('/api/projects/team','POST',{projectId:id,userId:c.ids['user:'+u],projectRole:role}),[200,201],'team '+u);c.note('project-members');
    }
   }
+  // Lifecycle is resumed from the stored stage: setup -> ready, then ready -> active, each only if still outstanding.
   p=await one('SELECT stage FROM jobs WHERE organisation_id=? AND id=?',[org,id]);
   if(s.lifecycle!=='setup'&&p.stage==='setup'){
    await makeReady(c,id,key==='B1'?'Quarry Road':'Anzac Parade');
    await must(call('/api/projects/workspace','POST',{action:'transition',id,to:'ready'}),[200],'ready '+key);
-   await must(call('/api/projects/workspace','POST',{action:'transition',id,to:'active'}),[200],'active '+key);
+   p=await one('SELECT stage FROM jobs WHERE organisation_id=? AND id=?',[org,id]);
   }
+  if(s.lifecycle!=='setup'&&p.stage==='ready')await must(call('/api/projects/workspace','POST',{action:'transition',id,to:'active'}),[200],'active '+key);
  }
  log('projects',(await one('SELECT COUNT(*) n FROM jobs WHERE organisation_id=?',[org])).n,'users',(await one('SELECT COUNT(*) n FROM users WHERE organisation_id=?',[org])).n);
 }

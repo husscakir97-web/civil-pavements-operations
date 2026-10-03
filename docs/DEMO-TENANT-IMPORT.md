@@ -12,25 +12,41 @@ Dry run (read-only; a SELECT-only database user is enough; changes nothing):
 node scripts/import-demo-tenant.mjs --organisation-id <organisation id> --out plan.json
 ```
 
+After an import has started (or finished), add `--baseline <file> --baseline-sha256 <hash>` so the plan can prove which existing demo-keyed records the import itself created. Without a verified baseline an existing record under a demonstration key cannot be proven to be ours and is a conflict.
+
 It prints, per group, what would be **created**, what already exists and is ours (**skip**), and what **conflicts**. It then lists **every table apply can write to** (51 tables, 584 rows for the full dataset): direct records, and everything that hangs from them — estimates and bid reviews under tenders; projects, baselines, members, claims, claim lines, invoices, risks, SWMS, ITPs, programme, cost transactions under projects; scenarios, activities and costs under plans; service events, workshop orders and meter readings under plant — each with expected, present and to-create counts. `--out` adds the planned parent key for every row (for example `DEMO-T-001 #2` for a claim). It also shows tables the application writes on first use only if missing (entitlements, profile, rate library), the append-only audit and event tables, and states that no attachments or files are created. Exit code 0 = clean
 plan, 3 = conflicts or blockers (nothing may be applied), 2 = refused or bad input. The plan carries a `planHash`.
 
 Apply (test environments only):
 
 ```
-node scripts/import-demo-tenant.mjs --organisation-id <id> --apply --plan-hash <hash from a fresh dry run> --baseline <file> --base-url http://127.0.0.1:PORT
+node scripts/import-demo-tenant.mjs --organisation-id <id> --apply --plan-hash <hash from a fresh dry run> --baseline <file>
 ```
 
 The first apply writes the baseline file and prints its SHA-256. Resuming an interrupted import needs `--baseline-sha256 <that value>`.
 
 with `DEMO_SEED_EMAIL` / `DEMO_SEED_PASSWORD` of an administrator **of that organisation**. Apply refuses unless the database name ends
-in `_test`, the database and the app are on this machine, `NODE_ENV` is not production, no external integration is configured
+in `_test`, the database is on this machine, `NODE_ENV` is not production, no external integration is configured
 (`EMAIL_ENABLED`, SMTP, billing, AI, SMS, ABR), the plan hash matches a plan computed just now, the plan has no conflicts or blockers,
 and the sign-in is an administrator of the named organisation. There is no flag that bypasses any of this.
 
 ## How the scope is known
 
 `docs/DEMO-IMPORT-FOOTPRINT.json` is **measured, not hand-written**: the test imports the dataset into an empty tenant, records every table that gained rows and how many rows hang from each demonstration parent, and fails if any table gained rows that the footprint does not list, if the committed file differs from the measurement, or if a populated tenant gains a different number of rows than the plan said. A tenant that has records attached to demonstration parents beyond the dataset is a blocker.
+
+## What is new in this revision (review findings)
+
+- **Original records are never adopted.** A record under a demonstration key counts as ours only if a verified baseline shows it did not
+  exist when the import began. A similar-name record or an exact copy that was already there is a conflict, and the write boundary
+  independently refuses any write carrying the id of a record that existed before the import (anywhere in the request body or query),
+  so a bypassed or stale plan still cannot modify an original row.
+- **The writer is bound to the verified database.** The importer starts its own isolated app with the verified database settings, a
+  random auth secret and every integration switched off, then proves the binding: the session the app issued for the owner must be
+  in the inspected database. `--base-url` is rejected, because nothing outside this process can prove what a running app is bound to.
+- **Resume works at substep granularity.** Each multi-step sequence is resumed from stored state: tender bid review then decision,
+  estimate creation then pricing then the tender value update, approval then submission, risk create/controls/controlled, SWMS
+  create/save/review/approve/issue, ITP then its items, project setup then ready then active, a shift then its In Progress marking,
+  a meter reading then its service plan.
 
 ## What it guarantees
 
@@ -106,6 +122,7 @@ and the API guard has no team, invitation, auth or admin route. They are active 
 
 ## Tests
 
+`npm run test:import-demo` (the full suite) and `npm run test:import-review` (the three review findings, with eight interruption points) both run in CI on isolated disposable databases (`import_check_test`, `import_review_test`). 
 `MYSQL_DATABASE=import_check_test node scripts/test-import-demo-tenant.mjs` (empty disposable database, production build required)
 builds an owner with a company profile, a division, a client, a worker and an opportunity, plus a second tenant, and proves: the guards;
 dry run changes nothing, with a SELECT-only user; four deliberate conflicts are refused; an interrupted (killed) import resumes; no

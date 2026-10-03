@@ -21,9 +21,19 @@ const MUTATIONS=[
 const OS_MODULES=new Set(['crews','suppliers','subcontractors']);
 const DIVISION_CODES=new Set(DIVISIONS.map(d=>d[0]));
 
-export function guardedCall(call){
+// Provenance: which records existed BEFORE the import began. The pre-import baseline holds a salted digest of every row id, so a
+// request can be checked against it without the baseline containing a single raw id. The importer only ever builds on records that
+// are NOT in the baseline (the ones it created itself, in this run or an interrupted earlier one).
+export function makeProvenance(baseline){
+ const ids=new Set();for(const t of Object.values(baseline.tables))for(const k of Object.keys(t.rows))ids.add(k);
+ return {isOriginal:id=>typeof id==='string'&&id.length>=4&&ids.has(mac(baseline.salt,'id:'+id))};
+}
+const stringsOf=(path,body)=>{const out=[];const walk=v=>{if(typeof v==='string')out.push(v);else if(Array.isArray(v))v.forEach(walk);else if(v&&typeof v==='object')Object.values(v).forEach(walk);};walk(body);for(const [,v] of new URLSearchParams(path.split('?')[1]||''))out.push(v);return out;};
+export function guardedCall(call,provenance=null){
  return async(path,method='GET',body)=>{
   if(method!=='GET'){
+   // Write boundary: a write may not carry the id of any record that existed before the import began, wherever it appears in the request.
+   if(provenance)for(const v of stringsOf(path,body))if(provenance.isOriginal(v))throw new Error(`Refused by the import guard: ${method} ${path.split('?')[0]} refers to a record that existed before the import began (${v.slice(0,8)}…). The import never modifies or builds on original records. Nothing was changed by this request.`);
    const base=path.split('?')[0];
    const ok=(method==='POST'&&base==='/api/business-units'&&DIVISION_CODES.has(body?.code))
     ||(base==='/api/os/records'&&OS_MODULES.has(body?.module)&&String(body?.name||'').startsWith('DEMO '))
@@ -45,7 +55,7 @@ if([...DEMO_TEAM.values()].some(u=>/^(admin|owner)$/i.test(u.role)))throw new Er
 const USER_INSERT=/^INSERT IGNORE INTO users \(id,organisation_id,email,name,role,created_at,active\) VALUES \(\?,\?,\?,\?,\?,\?,1\)$/;
 // The stages use SQL for reading, plus exactly two clearly marked writes: the no-login demonstration team members, and marking
 // today's demonstration shift "In Progress" (the pre-start checklist that normally gates that state is not part of the dataset).
-export function guardedDb(db,org){
+export function guardedDb(db,org,provenance=null){
  return {
   end:()=>db.end(),
   query:async(sql,params=[])=>{
@@ -62,7 +72,10 @@ export function guardedDb(db,org){
     }
     return db.query(sql,params);
    }
-   if(text==="UPDATE shifts SET status='In Progress' WHERE organisation_id=? AND name=?"&&params[0]===org&&SHIFT_IN_PROGRESS.has(params[1]))return db.query(sql,params);
+   if(text==="UPDATE shifts SET status='In Progress' WHERE organisation_id=? AND name=?"&&params[0]===org&&SHIFT_IN_PROGRESS.has(params[1])){
+    if(provenance){const [rows]=await db.query('SELECT id FROM shifts WHERE organisation_id=? AND name=?',[org,params[1]]);if(rows.length!==1||provenance.isOriginal(rows[0].id))throw new Error('Refused by the import guard: this shift existed before the import began (or is ambiguous); it is never modified.');}
+    return db.query(sql,params);
+   }
    throw new Error('Refused by the import guard: this SQL write is not an allowed demonstration write.');
   },
  };
@@ -133,4 +146,13 @@ export async function schemaShape(db){
  const [tables]=await db.query("SELECT TABLE_NAME t FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' ORDER BY 1");const shape=[];
  for(const {t} of tables){const [cols]=await db.query('SELECT COLUMN_NAME c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? ORDER BY ORDINAL_POSITION',[t]);shape.push(t+'('+cols.map(x=>x.c).join(',')+')');}
  return shape.join(';');
+}
+
+/** Proves the app we are about to write through is bound to THIS database: the session it just created for the owner must be in it. */
+export async function verifyBinding(db,cookie,userId){
+ const m=/(?:^|;\s*)[^=;]*session_token=([^;]+)/.exec(cookie||'');
+ if(!m)throw new Error('Refusing: the app did not return a session cookie.');
+ const token=decodeURIComponent(m[1]).split('.')[0];
+ const [rows]=await db.query('SELECT COUNT(*) n FROM auth_session WHERE user_id=? AND token=?',[userId,token]);
+ if(!Number(rows[0].n))throw new Error('Refusing: the app is not bound to the inspected database (the session it issued is not in it). Nothing was changed.');
 }

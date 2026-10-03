@@ -2,9 +2,9 @@
 // seed (scripts/seed-demo-company.mjs), whose guards are unchanged.
 //
 //   Dry run (read-only; works with a SELECT-only database user; touches nothing):
-//     node scripts/import-demo-tenant.mjs --organisation-id <id> [--seed-date 2026-10-05] [--out plan.json]
+//     node scripts/import-demo-tenant.mjs --organisation-id <id> [--seed-date 2026-10-05] [--out plan.json] [--baseline <file> --baseline-sha256 <hash>]
 //   Apply (test environments only, see below):
-//     node scripts/import-demo-tenant.mjs --organisation-id <id> --apply --plan-hash <hash from a fresh dry run> --baseline <file> [--baseline-sha256 <hash, required when resuming>] --base-url http://127.0.0.1:PORT
+//     node scripts/import-demo-tenant.mjs --organisation-id <id> --apply --plan-hash <hash from a fresh dry run> --baseline <file> [--baseline-sha256 <hash, required when resuming>]
 //
 // What it does: adds demonstration records through the application's own API (state machines, approvals, audit trail), found and
 // resumed by deterministic natural keys. What it never does: delete or overwrite any record, rename the organisation, edit the
@@ -20,8 +20,10 @@
 import {writeFileSync,existsSync} from 'node:fs';
 import {connect} from './mysql-config.mjs';
 import {assertReadOnlySql} from './live-tenant-inventory.mjs';
-import {buildPlan,DIVISIONS} from './demo/import-plan.mjs';
-import {guardedCall,guardedDb,snapshot,compare,writeBaseline,loadBaseline,schemaShape} from './demo/import-guards.mjs';
+import {buildPlan} from './demo/import-plan.mjs';
+import {snapshot,compare,writeBaseline,loadBaseline,schemaShape,makeProvenance,verifyBinding} from './demo/import-guards.mjs';
+import {startIsolatedApp} from './demo/import-app.mjs';
+import {applyImport} from './demo/import-apply.mjs';
 import {verifyImport} from './demo/import-verify.mjs';
 
 const arg=(name,fallback)=>{const i=process.argv.indexOf(name);return i>=0?process.argv[i+1]:fallback;};
@@ -29,19 +31,20 @@ const flag=name=>process.argv.includes(name);
 const org=arg('--organisation-id');
 const SEED_DATE=arg('--seed-date','2026-10-05');
 const apply=flag('--apply');
-if(!org||org.startsWith('--')){console.error('Usage: --organisation-id <id> [--seed-date YYYY-MM-DD] [--out plan.json]   (dry run)\n       --organisation-id <id> --apply --plan-hash <hash> --base-url http://127.0.0.1:PORT   (test environments only)');process.exit(2);}
+if(!org||org.startsWith('--')){console.error('Usage: --organisation-id <id> [--seed-date YYYY-MM-DD] [--out plan.json]   (dry run)\n       --organisation-id <id> --apply --plan-hash <hash> --baseline <file>   (test environments only)');process.exit(2);}
 if(!/^\d{4}-\d{2}-\d{2}$/.test(SEED_DATE)||Number.isNaN(Date.parse(SEED_DATE))){console.error('--seed-date must be a valid YYYY-MM-DD date');process.exit(2);}
 const out=arg('--out');
 if(out&&existsSync(out)){console.error('Refusing to overwrite an existing file: '+out);process.exit(2);}
 
 // ---------------------------------------------------------------------------------------------- apply-mode environment guards
-const base=arg('--base-url');
+// The importer starts its own isolated app (scripts/demo/import-app.mjs) so the writer is bound to the verified database and a safe
+// configuration by construction. An already-running app cannot be used: nothing outside this process can prove what it is bound to.
+if(process.argv.includes('--base-url')){console.error('Refusing: --base-url is not accepted. The importer starts its own isolated app on the verified database and configuration (run npm run build first).');process.exit(2);}
 if(apply){
  const REFUSE=[];const need=(ok,why)=>{if(!ok)REFUSE.push(why);};
  need(/_test$/.test(process.env.MYSQL_DATABASE||''),'MYSQL_DATABASE must end in _test');
  need(['127.0.0.1','localhost','::1'].includes(process.env.MYSQL_HOST||''),'MYSQL_HOST must be this machine; remote databases are refused');
  need(process.env.NODE_ENV!=='production','NODE_ENV=production is refused');
- need(Boolean(base)&&/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(base),'--base-url must point at a local app (http://127.0.0.1:PORT)');
  need(Boolean(arg('--plan-hash')),'--plan-hash from a fresh dry run is required');
  need(Boolean(arg('--baseline')),'--baseline <file> is required (it is written before the first change and reused when an interrupted import is resumed)');
  for(const name of ['SMTP_HOST','SMTP_USER','BILLING_PROVIDER','BILLING_WEBHOOK_SECRET','ABR_GUID','AI_API_KEY','OPENAI_API_KEY','TWILIO_AUTH_TOKEN','SMS_PROVIDER'])need(!process.env[name],`${name} is set: external integrations must be unconfigured`);
@@ -71,8 +74,12 @@ const render=plan=>{
  console.log(`\n  nothing is deleted or overwritten; the owner's login, memberships, company profile, billing and other tenants are not touched.\n  planHash: ${plan.planHash}\n`);
 };
 
+let app;
 try{
- const plan=await readOnly(q=>buildPlan(q,org,SEED_DATE));
+ // Provenance: with a verified baseline the plan can tell records this import created from records that were already there.
+ const baselineFile=arg('--baseline');let loaded=null;
+ if(baselineFile&&existsSync(baselineFile)){loaded=loadBaseline(baselineFile,arg('--baseline-sha256'),org,await schemaShape(raw));console.log('Verified pre-import baseline: records absent from it were created by this import.');}
+ const plan=await readOnly(q=>buildPlan(q,org,SEED_DATE,loaded?makeProvenance(loaded):null));
  const refused=plan.conflicts.length>0||plan.blockers.length>0;
  if(!apply){
   render(plan);
@@ -83,52 +90,33 @@ try{
   if(refused){console.error('Refusing to apply: the plan has conflicts or blockers. Nothing was changed.');process.exit(3);}
   if(arg('--plan-hash')!==plan.planHash){console.error('Refusing to apply: --plan-hash does not match a fresh plan (the tenant changed since the plan was reviewed, or an earlier run was interrupted). Run the dry run again and review it. Nothing was changed.');process.exit(3);}
 
-  // sign in as the owner of THIS organisation
+  // the owner of THIS organisation, from the inspected database
   const email=process.env.DEMO_SEED_EMAIL,password=process.env.DEMO_SEED_PASSWORD;
   const [owner]=(await raw.query('SELECT id,organisation_id,role FROM users WHERE email=?',[email]))[0];
   if(!owner||owner.organisation_id!==org||owner.role!=='admin'){console.error('Refusing to apply: the signed-in account must be an administrator of the named organisation. Nothing was changed.');process.exit(2);}
-  let r;for(let i=0;i<6;i++){r=await fetch(base+'/api/auth/sign-in/email',{method:'POST',headers:{origin:base,'Content-Type':'application/json'},body:JSON.stringify({email,password})});if(r.status!==429)break;await new Promise(x=>setTimeout(x,(Number(r.headers.get('retry-after'))||15)*1000));}
+  // a private app instance bound to this database and configuration, then proof that it really is
+  app=await startIsolatedApp(process.env);
+  let r;for(let i=0;i<6;i++){r=await fetch(app.base+'/api/auth/sign-in/email',{method:'POST',headers:{origin:app.base,'Content-Type':'application/json'},body:JSON.stringify({email,password})});if(r.status!==429)break;await new Promise(x=>setTimeout(x,(Number(r.headers.get('retry-after'))||15)*1000));}
   if(!r.ok){console.error('Refusing to apply: sign-in failed ('+r.status+').');process.exit(2);}
   const cookie=r.headers.getSetCookie().map(c=>c.split(';')[0]).join('; ');
-  const rawCall=async(path,method='GET',body)=>{const res=await fetch(base+path,{method,headers:{origin:base,cookie,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const text=await res.text();let json;try{json=JSON.parse(text);}catch{json=text;}return {status:res.status,body:json};};
-  const rawForm=async(path,fields)=>{const f=new FormData();for(const [k,v] of Object.entries(fields))f.set(k,typeof v==='string'?v:JSON.stringify(v));const res=await fetch(base+path,{method:'POST',headers:{origin:base,cookie},body:f});const text=await res.text();let json;try{json=JSON.parse(text);}catch{json=text;}return {status:res.status,body:json};};
-  const call=guardedCall(rawCall),db=guardedDb(raw,org);
-  const form=async(path,fields)=>{if(path.split('?')[0]!=='/api/dockets')throw new Error(`Refused by the import guard: form upload to ${path} is not an allowed demonstration write.`);return rawForm(path,fields);};
-  const must=async(promise,codes,label)=>{const res=await promise;if(!codes.includes(res.status))throw new Error(`${label} -> ${res.status} ${JSON.stringify(res.body).slice(0,300)}`);return res.body;};
-  const one=async(sql,params=[])=>(await db.query(sql,params))[0][0]??null,all=async(sql,params=[])=>(await db.query(sql,params))[0];
-  const addDays=(day,n)=>new Date(Date.parse(day+'T00:00:00Z')+n*86400000).toISOString().slice(0,10);
-  const {createHash}=await import('node:crypto');
-  const ctx={db,org,user:owner,base,call,form,must,one,all,log:(...a)=>console.log(...a),SEED_DATE,d:n=>addDays(SEED_DATE,n),addDays,created:{},ids:{},note:(k,n=1)=>{ctx.created[k]=(ctx.created[k]||0)+n;},tag:createHash('sha1').update(org).digest('hex').slice(0,8)};
-  const {STAGES,hydrate}=await import('./demo/stages.mjs');
+  await verifyBinding(raw,cookie,owner.id);
+  const rawCall=async(path,method='GET',body)=>{const res=await fetch(app.base+path,{method,headers:{origin:app.base,cookie,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const text=await res.text();let json;try{json=JSON.parse(text);}catch{json=text;}return {status:res.status,body:json};};
+  const rawForm=async(path,fields)=>{const f=new FormData();for(const [k,v] of Object.entries(fields))f.set(k,typeof v==='string'?v:JSON.stringify(v));const res=await fetch(app.base+path,{method:'POST',headers:{origin:app.base,cookie},body:f});const text=await res.text();let json;try{json=JSON.parse(text);}catch{json=text;}return {status:res.status,body:json};};
 
   // The baseline is the state of the whole database BEFORE the first change, stored as salted digests only (no raw records, no
   // secrets; session and token tables are never read). A resumed import reuses it, so the final comparison is always against the
   // original pre-import state, never against records an earlier, interrupted run created. On resume the file must match the SHA-256
   // the operator was shown when it was created, be owner-only, name this organisation and schema, and be internally consistent.
-  const baselineFile=arg('--baseline');let before;
-  if(existsSync(baselineFile)){before=loadBaseline(baselineFile,arg('--baseline-sha256'),org,await schemaShape(raw));console.log('Resuming: comparing against the verified pre-import baseline.');}
+  let before=loaded;
+  if(before)console.log('Resuming: comparing against the verified pre-import baseline.');
   else{before=await snapshot(raw);const sha=writeBaseline(baselineFile,org,before);console.log(`Pre-import baseline saved (digests only). Baseline sha256: ${sha}\nKeep this value: resuming an interrupted import requires --baseline-sha256 ${sha}`);}
-  const divisionsStage=async c=>{
-   for(const [code,name,description] of DIVISIONS){
-    const have=await c.one('SELECT id FROM business_units WHERE organisation_id=? AND code=? AND name=? AND description=?',[org,code,name,description]);
-    if(have){c.ids['division:'+code]=have.id;continue;}
-    const made=await must(c.call('/api/business-units','POST',{name,code,description}),[201],'division '+code);
-    c.ids['division:'+code]=made.id||made.division?.id;c.note('divisions');
-   }
-  };
-  await hydrate(ctx);for(const k of Object.keys(ctx.ids))if(k.startsWith('division:'))delete ctx.ids[k];
-  for(const r of await all('SELECT id,code,name,description FROM business_units WHERE organisation_id=?',[org])){const d=DIVISIONS.find(x=>x[0]===r.code&&x[1]===r.name&&x[2]===r.description);if(d)ctx.ids['division:'+r.code]=r.id;}
-  const stop=arg('--stop-after');
-  const stages=[['divisions',divisionsStage],...STAGES.filter(([n])=>n!=='company'&&n!=='verify')];
-  for(const [name,fn] of stages){
-   console.log(`== ${name}`);await fn(ctx);
-   if(stop===name){console.log(`Stopped after "${name}" as requested; run a fresh dry run and apply again to resume.`);break;}
-  }
-  console.log('\nCreated in this run:',JSON.stringify(ctx.created));
+  const stages=(arg('--stages')||'').split(',').filter(Boolean),stopAfter=arg('--stop-after');
+  const {created}=await applyImport({raw,org,seedDate:SEED_DATE,rawCall,rawForm,baseline:before,stages,stopAfter,crash:arg('--crash-after-call')});
+  console.log('\nCreated in this run:',JSON.stringify(created));
   let failed=0;
-  if(!stop){
+  if(!stopAfter&&!stages.length){
    const result=await readOnly(q=>verifyImport(q,org,console.log));failed+=result.failed;
-   if(arg('--manifest'))writeFileSync(arg('--manifest'),JSON.stringify({seedDate:SEED_DATE,organisationId:org,created:ctx.created,counts:result.counts,totals:result.totals},null,1));
+   if(arg('--manifest'))writeFileSync(arg('--manifest'),JSON.stringify({seedDate:SEED_DATE,organisationId:org,created,counts:result.counts,totals:result.totals},null,1));
   }
   const after=await snapshot(raw,before.salt),drift=compare(before,after);
   console.log(`Existing rows changed: ${drift.changedRows}; removed: ${drift.removedRows}`);
@@ -137,4 +125,4 @@ try{
   process.exitCode=failed?1:0;
  }
 }catch(e){console.error(e.code==='NO_ORG'?e.message:'Import failed: '+String(e.message).replace(/\s+/g,' ').slice(0,300));process.exitCode=1;}
-finally{await raw.end();}
+finally{app?.stop();await raw.end();}

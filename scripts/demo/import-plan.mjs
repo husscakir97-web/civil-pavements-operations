@@ -28,7 +28,7 @@ export const HSEQ_TEXT={
 // Modules the dataset needs. A module the organisation does not hold would 404 part-way through, so it blocks the plan instead.
 export const REQUIRED_MODULES=['pipeline','estimating','projects','ims','operations','field','dockets','commercial','workshop'];
 
-export async function buildPlan(q,org,seedDate){
+export async function buildPlan(q,org,seedDate,provenance=null){
  const groups=[];
  const add=(group,key,state,reason)=>{let g=groups.find(x=>x.group===group);if(!g){g={group,create:0,skip:0,conflict:0,items:[]};groups.push(g);}g[state]++;g.items.push(reason?{key,state,reason}:{key,state});};
  const one=async(sql,p=[])=>(await q(sql,p))[0]??null;
@@ -45,62 +45,71 @@ export async function buildPlan(q,org,seedDate){
  const ent=Object.fromEntries((await q('SELECT module,status FROM organisation_entitlements WHERE organisation_id=?',[org])).map(r=>[r.module,r.status]));
  for(const m of REQUIRED_MODULES)if(ent[m]&&ent[m]!=='active')blockers.push(`Module "${m}" is ${ent[m]} for this organisation; the dataset needs it active.`);
 
- // ---- divisions ----
+ // ---- keyed records ----
+ // A record that already exists under a demonstration key is "ours" (skip) ONLY when it is provably not an original: the
+ // verified pre-import baseline shows it did not exist when the import began. Without a baseline nothing can be proven, and an
+ // original record that merely looks like a demo record (similar name or an exact copy) is a conflict, never adopted: later stages
+ // would otherwise write to it.
+ const UNPROVEN='exists, and no verified baseline was supplied to prove this import created it (after an import, run the dry run with --baseline and --baseline-sha256)';
+ const ORIGINAL='existed before the import began (it is in the baseline); original records are never adopted or modified';
+ const judge=(group,key,row,matches,mismatch)=>{
+  if(!row)return add(group,key,'create');
+  if(!provenance)return add(group,key,'conflict',UNPROVEN);
+  if(provenance.isOriginal(row.id))return add(group,key,'conflict',ORIGINAL);
+  if(!matches)return add(group,key,'conflict',mismatch);
+  return add(group,key,'skip');
+ };
  for(const [code,name,description] of DIVISIONS){
-  const r=await one('SELECT name,description FROM business_units WHERE organisation_id=? AND code=?',[org,code]);
-  if(!r)add('divisions',code,'create');
-  else if(r.name===name&&r.description===description)add('divisions',code,'skip');
-  else add('divisions',code,'conflict','a division with this code exists and is not the demonstration division');
+  const r=await one('SELECT id,name,description FROM business_units WHERE organisation_id=? AND code=?',[org,code]);
+  judge('divisions',code,r,r&&r.name===name&&r.description===description,'a division with this code exists and is not the demonstration division');
  }
- // ---- people, plant, clients ----
  for(const [no,,last] of WORKERS){
-  const r=await one('SELECT name FROM workers WHERE organisation_id=? AND employee_number=?',[org,no]);
-  if(!r)add('workers',no,'create');else if(String(r.name).toLowerCase().includes(String(last).toLowerCase()))add('workers',no,'skip');else add('workers',no,'conflict','employee number is used by a different person');
+  const r=await one('SELECT id,name FROM workers WHERE organisation_id=? AND employee_number=?',[org,no]);
+  judge('workers',no,r,r&&String(r.name).toLowerCase().includes(String(last).toLowerCase()),'employee number is used by a different person');
  }
  for(const [no,name] of PLANT){
-  const r=await one('SELECT name FROM plant WHERE organisation_id=? AND plant_number=?',[org,no]);
-  if(!r)add('plant',no,'create');else if(String(r.name).includes(name))add('plant',no,'skip');else add('plant',no,'conflict','plant number is used by a different asset');
+  const r=await one('SELECT id,name FROM plant WHERE organisation_id=? AND plant_number=?',[org,no]);
+  judge('plant',no,r,r&&String(r.name).includes(name),'plant number is used by a different asset');
  }
  const demoClients=await ids("SELECT id FROM clients WHERE organisation_id=? AND client_code LIKE 'DEMO-%'",[org]);
  for(const k of CLIENTS){
   const r=await one('SELECT id,name FROM clients WHERE organisation_id=? AND client_code=?',[org,k.code]);
-  if(!r)add('clients',k.code,'create');else if(r.name===k.name)add('clients',k.code,'skip');else add('clients',k.code,'conflict','client code is used by a different client');
-  for(const [site] of k.sites){const s=r&&await one('SELECT id FROM client_sites WHERE organisation_id=? AND client_id=? AND name=?',[org,r.id,site]);add('client sites',`${k.code}:${site}`,s?'skip':'create');}
-  for(const [contact] of k.contacts){const s=r&&await one('SELECT id FROM client_contacts WHERE organisation_id=? AND client_id=? AND name=?',[org,r.id,contact]);add('client contacts',`${k.code}:${contact}`,s?'skip':'create');}
+  judge('clients',k.code,r,r&&r.name===k.name,'client code is used by a different client');
+  for(const [site] of k.sites){const x=r&&await one('SELECT id FROM client_sites WHERE organisation_id=? AND client_id=? AND name=?',[org,r.id,site]);judge('client sites',`${k.code}:${site}`,x,true);}
+  for(const [contact] of k.contacts){const x=r&&await one('SELECT id FROM client_contacts WHERE organisation_id=? AND client_id=? AND name=?',[org,r.id,contact]);judge('client contacts',`${k.code}:${contact}`,x,true);}
  }
  for(const [table,rows] of [['crews',CREWS.map(r=>r[0])],['suppliers',SUPPLIERS.map(r=>r[0])],['subcontractors',SUBS.map(r=>r[0])]])
-  for(const name of rows)add(table,name,(await one(`SELECT id FROM ${table} WHERE organisation_id=? AND name=?`,[org,name]))?'skip':'create');
+  for(const name of rows)judge(table,name,await one(`SELECT id FROM ${table} WHERE organisation_id=? AND name=?`,[org,name]),true);
 
  // ---- pipeline ----
  const demoTenders=await q("SELECT id,project_id,reference,title FROM tenders WHERE organisation_id=? AND reference LIKE 'DEMO-T-%'",[org]);
  const demoTenderIds=new Set(demoTenders.map(t=>t.id)),demoProjects=new Set(demoTenders.map(t=>t.project_id).filter(Boolean));
  for(const b of BIDS){
-  const r=await one('SELECT title FROM tenders WHERE organisation_id=? AND reference=?',[org,b.ref]);
-  if(!r)add('tenders',b.ref,'create');else if(r.title===b.title)add('tenders',b.ref,'skip');else add('tenders',b.ref,'conflict','tender reference is used by a different tender');
+  const r=await one('SELECT id,title FROM tenders WHERE organisation_id=? AND reference=?',[org,b.ref]);
+  judge('tenders',b.ref,r,r&&r.title===b.title,'tender reference is used by a different tender');
  }
  for(const l of LEADS){
-  const r=await one('SELECT client_id,tender_id FROM opportunities WHERE organisation_id=? AND name=?',[org,l.name]);
-  if(!r)add('opportunities',l.name,'create');else if(demoClients.has(r.client_id)||demoTenderIds.has(r.tender_id))add('opportunities',l.name,'skip');else add('opportunities',l.name,'conflict','an opportunity with this name exists and is not attached to a demonstration client');
+  const r=await one('SELECT id,client_id,tender_id FROM opportunities WHERE organisation_id=? AND name=?',[org,l.name]);
+  judge('opportunities',l.name,r,r&&(demoClients.has(r.client_id)||demoTenderIds.has(r.tender_id)),'an opportunity with this name exists and is not attached to a demonstration client');
  }
  // ---- shifts, users, dockets, plan, safety records ----
  for(const s of SHIFTS){
-  const r=await one('SELECT project_id FROM shifts WHERE organisation_id=? AND name=?',[org,s[0]]);
-  if(!r)add('shifts',s[0],'create');else if(demoProjects.has(r.project_id))add('shifts',s[0],'skip');else add('shifts',s[0],'conflict','a shift with this name exists and is not on a demonstration project');
+  const r=await one('SELECT id,project_id FROM shifts WHERE organisation_id=? AND name=?',[org,s[0]]);
+  judge('shifts',s[0],r,r&&demoProjects.has(r.project_id),'a shift with this name exists and is not on a demonstration project');
  }
  for(const [,,,local] of USERS){
-  const email=local+DEMO_EMAIL_DOMAIN;const r=await one('SELECT organisation_id FROM users WHERE email=?',[email]);
-  if(!r)add('team members (no login)',email,'create');else if(r.organisation_id===org)add('team members (no login)',email,'skip');else add('team members (no login)',email,'conflict','this address already belongs to another organisation');
+  const email=local+DEMO_EMAIL_DOMAIN;const r=await one('SELECT id,organisation_id FROM users WHERE email=?',[email]);
+  if(r&&r.organisation_id!==org)add('team members (no login)',email,'conflict','this address already belongs to another organisation');
+  else judge('team members (no login)',email,r,true);
  }
- for(const [no] of DOCKETS){const r=await one('SELECT id FROM dockets WHERE organisation_id=? AND docket_no=?',[org,no]);add('dockets',no,r?'skip':'create');}
- {const r=await one('SELECT project_id FROM planning_plans WHERE organisation_id=? AND name=?',[org,PLAN_NAME]);
-  if(!r)add('planning plans',PLAN_NAME,'create');else if(demoProjects.has(r.project_id))add('planning plans',PLAN_NAME,'skip');else add('planning plans',PLAN_NAME,'conflict','a plan with this name exists and is not on a demonstration project');}
+ for(const [no] of DOCKETS)judge('dockets',no,await one('SELECT id FROM dockets WHERE organisation_id=? AND docket_no=?',[org,no]),true);
+ {const r=await one('SELECT id,project_id FROM planning_plans WHERE organisation_id=? AND name=?',[org,PLAN_NAME]);
+  judge('planning plans',PLAN_NAME,r,r&&demoProjects.has(r.project_id),'a plan with this name exists and is not on a demonstration project');}
  for(const [table,col,text] of [['hseq_incidents','description',HSEQ_TEXT.near],['hseq_incidents','description',HSEQ_TEXT.minor],['hseq_ncrs','issue',HSEQ_TEXT.ncr],...HSEQ_TEXT.actions.map(t=>['hseq_actions','action',t])]){
-  const r=await one(`SELECT project_id FROM ${table} WHERE organisation_id=? AND ${col}=?`,[org,text]);
-  if(!r)add('safety records',text.slice(0,48),'create');else if(demoProjects.has(r.project_id))add('safety records',text.slice(0,48),'skip');else add('safety records',text.slice(0,48),'conflict','a safety record with identical text exists and is not on a demonstration project');
+  const r=await one(`SELECT id,project_id FROM ${table} WHERE organisation_id=? AND ${col}=?`,[org,text]);
+  judge('safety records',text.slice(0,48),r,r&&demoProjects.has(r.project_id),'a safety record with identical text exists and is not on a demonstration project');
  }
- // Records created as a consequence of the above (estimates, projects, claims, invoices, risks, SWMS, ITPs, programme, scenarios,
- // workshop orders, service events, cost transactions, project members) are keyed to demonstration tenders, projects and plant, so
- // they cannot collide with owner records; they are created or resumed by the stages and counted in the post-import verification.
+ // Records created as a consequence of the above are shown in full in the scope section below.
  const conflicts=groups.flatMap(g=>g.items.filter(i=>i.state==='conflict').map(i=>({group:g.group,key:i.key,reason:i.reason})));
  const totals=groups.reduce((a,g)=>({create:a.create+g.create,skip:a.skip+g.skip,conflict:a.conflict+g.conflict}),{create:0,skip:0,conflict:0});
  // ---- the full scope of apply: every table it writes to, by demonstration parent, measured from a reference import ----

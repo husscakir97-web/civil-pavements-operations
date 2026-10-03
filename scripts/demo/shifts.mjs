@@ -29,7 +29,12 @@ export const SHIFTS=[
 export async function shiftsStage(c){
  const {call,must,one,org,d,log}=c;
  for(const [name,proj,day,start,finish,status,workers,plant,required,activity,notes] of SHIFTS){
-  if(await one('SELECT id FROM shifts WHERE organisation_id=? AND name=?',[org,name]))continue;
+  // A shift that already exists is never recreated, but one created and then interrupted before the In Progress marking is completed here.
+  const have=await one('SELECT id,status FROM shifts WHERE organisation_id=? AND name=?',[org,name]);
+  if(have){
+   if(status==='In Progress'&&have.status!=='In Progress'){await c.db.query("UPDATE shifts SET status='In Progress' WHERE organisation_id=? AND name=?",[org,name]);}
+   continue;
+  }
   const jobId=c.ids['project:'+proj];
   const assignments=[
    ...workers.map(([category,no])=>({resourceId:c.ids['worker:'+no],category,name:null,role:null,hours:9,rate:0,payload:0,trips:0,_no:no})),

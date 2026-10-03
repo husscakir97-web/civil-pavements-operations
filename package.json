@@ -25,6 +25,7 @@
     "test:fresh": "node --env-file-if-exists=.env scripts/test-fresh-start.mjs",
     "seed:demo": "node --env-file-if-exists=.env scripts/seed-demo-company.mjs",
     "test:inventory": "node --env-file-if-exists=.env scripts/test-live-tenant-inventory.mjs",
+    "test:import-demo": "node --env-file-if-exists=.env scripts/test-import-demo-tenant.mjs",
     "test:demo-seed": "node --env-file-if-exists=.env scripts/test-demo-seed.mjs",
     "test:demo-walkthrough": "node --env-file-if-exists=.env scripts/demo-walkthrough-check.mjs",
     "test:planning": "node --env-file-if-exists=.env scripts/planning-journey.mjs",

@@ -5,7 +5,9 @@
 // Starts its own app (email disabled, no integrations). Nothing leaves the machine.
 import {spawn,spawnSync} from 'node:child_process';
 import {connect,identifier} from './mysql-config.mjs';
-import {readFileSync,writeFileSync,copyFileSync,chmodSync,statSync} from 'node:fs';
+import {readFileSync,writeFileSync,copyFileSync,chmodSync,statSync,mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {snapshot,compare,rowsGained,guardedCall,guardedDb,DEMO_TEAM} from './demo/import-guards.mjs';
 import {SPEC,BOOTSTRAP,BOOKKEEPING,ATTACHMENT_TABLES,measureFootprint,FOOTPRINT_FILE} from './demo/import-footprint.mjs';
@@ -31,7 +33,9 @@ const api=async(who,path,method='GET',body)=>{const res=await fetch(base+path,{m
 const okay=async(p,label)=>{const r=await p;if(![200,201].includes(r.status))throw new Error(`${label} -> ${r.status} ${JSON.stringify(r.body).slice(0,200)}`);return r.body;};
 // Administrative statements run through the test's own connection when its user may (CI connects as root), else through the local root socket.
 const admin=async sql=>{try{for(const stmt of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.query(stmt);return true;}catch{return spawnSync('mysql',['-e',sql],{encoding:'utf8',env:{PATH:process.env.PATH}}).status===0;}};
-const BASELINE='/tmp/claude-0/import-baseline-'+Date.now()+'.json';
+// Every scratch file (plans, baselines, manifests) lives in one unique directory created by this run (mode 0700) and removed by this run only.
+const WORK=mkdtempSync(join(tmpdir(),'import-demo-'));
+const BASELINE=join(WORK,'baseline.json');
 const importer=(args,over={},opts={})=>spawnSync(process.execPath,['scripts/import-demo-tenant.mjs',...args],{env:{...env,...over},encoding:'utf8',timeout:opts.timeout||1500000});
 const text=r=>(r.stdout||'')+(r.stderr||'');
 const hashOf=r=>/planHash: ([0-9a-f]{64})/.exec(text(r))?.[1];
@@ -43,7 +47,7 @@ const snap=()=>snapshot(db,SALT);
 const same=(a,b)=>{const d=compare(a,b);return d.changedRows===0&&d.removedRows===0&&Object.keys(rowsGained(a,b)).length===0;};
 const sha256=file=>createHash('sha256').update(readFileSync(file)).digest('hex');
 const shaFrom=r=>/Baseline sha256: ([0-9a-f]{64})/.exec(text(r))?.[1];
-const planFile=label=>`/tmp/claude-0/plan-${label}-${Date.now()}.json`;
+const planFile=label=>join(WORK,`plan-${label}.json`);
 const insertRow=async(table,values)=>{const cols=await q('SELECT COLUMN_NAME c,DATA_TYPE t,IS_NULLABLE n,COLUMN_DEFAULT d,EXTRA e FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?',[table]);
  const row={...values};for(const c of cols)if(!(c.c in row)&&c.n==='NO'&&c.d===null&&!/auto_increment/.test(c.e))row[c.c]=/int|decimal|float|double|bit/.test(c.t)?0:/date|time/.test(c.t)?'2026-01-01 00:00:00':/json/.test(c.t)?'{}':'x';
  const keys=Object.keys(row);await db.query(`INSERT INTO ${identifier(table)} (${keys.map(identifier).join(',')}) VALUES (${keys.map(()=>'?').join(',')})`,keys.map(k=>row[k]));};
@@ -66,9 +70,21 @@ try{
  const refSha=shaFrom(refRun);
  const refDelta=rowsGained(snapC0,await snap());
  const measured=await measureFootprint(q,C.org,refDelta);
+ // The footprint checks below mean nothing unless the reference import really ran: fail here, with the importer's own output, if it did not.
+ check('the reference import into an empty tenant completed and wrote rows (so the footprint checks below are not vacuous)',refRun.status===0&&Object.keys(refDelta).length>0&&Object.values(measured.tables).reduce((a,x)=>a+x.expected,0)>0,refRun.status===0?`${Object.keys(refDelta).length} tables gained rows`:`exit ${refRun.status}: ${text(refRun).split('\n').filter(l=>/Refus|failed|Import failed|ENOENT|FAIL/.test(l)).slice(0,3).join(' | ').slice(0,300)}`);
  if(process.env.WRITE_FOOTPRINT==='1')writeFileSync(FOOTPRINT_FILE,JSON.stringify(measured,null,1)+'\n');
  const committed=JSON.parse(readFileSync(FOOTPRINT_FILE,'utf8'));
- check('the committed footprint equals what an import into an empty tenant actually wrote',strictSame(measured.tables,committed.tables)&&committed.attachmentsAndFiles===0&&Object.keys(committed.tables).length===Object.keys(SPEC).length);
+ // Exact differences, by table, parent key and value (so a failure on another engine shows precisely what differs).
+ const diffFootprint=(want,got)=>{const out=[];for(const tb of new Set([...Object.keys(want),...Object.keys(got)])){const w=want[tb],g=got[tb];
+  if(!w){out.push(`${tb}: measured ${g.expected} row(s) but the committed footprint has no such table`);continue;}
+  if(!g){out.push(`${tb}: in the committed footprint (${w.expected} row(s)) but nothing was measured`);continue;}
+  for(const f of ['kind','parent','expected'])if(w[f]!==g[f])out.push(`${tb}.${f}: committed ${JSON.stringify(w[f])}, measured ${JSON.stringify(g[f])}`);
+  for(const k of new Set([...Object.keys(w.byKey),...Object.keys(g.byKey)]))if(w.byKey[k]!==g.byKey[k])out.push(`${tb}[${JSON.stringify(k)}]: committed ${w.byKey[k]??'(absent)'}, measured ${g.byKey[k]??'(absent)'}`);}
+  return out;};
+ const footprintDiff=diffFootprint(committed.tables,measured.tables);
+ const orderNote=footprintDiff.length===0&&!strictSame(measured.tables,committed.tables)?'same content, different key or table ORDER':'';
+ for(const line of footprintDiff.slice(0,60))console.log('    footprint difference: '+line);
+ check('the committed footprint equals what an import into an empty tenant actually wrote',strictSame(measured.tables,committed.tables)&&committed.attachmentsAndFiles===0&&Object.keys(committed.tables).length===Object.keys(SPEC).length,footprintDiff.length?`${footprintDiff.length} difference(s), first: ${footprintDiff[0]}`:orderNote);
  const knownTables=new Set([...Object.keys(SPEC),...BOOTSTRAP,...BOOKKEEPING]);
  const unknownTables=Object.keys(refDelta).filter(x=>!knownTables.has(x));
  check('every table that gained rows during the import is in the footprint (nothing the dry run does not know about)',unknownTables.length===0,unknownTables.join(', '));
@@ -166,7 +182,7 @@ try{
  const resumeDry=importer(['--organisation-id',A.org,'--out',resumeFile,...withBaseline],roEnv),planResume=hashOf(resumeDry);
  {const pr=JSON.parse(readFileSync(resumeFile,'utf8'));check('after the interruption the plan shows, per table, what already exists and what is still to create (present + to create = expected)',pr.scope.records.every(r=>r.present+r.toCreate===r.expected)&&pr.scope.recordTotals.present>0&&pr.scope.recordTotals.toCreate>0);}
  check('a fresh dry run shows the partly imported tenant as resume: some records skipped, the rest still to create, no conflicts',resumeDry.status===0&&/skip [1-9]/.test(text(resumeDry))&&!/conflict [1-9]/.test(text(resumeDry))&&planResume!==plan1);
- const finished=importer(['--organisation-id',A.org,'--apply','--plan-hash',planResume,'--baseline',BASELINE,'--baseline-sha256',baselineSha,'--manifest','/tmp/import-manifest-a.json'],applyEnv);
+ const finished=importer(['--organisation-id',A.org,'--apply','--plan-hash',planResume,'--baseline',BASELINE,'--baseline-sha256',baselineSha,'--manifest',join(WORK,'manifest-a.json')],applyEnv);
  const failedChecks=(text(finished).match(/^FAIL /gm)||[]).length;
  check('the resumed import completes with every in-import verification passing',finished.status===0&&failedChecks===0&&/PASS  demo projects = 3/.test(text(finished)),text(finished).split('\n').filter(l=>/FAIL|failed|Refused|Import failed/.test(l)).join(' | ').slice(0,300));
  check('the import reports no existing row changed or removed',/Existing rows changed: 0; removed: 0/.test(text(finished)));
@@ -275,6 +291,6 @@ try{
  check('counts in the populated tenant equal the empty tenant\'s',strictSame(countsDemo,countsC));
  check('the owner\'s tenant and the second tenant never received each other\'s demonstration rows',Number((await q("SELECT COUNT(*) n FROM workers WHERE organisation_id=? AND employee_number LIKE 'DEMO-%'",[B.org]))[0].n)===0);
 }catch(e){console.error(e.stack||e);check('harness ran to completion',false,String(e.message).slice(0,300));}
-finally{server.kill();await admin("DROP USER IF EXISTS 'imp_ro'@'%'");await db.end();const failed=results.filter(x=>!x).length;console.log(`\n${results.length-failed} passed, ${failed} failed`);process.exit(failed?1:0);}
+finally{server.kill();rmSync(WORK,{recursive:true,force:true});await admin("DROP USER IF EXISTS 'imp_ro'@'%'");await db.end();const failed=results.filter(x=>!x).length;console.log(`\n${results.length-failed} passed, ${failed} failed`);process.exit(failed?1:0);}
 
 async function quiet2(r,expectStatus,label,expectedSnapshot){check(label,r.status===expectStatus&&same(await snap(),expectedSnapshot),`exit ${r.status}`);}

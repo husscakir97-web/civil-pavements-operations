@@ -8,7 +8,9 @@
 // against the importer as it was before the fixes (it needs --base-url), to show them failing first.
 import {spawn,spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {existsSync,readFileSync} from 'node:fs';
+import {existsSync,readFileSync,mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import mysql from 'mysql2/promise';
 import {connect,mysqlOptions,identifier} from './mysql-config.mjs';
 import {presentByTable,loadFootprint} from './demo/import-footprint.mjs';
@@ -24,6 +26,8 @@ const results=[];const check=(name,ok,detail='')=>{results.push(Boolean(ok));con
 const text=r=>(r.stdout||'')+(r.stderr||'');
 const hashOf=r=>/planHash: ([0-9a-f]{64})/.exec(text(r))?.[1];
 const shaOf=r=>/Baseline sha256: ([0-9a-f]{64})/.exec(text(r))?.[1];
+// Every scratch file (baselines) lives in one unique directory created by this run (mode 0700) and removed by this run only.
+const WORK=mkdtempSync(join(tmpdir(),'import-review-'));
 const password='Import-Review-Password-42!',stamp=Date.now();
 const db1=await connect();
 const admin=async sql=>{try{await db1.query(sql);return true;}catch{return spawnSync('mysql',['-e',sql],{encoding:'utf8',env:{PATH:process.env.PATH}}).status===0;}};
@@ -78,11 +82,11 @@ try{
   const dry=importer(who,[]);
   check(`F1 ${label} collision with an original owner plant record: the dry run refuses (exit 3, named conflict)`,dry.status===3&&/CONFLICT\s+plant: DEMO-P02/.test(text(dry)),`exit ${dry.status}`);
   if(!LEGACY){
-   const {snapshot,writeBaseline}=await import('./demo/import-guards.mjs');const f=`/tmp/claude-0/review-f1-bl-${stamp}-${plantId}.json`;const sha=writeBaseline(f,who.org,await snapshot(db1));
+   const {snapshot,writeBaseline}=await import('./demo/import-guards.mjs');const f=join(WORK,`f1-bl-${plantId}.json`);const sha=writeBaseline(f,who.org,await snapshot(db1));
    const withBaseline=importer(who,['--baseline',f,'--baseline-sha256',sha]);
    check(`F1 ${label} collision: with a verified baseline the plan names the record as one that existed before the import began (provenance, not name matching)`,withBaseline.status===3&&/CONFLICT\s+plant: DEMO-P02 — existed before the import began/.test(text(withBaseline)),`exit ${withBaseline.status}`);
   }
-  const run=importer(who,['--apply','--plan-hash',hashOf(dry)||'x','--baseline',`/tmp/claude-0/review-f1-${stamp}-${plantId}.json`,'--stages','resources,workshop',...legacyBase]);
+  const run=importer(who,['--apply','--plan-hash',hashOf(dry)||'x','--baseline',join(WORK,`f1-${plantId}.json`),'--stages','resources,workshop',...legacyBase]);
   const rowAfter=JSON.stringify((await q1('SELECT * FROM plant WHERE id=?',[plantId]))[0]);
   const orders=Number((await q1('SELECT COUNT(*) n FROM workshop_orders WHERE asset_id=?',[plantId]))[0].n);
   check(`F1 ${label} collision: apply refuses and the original plant row (status, safety hold, revision) is unchanged, with no workshop order against it`,run.status!==0&&rowBefore===rowAfter&&orders===0,`exit ${run.status}; ${rowBefore===rowAfter?'row unchanged':'ROW CHANGED'}; ${orders} workshop order(s)`);
@@ -102,13 +106,13 @@ try{
  if(want('f2')){
   const d1Before=await dbDigest(db1),d2Before=await dbDigest(db2);
   const dry=importer(D,[]);
-  const run=importer(D,['--apply','--plan-hash',hashOf(dry)||'x','--baseline',`/tmp/claude-0/review-f2-${stamp}.json`,'--stop-after','divisions','--base-url',base2]);
+  const run=importer(D,['--apply','--plan-hash',hashOf(dry)||'x','--baseline',join(WORK,'f2.json'),'--stop-after','divisions','--base-url',base2]);
   check('F2 an app on localhost that is connected to a DIFFERENT database is refused before any write (inspected database and the app\'s database both unchanged)',run.status!==0&&same(d1Before,await dbDigest(db1))&&same(d2Before,await dbDigest(db2)),`exit ${run.status}; ${text(run).split('\n').filter(l=>/Refus|Import failed|bound|different/i.test(l)).slice(0,2).join(' | ').slice(0,200)}`);
   if(!LEGACY){
    const {verifyBinding}=await import('./demo/import-guards.mjs');
    const probe=async who=>{try{await verifyBinding(db1,who.cookie,who.id);return true;}catch{return false;}};
    check('F2 the binding proof accepts the app bound to the inspected database and rejects an app bound to another one (same owner e-mail and password on both)',await probe(D)&&!(await probe(D2)));
-   const ok=importer(D,['--apply','--plan-hash',hashOf(dry)||'x','--baseline',`/tmp/claude-0/review-f2b-${stamp}.json`,'--stop-after','divisions']);
+   const ok=importer(D,['--apply','--plan-hash',hashOf(dry)||'x','--baseline',join(WORK,'f2b.json'),'--stop-after','divisions']);
    check('F2 the importer starts its own isolated app on the verified database and configuration: apply works with no --base-url and writes only to the inspected database',ok.status===0&&/divisions/.test(text(ok))&&Number((await q1("SELECT COUNT(*) n FROM business_units WHERE organisation_id=? AND code='TC'",[D.org]))[0].n)===1&&same(d2Before,await dbDigest(db2)),`exit ${ok.status}`);
   }
  }
@@ -119,7 +123,7 @@ try{
   await okay(api(who,'/api/operations/resources','POST',{action:'saveWorker',worker:{firstName:'Olive',lastName:'Existing',employeeNumber:'OWN-E1',email:'olive@owner-co.example.invalid',phone:'0400 333 444',roleTitle:'Foreman',employmentType:'employee',hourlyRate:55,location:'Owntown',status:'Active'}}),'owner worker');
  };
  const runChain=async(who,label,CHAIN)=>{
-  const BL=`/tmp/claude-0/review-${label}-${stamp}.json`;let sha;
+  const BL=join(WORK,`f3${label}.json`);let sha;
   const plan=()=>importer(who,[...(sha&&existsSync(BL)?['--baseline',BL,'--baseline-sha256',sha]:[])]);
   for(const [stages,crash,why] of CHAIN){
    const dry=plan();
@@ -192,5 +196,5 @@ try{
   check('F3c the project moved to ready before active reached active on resume (and the others reached closed and setup)',st['DEMO-T-001']==='active'&&st['DEMO-T-002']==='closed'&&st['DEMO-T-003']==='setup',JSON.stringify(st));
  }
 }catch(e){console.error(e.stack||e);check('harness ran to completion',false,String(e.message).slice(0,300));}
-finally{for(const s of servers)s.kill();await db1.end();await db2.end();const failed=results.filter(x=>!x).length;console.log(`\n${results.length-failed} passed, ${failed} failed${LEGACY?' (legacy importer)':''}`);process.exit(failed?1:0);}
+finally{for(const s of servers)s.kill();rmSync(WORK,{recursive:true,force:true});await db1.end();await db2.end();const failed=results.filter(x=>!x).length;console.log(`\n${results.length-failed} passed, ${failed} failed${LEGACY?' (legacy importer)':''}`);process.exit(failed?1:0);}
 void readFileSync;

@@ -1,14 +1,15 @@
 'use client';
 // Planning v0.1 (docs/PLANNING-V0-1-DECISION.md): an undated methodology canvas with live costing, saved scenarios and a
 // relative timeline. One calculation (lib/v1/planning.ts) drives the preview here and the authoritative server result.
-import {useMemo,useRef,useState,type PointerEvent as ReactPointerEvent} from 'react';
+import {useEffect,useMemo,useRef,useState,type PointerEvent as ReactPointerEvent} from 'react';
 import {Download,GitBranch,Link2,Milestone,Plus,Trash2,X} from 'lucide-react';
 import {api,useApi,useAction,useSession,PageHeader,Section,ErrorState,EmptyState,Btn,Pill,Stat,Tabs,Field,field as fieldClass,money} from './kit';
 import {FIELDS,KNOWN_UNITS,blankActivity,calculatePlan,findCycle,fits,newId,validatePlan,type FieldSpec,type PlanActivity,type PlanDocument,type PlanResult,type Positions,type Requirement} from '@/lib/v1/planning';
 
 type PlanSummary={id:string;name:string;ownerUserId:string;accessScope:'organisation'|'owner';status:string;revision:number;updatedAt:string;scenarios:{id:string;name:string;revision:number}[]};
 type List={plans:PlanSummary[];ratesVisible:boolean;canEdit:boolean};
-type Loaded={plan:PlanSummary;scenario:{id:string;name:string;revision:number;status:string};positions:Positions;document:PlanDocument;result:PlanResult;ratesVisible:boolean;canEdit:boolean};
+type Choice={type:'worker'|'plant';id:string;label:string;detail:string;archived?:boolean};
+type Loaded={plan:PlanSummary;scenario:{id:string;name:string;revision:number;status:string};positions:Positions;document:PlanDocument;result:PlanResult;ratesVisible:boolean;canEdit:boolean;resourcesAvailable:boolean;resources:Record<string,Choice>};
 type View='Flowchart'|'Timeline'|'Costs';
 const NODE_W=210,NODE_H=96;
 
@@ -58,6 +59,8 @@ function Editor({scenarioId,onBack}:{scenarioId:string;onBack:()=>void}){
  const data=loaded.data;
  const [doc,setDoc]=useState<PlanDocument|null>(null),[positions,setPositions]=useState<Positions>({});
  const [dirtyDoc,setDirtyDoc]=useState(false),[dirtyPos,setDirtyPos]=useState(false);
+ // Labels of assets picked in this session, so a just-linked (not yet saved) worker or plant item is named, not anonymous.
+ const [picked,setPicked]=useState<Record<string,Choice>>({});
  const [view,setView]=useState<View>('Flowchart'),[drawer,setDrawer]=useState<string|null>(null),[linkFrom,setLinkFrom]=useState<string|null>(null);
  const [note,setNote]=useState(''),[stale,setStale]=useState(false),[newName,setNewName]=useState('');
  const save=useAction();
@@ -142,7 +145,7 @@ function Editor({scenarioId,onBack}:{scenarioId:string;onBack:()=>void}){
   {view==='Flowchart'&&<Canvas doc={doc} result={result} rates={rates} pos={pos} linkFrom={linkFrom} editable={editable} onMove={(id,p)=>{setPositions(s=>({...s,[id]:p}));setDirtyPos(true);}} onOpen={setDrawer} onLink={id=>linkFrom?connect(linkFrom,id):setLinkFrom(id)} onUnlink={(f,t)=>edit(d=>({...d,dependencies:d.dependencies.filter(x=>!(x.from===f&&x.to===t))}))}/>}
   {view==='Timeline'&&<Timeline doc={doc} result={result} onOpen={setDrawer}/>}
   {view==='Costs'&&<CostsPanel doc={doc} result={result} rates={rates} editable={editable} edit={edit}/>}
-  {selected&&<Drawer key={selected.id} a={selected} doc={doc} result={result} rates={rates} editable={editable} onClose={()=>setDrawer(null)} patch={p=>patch(selected.id,p)} edit={edit} remove={()=>remove(selected.id)}/>}
+  {selected&&<Drawer key={selected.id} a={selected} doc={doc} result={result} rates={rates} editable={editable} labels={{...data.resources,...picked}} linkable={data.resourcesAvailable} onPick={c=>setPicked(p=>({...p,[`${c.type}:${c.id}`]:c}))} onClose={()=>setDrawer(null)} patch={p=>patch(selected.id,p)} edit={edit} remove={()=>remove(selected.id)}/>}
  </div>;
 }
 
@@ -195,7 +198,48 @@ function CostsPanel({doc,result,rates,editable,edit}:{doc:PlanDocument;result:Pl
  <Section title="By activity"><div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="text-left text-xs text-slate-500"><th className="py-1 pr-3">Activity</th><th className="pr-3">Resources</th><th className="pr-3">Setup</th><th>Total</th></tr></thead><tbody>{doc.activities.map(a=>{const r=result.activities[a.id].cost!;return <tr key={a.id} className="border-t"><td className="py-1.5 pr-3">{a.name}</td><td className="pr-3">{a.requirements.length?cost(r.runCost,true):'—'}</td><td className="pr-3">{a.costItems.length?cost(r.setupCost,true):'—'}</td><td data-testid="activity-total">{costLabel(a,r.total,true)}</td></tr>;})}</tbody></table></div></Section></div>;
 }
 
-function Drawer({a,doc,result,rates,editable,onClose,patch,edit,remove}:{a:PlanActivity;doc:PlanDocument;result:PlanResult;rates:boolean;editable:boolean;onClose:()=>void;patch:(p:Partial<PlanActivity>)=>void;edit:(fn:(d:PlanDocument)=>PlanDocument)=>void;remove:()=>void}){
+/**
+ * Link one requirement to an existing worker (labour) or plant item. Selecting only records the reference: the name, count, rate,
+ * rate basis and productivity of the line are never touched, and nothing about availability is implied (plans are undated).
+ */
+function ResourceLink({q,editable,available,labels,onPick,onChange}:{q:Requirement;editable:boolean;available:boolean;labels:Record<string,Choice>;onPick:(c:Choice)=>void;onChange:(ref:Requirement['resourceRef'])=>void}){
+ const type=q.kind==='plant'?'plant':'worker',noun=type==='plant'?'plant item':'worker';
+ const [open,setOpen]=useState(false),[term,setTerm]=useState('');
+ // Results are remembered with BOTH the kind and the search text they answer, so a list for an older query, or for the other kind
+ // after the line's type changes, is never shown (or clickable); a response still in flight for the old kind is discarded by the effect.
+ const [found,setFound]=useState<{type:'worker'|'plant';term:string;items:Choice[]}|null>(null),[error,setError]=useState('');
+ const results=found&&found.type===type&&found.term===term?found.items:null;
+ useEffect(()=>{
+  if(!open)return;
+  let live=true;
+  const t=setTimeout(()=>{api<{results:Choice[]}>(`/api/planning?lookup=${type}&q=${encodeURIComponent(term)}`).then(r=>{if(live){setFound({type,term,items:r.results});setError('');}},e=>{if(live){setFound({type,term,items:[]});setError(e instanceof Error?e.message:'Search failed.');}});},term?250:0);
+  return()=>{live=false;clearTimeout(t);};
+ },[open,term,type]);
+ const ref=q.resourceRef,label=ref?labels[`${ref.type}:${ref.id}`]:undefined;
+ const choose=(c:Choice)=>{if(c.type!==type)return; // belt and braces: only this line's kind can ever be linked
+  onPick(c);onChange({type:c.type,id:c.id});setOpen(false);setTerm('');setFound(null);};
+ return <div data-testid="resource-link" className="grid gap-1 sm:col-span-6">
+  {ref?<div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-2 text-sm">
+    <Link2 aria-hidden className="size-4 text-slate-500"/>
+    <span data-testid="resource-link-label"><span className="text-slate-500">Linked {ref.type==='plant'?'plant':'worker'}: </span><strong>{label?label.label:'not available to you'}</strong>{label?.detail&&<span className="text-slate-500"> · {label.detail}</span>}{label?.archived&&<Pill tone="warning">Archived</Pill>}</span>
+    {editable&&available&&<><Btn variant="ghost" aria-label={`Replace linked ${noun}`} onClick={()=>setOpen(true)}>Replace</Btn><Btn variant="ghost" aria-label={`Clear linked ${noun}`} onClick={()=>{onChange(null);setOpen(false);}}>Clear link</Btn></>}
+    {editable&&!available&&<Btn variant="ghost" aria-label={`Clear linked ${noun}`} onClick={()=>onChange(null)}>Clear link</Btn>}
+   </div>
+  :editable&&(available?<div><Btn variant="secondary" aria-label={`Link a ${noun}`} onClick={()=>setOpen(true)}><Link2 aria-hidden className="size-4"/>Link a {noun}</Btn></div>:<p className="text-xs text-slate-500">Linking a worker or plant item needs Operations and resource access.</p>)}
+  {open&&editable&&available&&<div className="grid gap-2 rounded-lg border bg-white p-2">
+   <input aria-label={`Search ${type==='plant'?'plant':'workers'}`} autoFocus className={fieldClass} value={term} maxLength={80} placeholder={type==='plant'?'Search plant by number, name or category':'Search workers by name, number or role'} onChange={e=>setTerm(e.target.value)}/>
+   <ul role="listbox" aria-label={`${type==='plant'?'Plant':'Workers'} matching your search`} className="max-h-56 divide-y overflow-auto rounded border">
+    {results===null&&<li className="p-2 text-sm text-slate-500">Searching…</li>}
+    {results?.length===0&&<li className="p-2 text-sm text-slate-500">{error||'No matching records.'}</li>}
+    {results?.map(c=><li key={c.id} role="option" aria-selected={ref?.id===c.id}><button type="button" data-testid="resource-option" className="block min-h-11 w-full px-3 py-2 text-left text-sm hover:bg-slate-50" onClick={()=>choose(c)}><span className="font-medium">{c.label}</span>{c.detail&&<span className="block text-xs text-slate-500">{c.detail}</span>}</button></li>)}
+   </ul>
+   <p className="text-xs text-slate-500">Linking records which {noun} this line refers to. It does not change the name, count or rate, and it does not check availability.</p>
+   <div><Btn variant="ghost" onClick={()=>{setOpen(false);setTerm('');setFound(null);}}>Cancel</Btn></div>
+  </div>}
+ </div>;
+}
+
+function Drawer({a,doc,result,rates,editable,labels,linkable,onPick,onClose,patch,edit,remove}:{a:PlanActivity;doc:PlanDocument;result:PlanResult;rates:boolean;editable:boolean;labels:Record<string,Choice>;linkable:boolean;onPick:(c:Choice)=>void;onClose:()=>void;patch:(p:Partial<PlanActivity>)=>void;edit:(fn:(d:PlanDocument)=>PlanDocument)=>void;remove:()=>void}){
  const r=result.activities[a.id],ro=!editable;
  const preds=doc.dependencies.filter(d=>d.to===a.id).map(d=>d.from);
  const setReq=(id:string,p:Partial<Requirement>)=>patch({requirements:a.requirements.map(x=>x.id===id?{...x,...p}:x)});
@@ -224,13 +268,14 @@ function Drawer({a,doc,result,rates,editable,onClose,patch,edit,remove}:{a:PlanA
     </fieldset>
     <fieldset className="grid gap-1 rounded-lg border p-3"><legend className="px-1 text-sm font-medium text-slate-700">Resources</legend>
      {a.requirements.map(q=>{const c=r.cost?.requirements.find(x=>x.id===q.id);return <div key={q.id} data-testid="requirement" className="grid gap-2 border-b pb-3 last:border-0 sm:grid-cols-[6rem_1fr_5rem_7rem_6rem_auto] sm:items-end">
-      <Field label="Type"><select aria-label="Resource type" className={fieldClass} disabled={ro} value={q.kind} onChange={e=>setReq(q.id,{kind:e.target.value as Requirement['kind']})}><option value="labour">Labour</option><option value="plant">Plant</option></select></Field>
+      <Field label="Type"><select aria-label="Resource type" title={q.resourceRef?'Clear the linked worker or plant item to change the type.':undefined} className={fieldClass} disabled={ro||Boolean(q.resourceRef)} value={q.kind} onChange={e=>setReq(q.id,{kind:e.target.value as Requirement['kind']})}><option value="labour">Labour</option><option value="plant">Plant</option></select></Field>
       <Field label="Name"><input aria-label="Resource name" className={fieldClass} disabled={ro} value={q.name} maxLength={180} onChange={e=>setReq(q.id,{name:e.target.value})}/></Field>
       <Field label="Count"><NumInput spec={FIELDS.count} label="Resource count" disabled={ro} value={q.quantity} onChange={v=>setReq(q.id,{quantity:v})}/></Field>
       <Field label={rates?'Rate (ex GST)':'Rate'}>{rates?<NumInput spec={FIELDS.rate} label="Resource rate" disabled={ro} value={q.rate} onChange={v=>setReq(q.id,{rate:v})}/>:<span className="text-sm text-slate-500">Restricted</span>}</Field>
       <Field label="Per"><select aria-label="Rate basis" className={fieldClass} disabled={ro||!rates} value={q.rateBasis} onChange={e=>setReq(q.id,{rateBasis:e.target.value as 'hour'|'day'})}><option value="hour">hour</option><option value="day">day</option></select></Field>
       {!ro&&<Btn variant="ghost" aria-label={`Remove ${q.name||'resource'}`} onClick={()=>patch({requirements:a.requirements.filter(x=>x.id!==q.id)})}><Trash2 aria-hidden className="size-4"/></Btn>}
-      <p className="text-xs text-slate-500 sm:col-span-6">Cost: {cost(c?.amount,rates)}</p></div>;})}
+      <p className="text-xs text-slate-500 sm:col-span-6">Cost: {cost(c?.amount,rates)}</p>
+      <ResourceLink q={q} editable={!ro} available={linkable} labels={labels} onPick={onPick} onChange={ref=>setReq(q.id,{resourceRef:ref})}/></div>;})}
      {!ro&&<div className="flex gap-2 pt-1"><Btn variant="secondary" onClick={()=>patch({requirements:[...a.requirements,{id:newId(),kind:'labour',name:'Labour',quantity:null,rate:null,rateBasis:'hour',resourceRef:null}]})}><Plus aria-hidden className="size-4"/>Add labour</Btn><Btn variant="secondary" onClick={()=>patch({requirements:[...a.requirements,{id:newId(),kind:'plant',name:'Plant',quantity:null,rate:null,rateBasis:'hour',resourceRef:null}]})}><Plus aria-hidden className="size-4"/>Add plant</Btn></div>}
     </fieldset>
     {rates&&<fieldset className="grid gap-2 rounded-lg border p-3"><legend className="px-1 text-sm font-medium text-slate-700">Setup costs</legend>

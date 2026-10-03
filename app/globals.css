@@ -278,3 +278,43 @@ main section, main article, main form, main .grid > * { min-width: 0; }
 @media (max-width: 1023px) {
   .mobile-quick-nav { margin-bottom: env(safe-area-inset-bottom); }
 }
+
+/* Planning visual direction: warm neutral surfaces, teal accent, fewer heavy borders. Scoped to .plan-ui so the rest of the app keeps its theme. */
+.plan-ui {
+  --primary: #14604f; --ring: #14604f; --accent: #e4efe9; --accent-foreground: #0f4a3d;
+  --plan-bg: #f7f6f1; --plan-card: #fffefb; --plan-soft: #eceee6; --plan-line: #e2e1d6; --plan-accent: #14604f; --plan-warn: #f3ecdc;
+  --color-primary: #14604f; --color-ring: #14604f;
+}
+.plan-ui .plan-eyebrow { display: flex; align-items: center; gap: .5rem; font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: #5d6a62; }
+.plan-ui .plan-chip { border-radius: 6px; background: #dfeee6; padding: 1px 6px; font-size: 10px; letter-spacing: .02em; text-transform: none; color: #14604f; }
+.plan-ui .plan-card { border: 1px solid var(--plan-line); border-radius: 18px; background: var(--plan-card); box-shadow: 0 1px 2px rgba(40,40,20,.04); }
+.plan-ui .plan-actionbar { border: 1px solid var(--plan-line); background: rgba(255,254,251,.94); backdrop-filter: blur(6px); box-shadow: 0 1px 2px rgba(40,40,20,.05); }
+.plan-ui .plan-kpis { background: var(--plan-line); border: 1px solid var(--plan-line); }
+.plan-ui .plan-kpi { background: var(--plan-card); padding: 1rem 1.25rem; }
+.plan-ui .plan-figure { margin-top: .35rem; font-size: 2rem; font-weight: 600; letter-spacing: -.03em; line-height: 1.15; color: var(--plan-accent); }
+.plan-ui .plan-figure-sm { font-size: 1.25rem; color: #1b2a24; }
+.plan-ui .plan-hint { margin-top: .25rem; font-size: 12px; color: #5d6a62; }
+.plan-ui .workspace-page-header h1 { letter-spacing: -.04em; }
+.plan-ui .workspace-tabs { margin: 0; border: 0; background: var(--plan-soft); box-shadow: none; }
+.plan-ui .workspace-tabs button[aria-current="page"] { background: #fff !important; color: #14302a !important; box-shadow: 0 1px 2px rgba(40,40,20,.1); }
+.plan-ui .plan-canvas-frame { border: 1px solid var(--plan-line); background-color: var(--plan-bg); background-image: radial-gradient(#d9d8cb 1px, transparent 1px); background-size: 22px 22px; }
+.plan-ui .plan-node { border: 1px solid var(--plan-line); border-radius: 14px; background: var(--plan-card); box-shadow: 0 1px 2px rgba(40,40,20,.06); }
+.plan-ui .plan-node:focus-visible { outline: 2px solid var(--plan-accent); outline-offset: 2px; }
+.plan-ui .plan-node-on { border: 2px solid var(--plan-accent); background: #f6faf7; box-shadow: 0 4px 14px rgba(20,96,79,.14); }
+.plan-ui .plan-node-milestone { background: var(--plan-warn); border-color: #d7c79b; }
+.plan-ui .plan-index { display: inline-flex; height: 1.5rem; min-width: 1.5rem; align-items: center; justify-content: center; border: 1px solid var(--plan-line); border-radius: 999px; padding: 0 .35rem; font-size: 11px; color: #4e5a53; background: #fff; }
+.plan-ui .plan-index-on { background: var(--plan-accent); border-color: var(--plan-accent); color: #fff; }
+.plan-ui .plan-minibtn { display: inline-flex; min-height: 1.75rem; align-items: center; gap: .25rem; border: 1px solid var(--plan-line); border-radius: 8px; background: #fff; padding: 0 .55rem; font-size: 12px; font-weight: 600; color: #26332d; }
+.plan-ui .plan-minibtn:hover { background: var(--plan-soft); }
+.plan-ui .plan-listcard { border: 1px solid var(--plan-line); border-radius: 14px; background: var(--plan-card); padding: .85rem; }
+.plan-ui .plan-listcard .plan-minibtn { min-height: 2.75rem; padding: 0 1rem; font-size: 14px; }
+.plan-ui .plan-listcard-on { border-color: var(--plan-accent); border-left-width: 4px; background: #eaf3ed; }
+.plan-ui .plan-inspector { border: 1px solid var(--plan-line); background: var(--plan-card); box-shadow: 0 -8px 30px rgba(30,40,30,.14); }
+@media (min-width: 1024px) { .plan-ui .plan-inspector { box-shadow: 0 1px 2px rgba(40,40,20,.05); } }
+.plan-ui .plan-roundbtn { display: inline-flex; height: 2.75rem; width: 2.75rem; flex-shrink: 0; align-items: center; justify-content: center; border: 1px solid var(--plan-line); border-radius: 999px; background: #fff; color: #3d4a43; }
+.plan-ui .plan-primarybtn { background: var(--plan-accent); color: #fff; }
+.plan-ui .plan-primarybtn:hover { filter: brightness(1.08); }
+.plan-ui .plan-drawer { background: var(--plan-bg); }
+.plan-ui .plan-drawer-foot { border-top: 1px solid var(--plan-line); background: var(--plan-card); }
+.plan-ui .plan-group { display: grid; gap: .75rem; border: 0; border-radius: 16px; background: var(--plan-soft); padding: .9rem 1rem 1rem; }
+.plan-ui .plan-legend { padding: 0 .25rem; font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: #4e5a53; }

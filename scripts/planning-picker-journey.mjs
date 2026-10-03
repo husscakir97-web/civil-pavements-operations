@@ -253,6 +253,20 @@ try{
   await ctx.close();
  }
 
+ // unsaved-change protection (desktop): edits show the pending state, leaving asks first, discard returns to the saved values
+ {const {ctx,page,errors}=await session(members.estimator,{width:1440,height:1100});
+  await goPlan(page,{width:1440,height:1100});await openPaving(page);
+  const saved=await rowOf(page,1).getByLabel('Resource name').inputValue();
+  await rowOf(page,1).getByLabel('Resource name').fill(saved+' edited');await dlg(page).getByRole('button',{name:'Close'}).click();await dlg(page).waitFor({state:'detached'});
+  check('Unsaved changes: the pending-edit state and the Save button are visible after editing',await page.getByText('Unsaved changes').isVisible()&&await page.getByText('Edits not saved yet').first().isVisible()&&await page.getByRole('button',{name:'Save',exact:true}).isEnabled());
+  let asked='';page.once('dialog',d=>{asked=d.message();void d.dismiss();});
+  await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button',{name:'Planning'}).click();await page.waitForTimeout(400);
+  check('Unsaved changes: leaving to the plan list asks first, and cancelling keeps the editor and the edit',/unsaved changes/i.test(asked)&&await page.getByRole('heading',{name:'Picker plan'}).isVisible()&&await page.getByText('Unsaved changes').isVisible(),asked);
+  await page.getByRole('button',{name:'Discard changes'}).click();await page.getByText('Unsaved changes').waitFor({state:'detached'});
+  await openPaving(page);
+  check('Unsaved changes: discarding restores the saved values',await rowOf(page,1).getByLabel('Resource name').inputValue()===saved);
+  await page.screenshot({path:`${OUT}/desktop-4-after-discard.png`});check('Unsaved changes: no page errors',errors.length===0);await ctx.close();}
+
  // read-only viewer and Operations off (desktop)
  s=await saveRefs(W1,P1);
  {const {ctx,page,errors}=await session(members.read_only,{width:1440,height:1100});

@@ -205,17 +205,19 @@ function CostsPanel({doc,result,rates,editable,edit}:{doc:PlanDocument;result:Pl
 function ResourceLink({q,editable,available,labels,onPick,onChange}:{q:Requirement;editable:boolean;available:boolean;labels:Record<string,Choice>;onPick:(c:Choice)=>void;onChange:(ref:Requirement['resourceRef'])=>void}){
  const type=q.kind==='plant'?'plant':'worker',noun=type==='plant'?'plant item':'worker';
  const [open,setOpen]=useState(false),[term,setTerm]=useState('');
- // Results are remembered with the search text they answer, so a list for an older query is never shown (or clicked) for a newer one.
- const [found,setFound]=useState<{term:string;items:Choice[]}|null>(null),[error,setError]=useState('');
- const results=found&&found.term===term?found.items:null;
+ // Results are remembered with BOTH the kind and the search text they answer, so a list for an older query, or for the other kind
+ // after the line's type changes, is never shown (or clickable); a response still in flight for the old kind is discarded by the effect.
+ const [found,setFound]=useState<{type:'worker'|'plant';term:string;items:Choice[]}|null>(null),[error,setError]=useState('');
+ const results=found&&found.type===type&&found.term===term?found.items:null;
  useEffect(()=>{
   if(!open)return;
   let live=true;
-  const t=setTimeout(()=>{api<{results:Choice[]}>(`/api/planning?lookup=${type}&q=${encodeURIComponent(term)}`).then(r=>{if(live){setFound({term,items:r.results});setError('');}},e=>{if(live){setFound({term,items:[]});setError(e instanceof Error?e.message:'Search failed.');}});},term?250:0);
+  const t=setTimeout(()=>{api<{results:Choice[]}>(`/api/planning?lookup=${type}&q=${encodeURIComponent(term)}`).then(r=>{if(live){setFound({type,term,items:r.results});setError('');}},e=>{if(live){setFound({type,term,items:[]});setError(e instanceof Error?e.message:'Search failed.');}});},term?250:0);
   return()=>{live=false;clearTimeout(t);};
  },[open,term,type]);
  const ref=q.resourceRef,label=ref?labels[`${ref.type}:${ref.id}`]:undefined;
- const choose=(c:Choice)=>{onPick(c);onChange({type:c.type,id:c.id});setOpen(false);setTerm('');setFound(null);};
+ const choose=(c:Choice)=>{if(c.type!==type)return; // belt and braces: only this line's kind can ever be linked
+  onPick(c);onChange({type:c.type,id:c.id});setOpen(false);setTerm('');setFound(null);};
  return <div data-testid="resource-link" className="grid gap-1 sm:col-span-6">
   {ref?<div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-2 text-sm">
     <Link2 aria-hidden className="size-4 text-slate-500"/>

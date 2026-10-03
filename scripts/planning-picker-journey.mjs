@@ -135,6 +135,30 @@ try{
  }
  check('The estimator sees rates and labels together',est.body.ratesVisible===true&&est.body.document.activities[0].requirements[0].rate===66&&est.body.resources['worker:'+W1]);
 
+ // ================= An existing link stays; a NEW association to the same asset is validated normally =================
+ {
+  const plan2=must(await E.post({action:'create-plan',name:'Association plan'}),[200],'create plan 2');
+  const sA=plan2.scenario.id;
+  const docA=(extra=[],ref1={type:'worker',id:W1},ref2={type:'plant',id:P1})=>docOf(act('assoc-a0001','Paving',{requirements:[req('assoc-r0001','labour','Paving crew',3,66,ref1),req('assoc-r0002','plant','Paver',1,230,ref2),...extra]}));
+  const saveIn=async(sc,doc)=>{const cur=(await E.get(sc)).body.scenario.revision;return E.post({action:'save',scenarioId:sc,expectedRevision:cur,document:doc});};
+  check('Association setup: a labour line linked to a worker and a plant line linked to a plant item save',(await saveIn(sA,docA())).status===200);
+  await db.query("UPDATE workers SET status='Archived' WHERE id=?",[W1]);
+  check('An existing association to a worker archived LATER stays: an unchanged save is accepted',(await saveIn(sA,docA())).status===200);
+  const second=req('assoc-r0003','labour','Second crew',2,66,{type:'worker',id:W1});
+  {const res=await saveIn(sA,docA([second]));check('A NEW association to the SAME archived worker (on another requirement) is refused: the plan-wide exemption is gone',res.status===400&&/not found/.test(JSON.stringify(res.body)),`-> ${res.status}`);}
+  await db.query("UPDATE workers SET status='Active' WHERE id=?",[W1]);
+  await db.query("UPDATE organisation_entitlements SET status='disabled' WHERE organisation_id=? AND module='operations'",[admin.org]);
+  const copy=await E.post({action:'create-scenario',planId:plan2.plan.id,name:'Copy while Operations is off',basedOnScenarioId:sA});
+  const sB=copy.status===200?copy.body.scenario.id:null;
+  check('Scenario copy keeps its links even with Operations off (a trusted copy of stored associations, with fresh requirement ids)',copy.status===200&&copy.body.document.activities[0].requirements[0].resourceRef?.id===W1&&copy.body.document.activities[0].requirements[0].id!=='assoc-r0001'&&copy.body.document.activities[0].requirements[1].resourceRef?.id===P1,`-> ${copy.status}`);
+  check('Operations off: the unchanged persisted associations are still accepted in the original scenario and in its copy',(await saveIn(sA,docA())).status===200&&Boolean(sB)&&(await saveIn(sB,copy.body.document)).status===200);
+  {const res=await saveIn(sA,docA([req('assoc-r0004','plant','Second paver',1,230,{type:'plant',id:P1})]));check('Operations off: a NEW association to a plant item the same scenario already references is refused (403)',res.status===403,`-> ${res.status}`);}
+  if(sB){const doc=copy.body.document;const added={...doc,activities:[{...doc.activities[0],requirements:[...doc.activities[0].requirements,req('assoc-r0005','labour','Extra crew',1,66,{type:'worker',id:W1})]}]};
+   const res=await saveIn(sB,added);check('Operations off: a NEW association in the copied scenario to a worker already referenced elsewhere in the plan is refused (403)',res.status===403,`-> ${res.status}`);}
+  check('Operations off: clearing an existing association still works',(await saveIn(sA,docA([],null,{type:'plant',id:P1}))).status===200&&(await E.get(sA)).body.document.activities[0].requirements[0].resourceRef===null);
+  await db.query("UPDATE organisation_entitlements SET status='active' WHERE organisation_id=? AND module='operations'",[admin.org]);
+ }
+
  // ================= Browser =================
  await db.query("UPDATE workers SET status='Active' WHERE id=?",[W3]);
  {const changed=[...diffRows(workersBefore,await rowsById('workers')),...diffRows(plantBefore,await rowsById('plant'))];check('Linking, replacing and clearing never wrote to workers or plant (every resource row is identical to before)',changed.length===0,changed.join(', '));}
@@ -192,6 +216,40 @@ try{
   check(`${label}: a cleared link stays cleared after reload and is NULL in the database; the plant link is still there`,cleared[0].resource_ref_id===null&&await rowOf(page,0).getByRole('button',{name:'Link a worker'}).isVisible()&&/P-101/.test(await rowOf(page,1).getByTestId('resource-link-label').innerText()));
   await page.screenshot({path:`${OUT}/${prefix}-3-reopened.png`});
   check(`${label}: no page errors`,errors.length===0,errors.join(' | ').slice(0,200));
+  await ctx.close();
+ }
+
+ // Switching the resource type while a search is loaded or pending must never leave the other kind's results clickable.
+ {
+  s=await saveRefs(null,null);
+  const {ctx,page,errors}=await session(members.estimator,{width:1440,height:1100});
+  const gates={worker:null,plant:null};
+  await page.route(/\/api\/planning\?lookup=(worker|plant)/,async route=>{const kind=/lookup=(worker|plant)/.exec(route.request().url())[1];if(gates[kind])await gates[kind].promise;await route.continue();});
+  const hold=kind=>{let release;const promise=new Promise(r=>{release=r;});gates[kind]={promise,release};return()=>{gates[kind]=null;release();};};
+  await goPlan(page);await openPaving(page);
+  const row=rowOf(page,2),box=()=>row.getByRole('textbox',{name:/^Search /}),options=()=>row.getByTestId('resource-option');
+  const workerNames=/Dan Hollis|Karl Jensen|Priya Nair/;
+  await row.getByRole('button',{name:'Link a worker'}).click();
+  await box().fill('10');await options().nth(2).waitFor();
+  check('Type switch (loaded results): worker results for "10" are showing on a labour line',await options().count()===3&&workerNames.test((await options().allInnerTexts()).join()));
+  const releasePlant=hold('plant');
+  await row.getByLabel('Resource type').selectOption('plant');
+  check('Type switch (loaded results): while the plant search is pending, no worker result remains visible or clickable',await options().filter({hasText:workerNames}).count()===0&&await options().count()===0&&/Searching/.test(await row.innerText()));
+  check('Type switch: the search box now says plant',await row.getByLabel('Search plant').isVisible());
+  releasePlant();await options().first().waitFor();
+  check('Type switch (loaded results): when the plant response arrives only plant items are listed',await options().count()===2&&(await options().allInnerTexts()).every(t=>/P-10[12]/.test(t)));
+  // a worker response that is still in flight when the kind changes must not appear afterwards
+  await row.getByLabel('Resource type').selectOption('labour');
+  await options().nth(2).waitFor();
+  const releaseWorker=hold('worker');
+  await row.getByLabel('Search workers').fill('101');
+  await row.getByLabel('Resource type').selectOption('plant');
+  await row.getByLabel('Search plant').fill('102');await options().first().waitFor();
+  releaseWorker();await page.waitForTimeout(700);
+  check('Type switch (pending response): a worker response that arrives after the switch never replaces the plant results',await options().count()===1&&/P-102/.test(await options().first().innerText())&&await options().filter({hasText:workerNames}).count()===0,(await options().allInnerTexts()).join(' | '));
+  await options().first().click();
+  check('Type switch: choosing then links a plant item to the plant line (never a worker)',/Linked plant:\s*P-102/.test(await row.getByTestId('resource-link-label').innerText()));
+  check('Type switch: no page errors',errors.length===0,errors.join(' | ').slice(0,200));
   await ctx.close();
  }
 

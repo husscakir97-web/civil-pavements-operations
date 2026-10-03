@@ -64,9 +64,10 @@ export function present(doc:PlanDocument,rates:boolean){
 
 /**
  * Resource links (a worker or plant item a requirement refers to). Linking only RECORDS the reference: it never copies the asset's
- * name or rates into the plan and implies nothing about availability. A link that already exists anywhere in the same plan is
- * carried forward unchanged (even if Operations is later switched off or the record is archived); a NEW link needs the
- * schedule.view capability, an entitled Operations module, and a non-archived record of THIS organisation.
+ * name or rates into the plan and implies nothing about availability. An association that is already stored for the same requirement
+ * in the same scenario is carried forward unchanged (even if Operations is later switched off or the record is archived); a NEW
+ * association, including the same asset on another requirement or in another scenario, needs the schedule.view capability, an
+ * entitled Operations module, and a non-archived record of THIS organisation. Copying a scenario is a separate, trusted path.
  */
 export type ResourceChoice={type:'worker'|'plant';id:string;label:string;detail:string;archived?:boolean};
 export async function canLinkResources(org:string,actor:Pick<Actor,'role'>){return can(actor.role,'schedule.view')&&usable(await getEntitlements(org),'operations');}
@@ -103,10 +104,12 @@ export async function resourceLabels(org:string,doc:PlanDocument,conn?:Conn):Pro
 }
 
 async function assertReferences(org:string,doc:PlanDocument,conn:Conn,scenarioId:string,actor:Pick<Actor,'role'>){
- const refs=doc.activities.flatMap(a=>a.requirements.map(r=>r.resourceRef)).filter((r):r is NonNullable<typeof r>=>Boolean(r));
- if(!refs.length)return;
- const held=new Set((await query<{t:string;i:string}>('SELECT r.resource_ref_type AS t,r.resource_ref_id AS i FROM planning_requirements r JOIN planning_scenarios s ON s.id=r.scenario_id AND s.organisation_id=r.organisation_id WHERE r.organisation_id=? AND r.resource_ref_id IS NOT NULL AND s.plan_id=(SELECT plan_id FROM planning_scenarios WHERE organisation_id=? AND id=?)',[org,org,scenarioId],conn)).map(x=>`${x.t}:${x.i}`));
- const added=refs.filter(r=>!held.has(`${r.type}:${r.id}`));
+ const links=doc.activities.flatMap(a=>a.requirements.filter(r=>r.resourceRef).map(r=>({requirementId:r.id,...r.resourceRef!})));
+ if(!links.length)return;
+ // Only a persisted association (this requirement, in THIS scenario, linked to this asset) is carried forward unchanged. Attaching the
+ // same asset to another requirement, or in another scenario, is a new association and is validated like any new link.
+ const held=new Set((await query<{rid:string;t:string;i:string}>('SELECT id AS rid,resource_ref_type AS t,resource_ref_id AS i FROM planning_requirements WHERE organisation_id=? AND scenario_id=? AND resource_ref_id IS NOT NULL',[org,scenarioId],conn)).map(x=>`${x.rid}|${x.t}:${x.i}`));
+ const added=links.filter(l=>!held.has(`${l.requirementId}|${l.type}:${l.id}`));
  if(!added.length)return;
  // 1) the record must be a live record of THIS organisation (an id from another tenant, the wrong kind, or an archived record is "not found")
  for(const type of ['worker','plant'] as const){

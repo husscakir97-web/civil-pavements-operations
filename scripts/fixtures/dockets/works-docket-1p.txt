@@ -1,0 +1,23 @@
+WORKS DOCKET
+Example Traffic Services
+1 Sample Street
+Testville, NSW 2000
+ABN  00 000 000 000
+E  office@example.invalid
+P  0000-0000
+Job  8123
+Contract code :  X100 - ZZ001
+Example Builder Group - Sample Road Upgrade Stage 2
+Sample Avenue, Testville NSW, Australia
+Docket number: 9042
+Physical docket number: NA
+Signed off on 28/09/2026 by Traffic Coordinator
+Start  Finish  First  Travel  LAFHA  Total
+on site  on site  Break
+TC  : Alex Example  23/09 7:00  17:30  0.50  0.05  -  10.00
+TC  : Sam Sample (    TL)  23/09 7:00  17:30  0.50  3.00  -  10.00
+Ute: TST01A
+TC  : Pat Placeholder  23/09 7:00  17:30  0.50  2.00  -  10.00
+Notes:
+NA
+Worker:  Sam Sample  Client rep:  Chris Client

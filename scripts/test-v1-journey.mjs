@@ -571,7 +571,9 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const contractLine=claims.claimable.find(l=>l.lineType==='contract'),varLine=claims.claimable.find(l=>l.lineType==='variation'),docketLine=claims.claimable.find(l=>l.lineType==='docket');
  assert(contractLine&&varLine&&docketLine,'contract, approved variation and approved docket are claimable');
  await json(await call('/api/commercial/claims','POST',{action:'create',projectId,period:today.slice(0,7),lines:[{lineType:'contract',sourceId:contractLine.sourceId,thisClaim:contractLine.contractValue+1}]},A.cookie),422,'cannot claim beyond contract value');
- const claim=await json(await call('/api/commercial/claims','POST',{action:'create',projectId,period:today.slice(0,7),lines:[{lineType:'contract',sourceId:contractLine.sourceId,thisClaim:10000},{lineType:'variation',sourceId:varLine.sourceId,thisClaim:9000},{lineType:'docket',sourceId:docketLine.sourceId,thisClaim:1200}]},A.cookie),201);
+ assert.equal(docketLine.contractValue,null,'supplier amount is not a client charge');assert.equal(docketLine.remaining,null);
+ await json(await call('/api/commercial/claims','POST',{action:'create',projectId,period:today.slice(0,7),lines:[{lineType:'docket',sourceId:docketLine.sourceId,thisClaim:1200}]},A.cookie),422,'an approved docket still needs an independent billing basis');
+ const claim=await json(await call('/api/commercial/claims','POST',{action:'create',projectId,period:today.slice(0,7),lines:[{lineType:'contract',sourceId:contractLine.sourceId,thisClaim:10000},{lineType:'variation',sourceId:varLine.sourceId,thisClaim:9000},{lineType:'docket',sourceId:docketLine.sourceId,thisClaim:1200,billingBasis:{confirmed:true,reference:'Synthetic client daywork agreement E',expectedUpdatedAt:docketLine.docketVersion}}]},A.cookie),201);
  assert.equal(claim.grossAmount,20200);
  await json(await call('/api/dockets','PUT',{...priced,status:'review'},A.cookie),409,'claimed docket is locked');
  await json(await call('/api/commercial/claims','POST',{action:'transition',claimId:claim.claimId,to:'internal_approval'},A.cookie),200);
@@ -591,6 +593,59 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
  const report=await json(await call('/api/reports/v1','GET',undefined,A.cookie),200);assert(report.commercial.totals.currentContract>=f.currentContract);assert.equal(report.pipeline.conversionPct,100);
  console.log('PASS E: docket approval posts cost idempotently + reversal, variation lifecycle and lock, claim limits, no double docket claim, internal approval → submit → certify → invoice (GST) → payment, forecast/control, estimate vs actual, reports');
 
+ // ---------------------------------------------------------------- Docket parsing accuracy: undated dockets and parsed references survive saving
+ step='Docket parsing accuracy';
+ {const post=async rec=>{const f=new FormData();f.set('records',JSON.stringify([rec]));return (await json(await call('/api/dockets','POST',f,A.cookie),200)).dockets[0];};
+  const undatedDocket=await post({docketNo:`PARSE-${suffix}`,workDate:'',client:'Example Builder Group',project:'Sample Road Upgrade Stage 2',status:'review',links:{jobReference:'8123',contractReference:'X100 - ZZ001',signOffDate:'2026-09-28'},labourHours:30,lineItems:[{kind:'labour',description:'TC — Alex Example',quantity:10,unit:'hr',rate:null,amount:null,valueSource:'unpriced'}],amount:0});
+  assert.equal(undatedDocket.workDate,'','an unknown work date is stored as unknown, not as today');
+  const [[row]]=await db.execute('SELECT work_date,links,source_key FROM dockets WHERE id=?',[undatedDocket.id]);assert.equal(row.work_date,'');assert.deepEqual(JSON.parse(row.links),{jobReference:'8123',contractReference:'X100 - ZZ001',signOffDate:'2026-09-28'},'job reference, contract reference and sign-off date are kept distinct');
+  for(const month of ['2020-01',today.slice(0,7)]){const list=(await json(await call('/api/dockets?month='+month,'GET',undefined,A.cookie),200)).dockets;assert(list.some(x=>x.id===undatedDocket.id),'undated dockets are listed in every month for review ('+month+')');}
+  await json(await call('/api/dockets','PUT',{...undatedDocket,status:'approved'},A.cookie),422,'an undated docket cannot be approved');
+  const fixed=await json(await call('/api/dockets','PUT',{...undatedDocket,workDate:'2026-09-23',status:'review'},A.cookie),200);assert.equal(fixed.docket.workDate,'2026-09-23');
+  assert.equal((await db.execute('SELECT work_date FROM dockets WHERE id=?',[undatedDocket.id]))[0][0].work_date,'2026-09-23');
+  const [[unpriced]]=await db.execute("SELECT line_items FROM dockets WHERE id=?",[undatedDocket.id]);assert.equal(JSON.parse(unpriced.line_items)[0].amount,null,'absent amounts stay unknown');
+  // ---- Approval validation: POST, PUT and the seam all require a real work date, and a rejection writes nothing.
+  {const count=async()=>Number((await db.execute("SELECT COUNT(*) AS n FROM dockets WHERE docket_no LIKE ?",['GATE-%'+suffix]))[0][0].n);
+   const postRaw=async recs=>{const f=new FormData();f.set('records',JSON.stringify(recs));return call('/api/dockets','POST',f,A.cookie);};
+   const good={docketNo:`GATE-OK-${suffix}`,workDate:'2026-09-23',client:'Example Builder Group',project:'Sample Road',status:'review',amount:0};
+   const before=await count();
+   const auditCount=async()=>Number((await db.execute("SELECT COUNT(*) AS n FROM audit_log WHERE organisation_id=?",[memberA.organisation_id]))[0][0].n);
+   const auditBefore=await auditCount();
+   await json(await postRaw([{...good,docketNo:`GATE-BAD-${suffix}`,workDate:'',status:'approved'}]),422,'an approved docket with a blank date is rejected on create');
+   await json(await postRaw([{...good,docketNo:`GATE-BAD2-${suffix}`,workDate:'not a date',status:'approved'}]),422,'an approved docket with an invalid date is rejected on create');
+   await json(await postRaw([{...good,docketNo:`GATE-BAD3-${suffix}`,workDate:'',status:'ready'}]),422,'a ready docket with a blank date is rejected on create');
+   await json(await postRaw([good,{...good,docketNo:`GATE-BAD4-${suffix}`,workDate:'',status:'approved'}]),422,'one bad record rejects the whole batch');
+   assert.equal(await count(),before,'nothing was written by any rejected create');
+   assert.equal(await auditCount(),auditBefore,'no audit rows were written by the rejected creates');
+   const created=(await json(await postRaw([{...good,docketNo:`GATE-PUT-${suffix}`,workDate:'',status:'review'}]),200)).dockets[0];
+   await json(await call('/api/dockets','PUT',{...created,status:'approved'},A.cookie),422,'approving a blank date through PUT is rejected');
+   const [[stillReview]]=await db.execute('SELECT status,work_date FROM dockets WHERE id=?',[created.id]);assert.deepEqual([stillReview.status,stillReview.work_date],['review',''],'the rejected approval changed nothing');
+   assert.equal((await db.execute("SELECT COUNT(*) AS n FROM cost_transactions WHERE source_id=?",[created.id]))[0][0].n,0,'no cost rows');
+   await json(await call('/api/dockets','PUT',{...created,workDate:'2026-09-23',status:'approved'},A.cookie),200,'with a date it can be approved');}
+  // ---- Review freshness: save → reopen → edit, status changes and concurrent updates never overwrite corrections.
+  {const doc=await post({docketNo:`FRESH-${suffix}`,workDate:'2026-09-23',client:'Example Builder Group',project:'Sample Road',status:'review',notes:'as uploaded'});
+   const get=async(id,cookie=A.cookie)=>call('/api/dockets?id='+id,'GET',undefined,cookie);
+   const put=(d,patch)=>call('/api/dockets','PUT',{...d,...patch},A.cookie);
+   const t0=doc.updatedAt;
+   const first=await json(await put(doc,{client:'Corrected Client',expectedUpdatedAt:t0}),200);const t1=first.docket.updatedAt;assert.notEqual(t1,t0);
+   // reopening loads the current server record, not the upload snapshot
+   const reopened=(await json(await get(doc.id),200)).docket;assert.equal(reopened.client,'Corrected Client');assert.equal(reopened.updatedAt,t1);assert.notEqual(reopened.client,doc.client);
+   const second=await json(await put(reopened,{notes:'second correction',expectedUpdatedAt:reopened.updatedAt}),200);const t2=second.docket.updatedAt;
+   assert.equal((await json(await get(doc.id),200)).docket.notes,'second correction');
+   // a stale editor (still holding the upload snapshot) is refused and overwrites nothing
+   const stale=await put(doc,{client:'Stale Overwrite',notes:'stale',expectedUpdatedAt:t0});assert.equal(stale.status,409);
+   const [[kept]]=await db.execute('SELECT client,notes,updated_at FROM dockets WHERE id=?',[doc.id]);assert.deepEqual([kept.client,kept.notes,kept.updated_at],['Corrected Client','second correction',t2],'corrections survive a stale save');
+   // status changes are versioned too
+   await json(await put(reopened,{status:'approved',expectedUpdatedAt:t2}),200);const approvedAt=(await json(await get(doc.id),200)).docket.updatedAt;
+   assert.equal((await put({...reopened,status:'review'},{expectedUpdatedAt:t2})).status,409,'a stale return-to-review does not undo an approval');assert.equal((await db.execute('SELECT status FROM dockets WHERE id=?',[doc.id]))[0][0].status,'approved');
+   // two editors saving from the same version: exactly one wins and the loser changes nothing
+   const results=await Promise.all(['Editor one','Editor two'].map(name=>put({...reopened,status:'approved'},{notes:name,expectedUpdatedAt:approvedAt})));
+   assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);const winner=results.findIndex(r=>r.status===200);
+   assert.equal((await json(await get(doc.id),200)).docket.notes,['Editor one','Editor two'][winner],'the winner\'s correction is the stored one');
+   // other organisations cannot read it
+   assert.equal((await get(doc.id,B.cookie)).status,404,'a record of another organisation is not found by id');
+   assert.equal((await get('missing-id')).status,404);}
+  console.log('PASS docket parsing: unknown dates are stored unknown and listed for review, approval refused until dated, references kept distinct, unpriced rows stay unknown');}
 
  // ---------------------------------------------------------------- Docket allocation (office-uploaded dockets carry no project)
  step='Docket allocation';
@@ -680,6 +735,7 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
 
   // ---- Coordinated, transactional reallocation: stale edits, concurrent writes, claims, closure, approval round trips, Projects off.
   const mkApproved=async(name,job,extra={})=>{const d=await mk(name,extra);await json(await put({...d,status:'approved'},{links:{jobId:job}}),200);return {...d,status:'approved',links:{jobId:job}};};
+  const billing=async id=>({confirmed:true,reference:'Synthetic independently agreed client charge',expectedUpdatedAt:(await db.execute('SELECT updated_at FROM dockets WHERE organisation_id=? AND id=?',[org,id]))[0][0].updated_at});
   const actual=async id=>(await rows(id)).filter(r=>r.status==='actual').map(r=>[r.project_id,r.source_line]);
   const p3=(await json(await call('/api/projects','POST',{name:'Allocation three'},A.cookie),201)).projectId;
   // A change of project or status needs the version it was made against, and a stale one cannot overwrite a newer allocation.
@@ -708,7 +764,8 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
    await db.execute("UPDATE dockets SET status='approved' WHERE id=?",[d.id]);}
   // A real claim racing a reallocation never ends with a claimed docket outside its claim's project.
   for(let round=0;round<3;round++){const pc=(await json(await call('/api/projects','POST',{name:'Claim race '+round},A.cookie),201)).projectId;const d=await mkApproved('claimrace'+round,pc);
-   const [claimRes,moveRes]=await Promise.all([call('/api/commercial/claims','POST',{action:'create',projectId:pc,period:today.slice(0,7),lines:[{lineType:'docket',sourceId:d.id,thisClaim:1000}]},A.cookie),put(d,{links:{jobId:p3},allocationReason:'Racing the claim'})]);
+   const billingBasis=await billing(d.id);
+   const [claimRes,moveRes]=await Promise.all([call('/api/commercial/claims','POST',{action:'create',projectId:pc,period:today.slice(0,7),lines:[{lineType:'docket',sourceId:d.id,thisClaim:1000,billingBasis}]},A.cookie),put(d,{links:{jobId:p3},allocationReason:'Racing the claim'})]);
    const final=(await db.execute('SELECT status,links FROM dockets WHERE id=?',[d.id]))[0][0],job=JSON.parse(final.links).jobId,[claimLines]=await db.execute("SELECT project_id FROM claim_lines WHERE source_id=? AND line_type='docket'",[d.id]);
    if(final.status==='included_claim'){assert.equal(job,pc,'a claimed docket stays in the claim project');assert.equal(claimLines.length,1);assert.equal(moveRes.status,409);assert.deepEqual(await actual(d.id),[[pc,'L1']]);}
    else{assert.equal(job,p3,'the move won');assert.equal(claimLines.length,0,'no claim line for a docket that moved');assert.notEqual(claimRes.status,200);assert.deepEqual(await actual(d.id),[[p3,'L1@1']]);}
@@ -722,15 +779,15 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
     assert.equal((await allocating).status,409,'allocation after closure is refused');}finally{await holder.end();}
    assert.deepEqual(await stored(d.id),{},'the docket was not allocated');await db.execute("UPDATE jobs SET stage='active' WHERE organisation_id=? AND id=?",[org,p3]);}
   // Claims take the project lock before their first read. A claim queued behind closure must see the closed project, and a claim queued behind a
-  // same-project amount edit must use the committed amount (REPEATABLE READ would otherwise pin a snapshot taken before the lock).
+  // same-project amount edit must reject a stale billing confirmation (never copying a newly committed cost into revenue).
   {const clean=async pid=>{await db.execute('DELETE FROM claim_lines WHERE organisation_id=? AND project_id=?',[org,pid]);await db.execute('DELETE FROM progress_claims WHERE organisation_id=? AND project_id=?',[org,pid]);};
-   const claimBody=(pid,id,amount)=>({action:'create',projectId:pid,period:today.slice(0,7),lines:[{lineType:'docket',sourceId:id,thisClaim:amount}]});
+   const claimBody=async(pid,id,amount)=>({action:'create',projectId:pid,period:today.slice(0,7),lines:[{lineType:'docket',sourceId:id,thisClaim:amount,billingBasis:await billing(id)}]});
    // (a) Closure wins first: the waiting claim is rejected and nothing is written.
    {const pc=(await json(await call('/api/projects','POST',{name:'Claim vs closure'},A.cookie),201)).projectId;const d=await mkApproved('claimclosure',pc);
     const before={docket:(await db.execute('SELECT status,amount,updated_at FROM dockets WHERE id=?',[d.id]))[0][0],cost:await rows(d.id)};
     const closer=await connect();
     try{await closer.query('START TRANSACTION');await closer.query('SELECT id FROM jobs WHERE organisation_id=? AND id=? FOR UPDATE',[org,pc]);
-     let settled=false;const claiming=call('/api/commercial/claims','POST',claimBody(pc,d.id,1000),A.cookie).then(r=>{settled=true;return r;});
+     let settled=false;const claiming=call('/api/commercial/claims','POST',await claimBody(pc,d.id,1000),A.cookie).then(r=>{settled=true;return r;});
      await new Promise(r=>setTimeout(r,800));assert.equal(settled,false,'the claim waits for the project lock');
      await closer.query("UPDATE jobs SET stage='closed' WHERE organisation_id=? AND id=?",[org,pc]);await closer.query('COMMIT');
      const res=await claiming;assert.equal(res.status,409,'a claim that waited behind closure is rejected: '+res.status);assert.match((await res.json()).error,/closed/i);}finally{await closer.end();}
@@ -738,18 +795,20 @@ assert.equal(pw.project.sourceEstimateId,estimateId);
     assert.equal((await db.execute('SELECT COUNT(*) AS n FROM claim_lines WHERE organisation_id=? AND project_id=?',[org,pc]))[0][0].n,0,'no claim lines were written');
     const after={docket:(await db.execute('SELECT status,amount,updated_at FROM dockets WHERE id=?',[d.id]))[0][0],cost:await rows(d.id)};assert.deepEqual(after,before,'the docket and its ledger rows are untouched');
     await db.execute("UPDATE jobs SET stage='active' WHERE organisation_id=? AND id=?",[org,pc]);}
-   // (b) A permitted amount edit of the same project wins first: the claim uses the committed amount.
+   // (b) A permitted cost edit wins first: reject the stale confirmation, then accept the separately agreed charge on refresh.
    {const pc=(await json(await call('/api/projects','POST',{name:'Claim vs amount edit'},A.cookie),201)).projectId;const d=await mkApproved('claimamount',pc);
     const holder=await connect();let edit,claiming;
     try{await holder.query('START TRANSACTION');await holder.query('SELECT id FROM jobs WHERE organisation_id=? AND id=? FOR UPDATE',[org,pc]);
      const newItems=[{description:'AC14 asphalt supply',quantity:5,unit:'t',rate:250,amount:1250}];
      edit=put({...d,status:'approved',links:{jobId:pc}},{amount:1250,lineItems:newItems});
      await new Promise(r=>setTimeout(r,600));
-     claiming=call('/api/commercial/claims','POST',claimBody(pc,d.id,1250),A.cookie);
+     claiming=call('/api/commercial/claims','POST',await claimBody(pc,d.id,1000),A.cookie);
      await new Promise(r=>setTimeout(r,600));await holder.query('COMMIT');}finally{await holder.end();}
     assert.equal((await edit).status,200,'the amount edit committed first');
-    const res=await claiming;assert.equal(res.status,201,'the claim used the committed amount: '+res.status+' '+JSON.stringify(await res.clone().json().catch(()=>({}))));
-    const [[line]]=await db.execute("SELECT this_claim FROM claim_lines WHERE organisation_id=? AND source_id=? AND line_type='docket'",[org,d.id]);assert.equal(Number(line.this_claim),1250,'the claim line carries the edited amount');
+    const res=await claiming;assert.equal(res.status,409,'the stale billing confirmation is rejected after the cost edit');
+    assert.equal((await db.execute('SELECT COUNT(*) AS n FROM progress_claims WHERE organisation_id=? AND project_id=?',[org,pc]))[0][0].n,0,'stale confirmation wrote no claim');
+    await json(await call('/api/commercial/claims','POST',await claimBody(pc,d.id,1000),A.cookie),201);
+    const [[line]]=await db.execute("SELECT this_claim FROM claim_lines WHERE organisation_id=? AND source_id=? AND line_type='docket'",[org,d.id]);assert.equal(Number(line.this_claim),1000,'confirmed client charge is independent of edited supplier cost');
     assert.equal((await db.execute('SELECT status FROM dockets WHERE id=?',[d.id]))[0][0].status,'included_claim');
     assert.deepEqual((await rows(d.id)).filter(r=>r.status==='actual').map(r=>Number(r.amount)),[1250],'the ledger carries the edited amount too');
     await clean(pc);}

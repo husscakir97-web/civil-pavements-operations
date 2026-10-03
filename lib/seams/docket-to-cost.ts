@@ -75,6 +75,7 @@ export async function docketCostStatements(docketId:string,nextStatus:string,nex
   if(claimed)return {statements:[],posted:0,message:null};
   return {statements:[reverseAll,...(moved?[reallocationAudit(jobId,[])]:[])],posted:0,message:null};
  }
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(String(d.work_date||'')))throw Object.assign(new Error('A work date is required before a docket can be approved.'),{status:422});
  const event=await domainEventStatement('docket.approved',docketId,crypto.randomUUID());
  if(!jobId)return {statements:[event,reverseAll,...(moved?[reallocationAudit('',[])]:[])],posted:0,message:'Approved. This docket is not allocated to a project, so no cost is posted'+(Number(posted?.n)?' and the cost previously posted was reversed.':'.')};
  if(!await requireSeam('docket.cost'))return {statements:[event],posted:0,message:'Approved. Projects is not enabled, so costs were not posted; the docket remains exportable.'};

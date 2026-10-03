@@ -7,3 +7,6 @@ assert.equal(sql.prepare('SELECT count(*) n FROM claims').get().n,0);assert.equa
 sql.prepare("INSERT INTO claims (id,organisation_id,job_id,claim_period,status,metadata,created_at) VALUES ('c-legacy','roadworx-sydney','j1','2026-09','Draft','{}',?)").run(now);sql.prepare("INSERT INTO claim_items (id,organisation_id,claim_id,docket_id,line_item,amount,created_at) VALUES ('ci','roadworx-sydney','c-legacy','d1','',40000,?)").run(now);sql.prepare("UPDATE dockets SET status='included_claim' WHERE id='d1'").run();
 const afterClaim=await (await api.GET(new Request('https://test.invalid',{headers:{'x-test-user-id':'test-owner','x-test-user-email':'admin@example.invalid'}}))).json();assert.equal(afterClaim.jobs[0].current.unbilled,0);assert.equal(afterClaim.jobs[0].current.claimed,40000,'Existing legacy claims remain visible');
 console.log('PASS commercial baseline, committed/actual, claimed/invoiced, cost categories, margin; legacy claim and variation writes retired (410) with existing legacy claims still reported')})().catch(e=>{console.error(e);process.exit(1)});
+
+// Keep the approved client-output journey in the standard npm test gate.
+require('./test-commercial-output.cjs');

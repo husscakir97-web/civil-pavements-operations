@@ -905,6 +905,9 @@ export const programActivities=mysqlTable('program_activities',{
  responsible:varchar('responsible',{length:180}),workPackage:varchar('work_package',{length:180}),
  resourceRequirement:text('resource_requirement'),plannedQuantity:decimal('planned_quantity',{precision:15,scale:2}),
  quantityUnit:varchar('quantity_unit',{length:40}),productionPerDay:decimal('production_per_day',{precision:15,scale:2}),
+ productiveHoursPerDay:decimal('productive_hours_per_day',{precision:6,scale:2}),directCostRate:decimal('direct_cost_rate',{precision:15,scale:2}),
+ costRateBasis:varchar('cost_rate_basis',{length:10}).notNull().default('hour'),
+ sourceEstimateRevisionId:ref('source_estimate_revision_id'),sourceEstimateItemId:ref('source_estimate_item_id'),
  status:varchar('status',{length:30}).notNull().default('planned'),
  // 0012: user-controlled order (quick reorder); dates still come from start/duration/dependencies.
  sequence:int('sequence'),...lifecycle(),

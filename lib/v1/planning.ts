@@ -132,6 +132,7 @@ export function validatePlan(doc:PlanDocument):Issue[]{
    if(!r.name.trim())issues.push({path:`${q}.name`,message:'Name the resource.'});
    num(r.quantity,`${q}.quantity`,issues,FIELDS.count);num(r.rate,`${q}.rate`,issues,FIELDS.rate);
    if(r.resourceRef&&(!r.resourceRef.id||r.resourceRef.id.length>191))issues.push({path:`${q}.resourceRef`,message:'Invalid resource reference.'});
+   if(r.resourceRef&&r.resourceRef.type!==(r.kind==='plant'?'plant':'worker'))issues.push({path:`${q}.resourceRef`,message:r.kind==='plant'?'A plant line can only be linked to a plant item.':'A labour line can only be linked to a worker.'});
   });
   if(a.costItems.length>LIMITS.costItems)issues.push({path:`${p}.costItems`,message:`At most ${LIMITS.costItems} setup costs per activity.`});
   a.costItems.forEach((c,j)=>{claim(c.id,`${p}.costItems.${j}.id`);if(!c.label.trim())issues.push({path:`${p}.costItems.${j}.label`,message:'Name the setup cost.'});num(c.amount,`${p}.costItems.${j}.amount`,issues,FIELDS.amount);});

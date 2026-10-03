@@ -7,7 +7,7 @@ import {query,exec,tx,uuid,nowIso} from '@/lib/platform/sql';
 import {audit} from '@/lib/platform/audit';
 import {can} from '@/lib/platform/permissions';
 import {ID_PATTERN,emptyDocument,type PlanDocument} from '@/lib/v1/planning';
-import {assertLinks,bump,canSeePlanRates,copyDocument,loadDocument,loadPlan,loadScenario,planCsv,planVisibleTo,present,writeDocument,writePositions,type PlanRow,type ScenarioRow} from '@/lib/modules/estimating/planning';
+import {assertLinks,bump,canLinkResources,canSeePlanRates,copyDocument,loadDocument,loadPlan,loadScenario,planCsv,planVisibleTo,present,resourceLabels,searchResources,writeDocument,writePositions,type PlanRow,type ScenarioRow} from '@/lib/modules/estimating/planning';
 export const dynamic='force-dynamic';
 
 const id=z.string().regex(ID_PATTERN);
@@ -44,11 +44,21 @@ async function scenarioPayload(org:string,scenarioId:string,actor:{userId:string
  const {plan,scenario}=await loadScenario(org,scenarioId,actor,conn);
  const {doc,positions}=await loadDocument(org,scenarioId,conn);
  const siblings=await query<ScenarioRow>('SELECT * FROM planning_scenarios WHERE organisation_id=? AND plan_id=? ORDER BY created_at,id',[org,plan.id],conn);
- return {plan:summary(plan,siblings),scenario:{id:scenario.id,name:scenario.name,revision:Number(scenario.revision),status:scenario.status,updatedAt:scenario.updated_at},positions,...present(doc,canSeePlanRates(actor)),canEdit:can(actor.role,'estimate.edit')};
+ // Labels for linked workers/plant: identifying fields only, and only for people who may see resources while Operations is available.
+ const linkable=await canLinkResources(org,actor);
+ return {plan:summary(plan,siblings),scenario:{id:scenario.id,name:scenario.name,revision:Number(scenario.revision),status:scenario.status,updatedAt:scenario.updated_at},positions,...present(doc,canSeePlanRates(actor)),canEdit:can(actor.role,'estimate.edit'),resourcesAvailable:linkable,resources:linkable?await resourceLabels(org,doc,conn):{}};
 }
 
 export const GET=api({permission:'read',module:'estimating'},async({actor,params})=>{
- const org=actor.organisationId,scenarioId=params.get('scenarioId');
+ const org=actor.organisationId,scenarioId=params.get('scenarioId'),lookup=params.get('lookup');
+ if(lookup){
+  // Picker search: editors only, same capability and module rules as saving a link, and never any rate or contact field.
+  if(lookup!=='worker'&&lookup!=='plant')fail(400,'Choose worker or plant.');
+  if(!can(actor.role,'estimate.edit'))fail(403,'You are not authorised to edit plans.');
+  if(!await canLinkResources(org,actor))fail(403,'Workers and plant are not available to you here (needs Operations and resource access).');
+  const limit=Math.min(30,Math.max(1,Number(params.get('limit')||20)||20));
+  return {results:await searchResources(org,lookup,(params.get('q')||'').slice(0,80),limit)};
+ }
  if(scenarioId){
   if(!ID_PATTERN.test(scenarioId))fail(404,'Scenario not found.');
   const payload=await scenarioPayload(org,scenarioId,actor);
@@ -117,7 +127,7 @@ export const POST=api({permission:'write',module:'estimating',capability:'estima
    if(plan.status==='archived')fail(409,'This plan is archived.');
    // Stale saves are refused before anything is written.
    if(Number(scenario.revision)!==b.expectedRevision)fail(409,'This scenario was changed elsewhere. Reload to see the latest version before saving.',{currentRevision:Number(scenario.revision)});
-   await writeDocument(org,scenario.id,b.document as PlanDocument,conn);
+   await writeDocument(org,scenario.id,b.document as PlanDocument,conn,actor);
    if(b.name&&b.name!==scenario.name)await exec('UPDATE planning_scenarios SET name=? WHERE organisation_id=? AND id=?',[b.name,org,scenario.id],conn);
    await bump('planning_scenarios',org,scenario.id,conn);
    await audit({event:'planning.scenario_saved',entityType:'planning_scenario',entityId:scenario.id,summary:scenario.name,after:{revision:Number(scenario.revision)+1,activities:b.document.activities.length,dependencies:b.document.dependencies.length}},conn);

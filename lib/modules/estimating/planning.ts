@@ -3,6 +3,8 @@
 import {query,one,exec,uuid,nowIso,type Conn} from '@/lib/platform/sql';
 import {fail} from '@/lib/platform/http';
 import {can} from '@/lib/platform/permissions';
+import {getEntitlements,usable} from '@/lib/platform/entitlements';
+import {filterLookup} from '@/lib/v1/lookup';
 import type {Actor} from '@/lib/authz';
 import {calculatePlan,redactRates,validatePlan,newId,type PlanActivity,type PlanDocument,type Positions,type CostItem,type Requirement} from '@/lib/v1/planning';
 
@@ -60,14 +62,62 @@ export function present(doc:PlanDocument,rates:boolean){
  return {document:rates?doc:redactRates(doc),result:calculatePlan(doc,{rates}),ratesVisible:rates};
 }
 
-async function assertReferences(org:string,doc:PlanDocument,conn:Conn){
+/**
+ * Resource links (a worker or plant item a requirement refers to). Linking only RECORDS the reference: it never copies the asset's
+ * name or rates into the plan and implies nothing about availability. A link that already exists anywhere in the same plan is
+ * carried forward unchanged (even if Operations is later switched off or the record is archived); a NEW link needs the
+ * schedule.view capability, an entitled Operations module, and a non-archived record of THIS organisation.
+ */
+export type ResourceChoice={type:'worker'|'plant';id:string;label:string;detail:string;archived?:boolean};
+export async function canLinkResources(org:string,actor:Pick<Actor,'role'>){return can(actor.role,'schedule.view')&&usable(await getEntitlements(org),'operations');}
+
+const clip=(s:string,n=120)=>s.length>n?s.slice(0,n-1)+'…':s;
+type WorkerRow={id:string;name:string|null;employee_number:string|null;role_title:string|null;status:string|null};
+type PlantRow={id:string;name:string|null;plant_number:string|null;category:string|null;description:string|null;status:string|null};
+const archived=(status:string|null)=>String(status??'').toLowerCase()==='archived';
+// Only identifying, non-financial fields ever leave here: no pay or hire rates, contact details or registration.
+const workerChoice=(r:WorkerRow):ResourceChoice=>({type:'worker',id:r.id,label:(r.name||'').trim()||'Unnamed worker',detail:clip([r.role_title,r.employee_number].filter(Boolean).join(' · ')),...(archived(r.status)?{archived:true}:{})});
+const plantChoice=(r:PlantRow):ResourceChoice=>{
+ const name=(r.name||'').trim(),no=(r.plant_number||'').trim();
+ return {type:'plant',id:r.id,label:no&&!name.toLowerCase().startsWith(no.toLowerCase())?`${no} · ${name||'Unnamed plant'}`:name||no||'Unnamed plant',detail:clip([r.category,r.description].filter(Boolean).join(' · ')),...(archived(r.status)?{archived:true}:{})};
+};
+
+/** Searchable choices for the picker: this organisation's non-archived workers or plant, best matches first. */
+export async function searchResources(org:string,type:'worker'|'plant',q:string,limit:number):Promise<ResourceChoice[]>{
+ if(type==='worker'){
+  const rows=await query<WorkerRow>("SELECT id,name,employee_number,role_title,status FROM workers WHERE organisation_id=? AND LOWER(COALESCE(status,''))<>'archived' ORDER BY name LIMIT 2000",[org]);
+  return filterLookup(rows,q,r=>[r.name,r.employee_number,r.role_title],r=>[r.employee_number],r=>r.name||'').slice(0,limit).map(workerChoice);
+ }
+ const rows=await query<PlantRow>("SELECT id,name,plant_number,category,description,status FROM plant WHERE organisation_id=? AND LOWER(COALESCE(status,''))<>'archived' ORDER BY name LIMIT 2000",[org]);
+ return filterLookup(rows,q,r=>[r.name,r.plant_number,r.category,r.description],r=>[r.plant_number],r=>r.name||'').slice(0,limit).map(plantChoice);
+}
+
+/** Display labels for the references a document already holds. Records outside this organisation are simply not returned. */
+export async function resourceLabels(org:string,doc:PlanDocument,conn?:Conn):Promise<Record<string,ResourceChoice>>{
  const refs=doc.activities.flatMap(a=>a.requirements.map(r=>r.resourceRef)).filter((r):r is NonNullable<typeof r>=>Boolean(r));
+ const out:Record<string,ResourceChoice>={};
+ const workers=[...new Set(refs.filter(r=>r.type==='worker').map(r=>r.id))],plants=[...new Set(refs.filter(r=>r.type==='plant').map(r=>r.id))];
+ if(workers.length)for(const r of await query<WorkerRow>('SELECT id,name,employee_number,role_title,status FROM workers WHERE organisation_id=? AND id IN (?)',[org,workers],conn))out['worker:'+r.id]=workerChoice(r);
+ if(plants.length)for(const r of await query<PlantRow>('SELECT id,name,plant_number,category,description,status FROM plant WHERE organisation_id=? AND id IN (?)',[org,plants],conn))out['plant:'+r.id]=plantChoice(r);
+ return out;
+}
+
+async function assertReferences(org:string,doc:PlanDocument,conn:Conn,scenarioId:string,actor:Pick<Actor,'role'>){
+ const refs=doc.activities.flatMap(a=>a.requirements.map(r=>r.resourceRef)).filter((r):r is NonNullable<typeof r>=>Boolean(r));
+ if(!refs.length)return;
+ const held=new Set((await query<{t:string;i:string}>('SELECT r.resource_ref_type AS t,r.resource_ref_id AS i FROM planning_requirements r JOIN planning_scenarios s ON s.id=r.scenario_id AND s.organisation_id=r.organisation_id WHERE r.organisation_id=? AND r.resource_ref_id IS NOT NULL AND s.plan_id=(SELECT plan_id FROM planning_scenarios WHERE organisation_id=? AND id=?)',[org,org,scenarioId],conn)).map(x=>`${x.t}:${x.i}`));
+ const added=refs.filter(r=>!held.has(`${r.type}:${r.id}`));
+ if(!added.length)return;
+ // 1) the record must be a live record of THIS organisation (an id from another tenant, the wrong kind, or an archived record is "not found")
  for(const type of ['worker','plant'] as const){
-  const ids=[...new Set(refs.filter(r=>r.type===type).map(r=>r.id))];
+  const ids=[...new Set(added.filter(r=>r.type===type).map(r=>r.id))];
   if(!ids.length)continue;
-  const found=await query<{id:string}>(`SELECT id FROM ${type==='plant'?'plant':'workers'} WHERE organisation_id=? AND id IN (?)`,[org,ids],conn);
+  const found=await query<{id:string}>(`SELECT id FROM ${type==='plant'?'plant':'workers'} WHERE organisation_id=? AND id IN (?) AND LOWER(COALESCE(status,''))<>'archived'`,[org,ids],conn);
   if(found.length!==ids.length)fail(400,'A linked resource was not found in this organisation.');
  }
+ // 2) the saver must be allowed to see resources, and Operations must be available
+ if(!can(actor.role,'schedule.view'))fail(403,'You are not authorised to link workers or plant.');
+ if(!usable(await getEntitlements(org),'operations'))fail(403,'Workers and plant cannot be linked because Operations is not available for your organisation.');
 }
 export async function assertLinks(org:string,links:{estimateId?:string|null;tenderId?:string|null;projectId?:string|null},conn:Conn){
  const check=async(table:string,id:string|null|undefined,label:string)=>{if(id&&!await one(`SELECT 1 AS ok FROM ${table} WHERE organisation_id=? AND id=?`,[org,id],conn))fail(400,`The linked ${label} was not found.`);};
@@ -75,10 +125,11 @@ export async function assertLinks(org:string,links:{estimateId?:string|null;tend
 }
 
 /** Replaces the scenario's business rows. Caller holds the scenario row lock and has checked the revision. */
-export async function writeDocument(org:string,scenarioId:string,doc:PlanDocument,conn:Conn){
+/** `actor` is the person saving: new resource links are checked against their access. Omit it only for a trusted copy of an already-stored document. */
+export async function writeDocument(org:string,scenarioId:string,doc:PlanDocument,conn:Conn,actor?:Pick<Actor,'role'>){
  const issues=validatePlan(doc);
  if(issues.length)fail(400,issues[0].message,{issues});
- await assertReferences(org,doc,conn);
+ if(actor)await assertReferences(org,doc,conn,scenarioId,actor);
  for(const table of ['planning_cost_links','planning_cost_items','planning_requirements','planning_dependencies','planning_activities'])
   await exec(`DELETE FROM ${table} WHERE organisation_id=? AND scenario_id=?`,[org,scenarioId],conn);
  let sort=0;

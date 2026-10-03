@@ -11,7 +11,7 @@ type List={plans:PlanSummary[];ratesVisible:boolean;canEdit:boolean};
 type Choice={type:'worker'|'plant';id:string;label:string;detail:string;archived?:boolean};
 type Loaded={plan:PlanSummary;scenario:{id:string;name:string;revision:number;status:string};positions:Positions;document:PlanDocument;result:PlanResult;ratesVisible:boolean;canEdit:boolean;resourcesAvailable:boolean;resources:Record<string,Choice>};
 type View='Flowchart'|'Timeline'|'Costs';
-const NODE_W=250,NODE_H=140;
+const NODE_W=250,NODE_H=140,NODE_MIN_H=96;
 
 const cost=(v:number|null|undefined,visible:boolean)=>!visible?'Restricted':v===null||v===undefined?'Unknown':money(v,true);
 /** An activity with no resources or setup costs entered has no cost yet: say so rather than showing $0.00. */
@@ -62,7 +62,7 @@ function Editor({scenarioId,onBack}:{scenarioId:string;onBack:()=>void}){
  // Labels of assets picked in this session, so a just-linked (not yet saved) worker or plant item is named, not anonymous.
  const [picked,setPicked]=useState<Record<string,Choice>>({});
  const [view,setView]=useState<View>('Flowchart'),[drawer,setDrawer]=useState<string|null>(null),[selectedId,setSelectedId]=useState<string|null>(null),[sheetOpen,setSheetOpen]=useState(false),[mobileCanvas,setMobileCanvas]=useState(false),[linkFrom,setLinkFrom]=useState<string|null>(null);
- const [note,setNote]=useState(''),[stale,setStale]=useState(false),[newName,setNewName]=useState('');
+ const [note,setNote]=useState(''),[stale,setStale]=useState(false),[partial,setPartial]=useState(false),[newName,setNewName]=useState('');
  const save=useAction();
  const [synced,setSynced]=useState<Loaded|null>(null),[retainLayout,setRetainLayout]=useState<Positions|null>(null);
  // Server data replaces the local draft whenever a fresh response arrives (initial load, save, reload, scenario switch).
@@ -112,16 +112,28 @@ function Editor({scenarioId,onBack}:{scenarioId:string;onBack:()=>void}){
    catch(e){
     // The business save already happened: adopt its new revision so a retry saves only the layout instead of hitting a stale-version error.
     if(businessSaved){setRetainLayout(layout);loaded.setData(latest);}
-    throw new Error(`${businessSaved?'Your changes were saved, but the layout could not be saved. ':''}${e instanceof Error?e.message:'The layout save failed.'} Press Save to retry the layout.`);
+    if(businessSaved)setPartial(true);
+    throw new Error(`${e instanceof Error?e.message:'The layout save failed.'}${businessSaved?'':' Press Save to retry the layout.'}`);
    }
   }
   return {latest,layout};
- },r=>{if(r){loaded.setData({...r.latest,positions:r.layout});setDirtyDoc(false);setDirtyPos(false);setNote('Saved.');}});
+ },r=>{if(r){loaded.setData({...r.latest,positions:r.layout});setDirtyDoc(false);setDirtyPos(false);setPartial(false);setNote('Saved.');}});
  const dirty=dirtyDoc||dirtyPos;
+ const discard=()=>{save.setError('');setNote('');setPartial(false);loaded.refresh();};
  const newScenario=()=>save.run(()=>api<Loaded>('/api/planning',{method:'POST',body:{action:'create-scenario',planId:data.plan.id,name:newName,basedOnScenarioId:data.scenario.id}}),l=>{setNewName('');setCurrent(l.scenario.id);});
  const selected=drawer?doc.activities.find(a=>a.id===drawer):null;
  const total=result.cost;
 
+
+ // One place for save feedback. It is shown on the page, or inside the open detail panel (which covers the page), never both.
+ const feedback=<div data-testid="save-feedback" className="grid gap-2 empty:hidden">
+  {stale?<div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900"><span>This scenario was changed elsewhere. Your edits were not saved.</span><Btn variant="secondary" onClick={discard}>Discard mine and reload</Btn></div>
+   :partial?<div role="alert" className="grid gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-medium">Your changes were saved, but the layout could not be saved.</p><p>{save.error?`${save.error.replace(/[.\s]+$/,'')}. `:''}Your plan content is saved; only the node positions are pending.</p><div className="flex flex-wrap gap-2"><Btn variant="secondary" busy={save.busy} onClick={()=>void persist()}>Retry layout save</Btn></div></div>
+   :(save.error||loaded.error)?<ErrorState error={save.error||loaded.error}/>:null}
+  {!stale&&!partial&&save.error&&<p className="text-sm text-slate-600">Nothing was saved. Your edits are still here: fix the problem and press Save again.</p>}
+  {note&&<p role="status" className="text-sm text-slate-600">{note}</p>}
+  {issues.length>0&&editable&&<ul role="alert" className="list-disc space-y-1 rounded-lg border border-red-200 bg-red-50 p-3 pl-7 text-sm text-red-800">{issues.slice(0,4).map((i,k)=><li key={k}>{i.message}</li>)}</ul>}
+ </div>;
  const selectedAct=selectedId?doc.activities.find(a=>a.id===selectedId)??null:null;
  const unknownCount=total?.unknownCount??0,durationUnknown=!result.duration.complete;
  const leave=()=>{if(dirty&&!window.confirm('You have unsaved changes to this plan. Leave without saving?'))return;onBack();};
@@ -131,15 +143,12 @@ function Editor({scenarioId,onBack}:{scenarioId:string;onBack:()=>void}){
   <div data-testid="plan-actionbar" className="plan-actionbar sticky top-0 z-30 -mx-1 flex flex-wrap items-center justify-between gap-2 rounded-xl px-3 py-2">
    <p className="text-sm text-slate-600" aria-live="off">{!editable?'View only':dirty?<span className="font-medium text-amber-800">Edits not saved yet</span>:'No pending edits'}</p>
    <div className="flex flex-wrap items-center gap-2">
-    {editable&&dirty&&<Btn variant="ghost" onClick={()=>{save.setError('');setNote('');loaded.refresh();}}>Discard changes</Btn>}
+    {editable&&dirty&&<Btn variant="ghost" onClick={discard}>Discard changes</Btn>}
     <a className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50" href={`/api/planning?scenarioId=${data.scenario.id}&export=csv`}><Download aria-hidden className="size-4"/>Export CSV</a>
     {editable&&<Btn onClick={()=>void persist()} busy={save.busy} disabled={!dirty||issues.length>0}>Save</Btn>}
    </div>
   </div>
-  <ErrorState error={stale?'':(save.error||loaded.error)}/>
-  {stale&&<div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">This scenario was changed elsewhere. Your edits were not saved.<Btn variant="secondary" onClick={()=>{save.setError('');setNote('');loaded.refresh();}}>Discard mine and reload</Btn></div>}
-  {note&&<p role="status" className="text-sm text-slate-600">{note}</p>}
-  {issues.length>0&&editable&&<ul role="alert" className="list-disc space-y-1 rounded-lg border border-red-200 bg-red-50 p-3 pl-7 text-sm text-red-800">{issues.slice(0,4).map((i,k)=><li key={k}>{i.message}</li>)}</ul>}
+  {!drawer&&feedback}
   <div className="plan-kpis grid gap-px overflow-hidden rounded-2xl sm:grid-cols-3">
    <div className="plan-kpi"><p className="plan-eyebrow">Plan cost (ex GST)<span className="plan-chip">Calculated</span></p><p data-testid="kpi-cost" className="plan-figure">{cost(total?.total,rates)}</p><p className="plan-hint">{!rates?'Rates are restricted for your role':total&&total.total===null?`${total.unknownCount} value${total.unknownCount===1?'':'s'} unknown; known so far ${money(total.knownTotal,true)}`:'Shared costs counted once'}</p></div>
    <div className="plan-kpi"><p className="plan-eyebrow">Relative duration</p><p className="plan-figure">{result.duration.complete?dayText(result.duration.days):'Unknown'}</p><p className="plan-hint">{result.duration.complete?'Working days from plan start (relative)':`${result.duration.unknownActivities.length} activit${result.duration.unknownActivities.length===1?'y':'ies'} without a known finish`}</p></div>
@@ -173,7 +182,7 @@ function Editor({scenarioId,onBack}:{scenarioId:string;onBack:()=>void}){
   </div>
   {selectedAct&&view!=='Costs'&&!drawer&&<Inspector key={selectedAct.id} a={selectedAct} index={doc.activities.findIndex(x=>x.id===selectedAct.id)} count={doc.activities.length} doc={doc} result={result} rates={rates} expanded={sheetOpen} onToggle={()=>setSheetOpen(o=>!o)} onOpen={()=>setDrawer(selectedAct.id)} onClear={()=>{setSelectedId(null);setSheetOpen(false);}}/>}
   </div>
-  {selected&&<Drawer key={selected.id} a={selected} doc={doc} result={result} rates={rates} editable={editable} labels={{...data.resources,...picked}} linkable={data.resourcesAvailable} onPick={c=>setPicked(p=>({...p,[`${c.type}:${c.id}`]:c}))} onClose={()=>setDrawer(null)} patch={p=>patch(selected.id,p)} edit={edit} remove={()=>{remove(selected.id);setSelectedId(null);}} dirty={dirty} issueCount={issues.length} saving={save.busy} onSave={()=>void persist()}/>}
+  {selected&&<Drawer key={selected.id} a={selected} doc={doc} result={result} rates={rates} editable={editable} labels={{...data.resources,...picked}} linkable={data.resourcesAvailable} onPick={c=>setPicked(p=>({...p,[`${c.type}:${c.id}`]:c}))} onClose={()=>setDrawer(null)} patch={p=>patch(selected.id,p)} edit={edit} remove={()=>{remove(selected.id);setSelectedId(null);}} dirty={dirty} issueCount={issues.length} saving={save.busy} onSave={()=>void persist()} feedback={feedback}/>}
  </div>;
 }
 
@@ -205,7 +214,10 @@ function Inspector({a,index,count,doc,result,rates,expanded,onToggle,onOpen,onCl
 
 function Canvas({doc,result,rates,pos,linkFrom,editable,selectedId,onSelect,onMove,onOpen,onLink,onUnlink}:{selectedId:string|null;onSelect:(id:string)=>void;doc:PlanDocument;result:PlanResult;rates:boolean;pos:(id:string)=>{x:number;y:number};linkFrom:string|null;editable:boolean;onMove:(id:string,p:{x:number;y:number})=>void;onOpen:(id:string)=>void;onLink:(id:string)=>void;onUnlink:(f:string,t:string)=>void}){
  const drag=useRef<{id:string;dx:number;dy:number;moved:boolean}|null>(null);
- const width=Math.max(640,...doc.activities.map(a=>pos(a.id).x+NODE_W+40)),height=Math.max(320,...doc.activities.map(a=>pos(a.id).y+NODE_H+40));
+ // Presentation only: stored positions are never changed. A card is drawn shorter (never below the earlier 96px) when another card sits closer below it,
+ // so layouts saved with the earlier tighter row spacing do not overlap the larger cards.
+ const heightOf=(id:string)=>{const p=pos(id);let gap=Infinity;for(const o of doc.activities){if(o.id===id)continue;const q=pos(o.id);if(Math.abs(q.x-p.x)<NODE_W&&q.y>p.y)gap=Math.min(gap,q.y-p.y);}return Math.min(NODE_H,Math.max(NODE_MIN_H,gap-8));};
+ const width=Math.max(640,...doc.activities.map(a=>pos(a.id).x+NODE_W+40)),height=Math.max(320,...doc.activities.map(a=>pos(a.id).y+heightOf(a.id)+40));
  const down=(e:ReactPointerEvent<HTMLDivElement>,id:string)=>{if(!editable||(e.target as HTMLElement).closest('button'))return;const p=pos(id);onSelect(id);drag.current={id,dx:e.clientX-p.x,dy:e.clientY-p.y,moved:false};e.currentTarget.setPointerCapture(e.pointerId);};
  const move=(e:ReactPointerEvent<HTMLDivElement>)=>{const d=drag.current;if(!d)return;d.moved=true;onMove(d.id,{x:Math.max(0,Math.round(e.clientX-d.dx)),y:Math.max(0,Math.round(e.clientY-d.dy))});};
  const up=()=>{drag.current=null;};
@@ -213,14 +225,14 @@ function Canvas({doc,result,rates,pos,linkFrom,editable,selectedId,onSelect,onMo
  if(!doc.activities.length)return <EmptyState title="Start with a block" detail="Add activities such as milling, preparation and paving, then connect their sequence."/>;
  return <div className="plan-canvas-frame overflow-auto rounded-xl" style={{maxHeight:'70vh'}}><div data-testid="plan-canvas" className="relative" style={{width,height}}>
   <svg aria-hidden className="pointer-events-none absolute inset-0" width={width} height={height}><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6f8f86"/></marker></defs>
-   {doc.dependencies.map(d=>{const a=pos(d.from),b=pos(d.to),x1=a.x+NODE_W,y1=a.y+NODE_H/2,x2=b.x,y2=b.y+NODE_H/2,mx=(x1+x2)/2;return <path key={`${d.from}>${d.to}`} data-testid="plan-edge" data-from={d.from} data-to={d.to} d={`M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`} fill="none" stroke="#6f8f86" strokeWidth="1.6" markerEnd="url(#arrow)"/>;})}
+   {doc.dependencies.map(d=>{const a=pos(d.from),b=pos(d.to),x1=a.x+NODE_W,y1=a.y+heightOf(d.from)/2,x2=b.x,y2=b.y+heightOf(d.to)/2,mx=(x1+x2)/2;return <path key={`${d.from}>${d.to}`} data-testid="plan-edge" data-from={d.from} data-to={d.to} d={`M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`} fill="none" stroke="#6f8f86" strokeWidth="1.6" markerEnd="url(#arrow)"/>;})}
   </svg>
-  {editable&&doc.dependencies.map(d=>{const a=pos(d.from),b=pos(d.to);const names=new Map(doc.activities.map(x=>[x.id,x.name]));return <button key={`x${d.from}>${d.to}`} aria-label={`Remove link from ${names.get(d.from)} to ${names.get(d.to)}`} className="absolute z-10 flex size-6 items-center justify-center rounded-full border bg-white text-slate-500 shadow-sm hover:text-red-700" style={{left:(a.x+NODE_W+b.x)/2-12,top:(a.y+b.y+NODE_H)/2-12}} onClick={()=>onUnlink(d.from,d.to)}><X aria-hidden className="size-3"/></button>;})}
-  {doc.activities.map((a,i)=>{const p=pos(a.id),r=result.activities[a.id],on=selectedId===a.id;return <div key={a.id} role="group" tabIndex={0} aria-label={`${a.name}, ${a.kind}`} data-testid="plan-node" data-activity-id={a.id} data-x={p.x} data-y={p.y} data-selected={on?'true':undefined} onKeyDown={e=>key(e,a.id)}
+  {editable&&doc.dependencies.map(d=>{const a=pos(d.from),b=pos(d.to);const names=new Map(doc.activities.map(x=>[x.id,x.name]));return <button key={`x${d.from}>${d.to}`} aria-label={`Remove link from ${names.get(d.from)} to ${names.get(d.to)}`} className="absolute z-10 flex size-6 items-center justify-center rounded-full border bg-white text-slate-500 shadow-sm hover:text-red-700" style={{left:(a.x+NODE_W+b.x)/2-12,top:(a.y+heightOf(d.from)/2+b.y+heightOf(d.to)/2)/2-12}} onClick={()=>onUnlink(d.from,d.to)}><X aria-hidden className="size-3"/></button>;})}
+  {doc.activities.map((a,i)=>{const p=pos(a.id),r=result.activities[a.id],on=selectedId===a.id,h=heightOf(a.id),tight=h<NODE_H-16;return <div key={a.id} role="group" tabIndex={0} aria-label={`${a.name}, ${a.kind}`} data-testid="plan-node" data-activity-id={a.id} data-x={p.x} data-y={p.y} data-selected={on?'true':undefined} onKeyDown={e=>key(e,a.id)}
    onPointerDown={e=>down(e,a.id)} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
-   className={`plan-node absolute select-none p-3 ${editable?'cursor-grab active:cursor-grabbing':''} ${on?'plan-node-on':''} ${linkFrom===a.id?'ring-2 ring-primary':''} ${a.kind==='milestone'?'plan-node-milestone':''}`} style={{left:p.x,top:p.y,width:NODE_W,height:NODE_H,touchAction:'none'}}>
-   <div className="flex items-center gap-2"><span className={`plan-index ${on?'plan-index-on':''}`}>{String(i+1).padStart(2,'0')}</span><span className="plan-eyebrow">{a.kind==='milestone'?'Milestone':'Activity'}</span></div>
-   <p className="mt-1.5 min-w-0 truncate text-base font-semibold leading-tight text-slate-950">{a.kind==='milestone'&&<Milestone aria-hidden className="mr-1 inline size-3.5"/>}{a.name}</p>
+   className={`plan-node absolute select-none ${tight?'plan-node-tight p-2':'p-3'} ${editable?'cursor-grab active:cursor-grabbing':''} ${on?'plan-node-on':''} ${linkFrom===a.id?'ring-2 ring-primary':''} ${a.kind==='milestone'?'plan-node-milestone':''}`} style={{left:p.x,top:p.y,width:NODE_W,height:h,touchAction:'none'}}>
+   <div className="flex items-center gap-2"><span className={`plan-index ${on?'plan-index-on':''}`}>{String(i+1).padStart(2,'0')}</span>{tight?<p className={`min-w-0 truncate text-base font-semibold leading-tight text-slate-950`}>{a.kind==='milestone'&&<Milestone aria-hidden className="mr-1 inline size-3.5"/>}{a.name}</p>:<span className="plan-eyebrow">{a.kind==='milestone'?'Milestone':'Activity'}</span>}</div>
+   {!tight&&<p className={`min-w-0 truncate text-base font-semibold leading-tight text-slate-950 ${tight?'':'mt-1.5'}`}>{a.kind==='milestone'&&<Milestone aria-hidden className="mr-1 inline size-3.5"/>}{a.name}</p>}
    <p className="mt-0.5 truncate text-xs text-slate-600">{a.kind==='milestone'?'Milestone':dayText(r.durationDays)} · day {r.start??'?'} → {r.finish??'?'}{a.kind==='activity'&&a.requirements.length>0&&` · ${a.requirements.length} resource${a.requirements.length===1?'':'s'}`}</p>
    <div className="mt-1.5 flex items-center justify-between gap-2"><span className="min-w-0 truncate text-sm font-semibold text-slate-950">{a.kind==='activity'?costLabel(a,r.cost?.total,rates):''}</span><span className="flex shrink-0 gap-1.5"><button className="plan-minibtn" onClick={()=>onOpen(a.id)}>{editable?'Edit':'View'}</button>
     {editable&&<button aria-label={linkFrom&&linkFrom!==a.id?`Connect to ${a.name}`:`Connect from ${a.name}`} className="plan-minibtn" onClick={()=>onLink(a.id)}><Link2 aria-hidden className="size-3"/>{linkFrom&&linkFrom!==a.id?'Connect here':linkFrom===a.id?'Choose next':'Connect'}</button>}</span></div>
@@ -293,7 +305,7 @@ function ResourceLink({q,editable,available,labels,onPick,onChange}:{q:Requireme
  </div>;
 }
 
-function Drawer({a,doc,result,rates,editable,labels,linkable,onPick,onClose,patch,edit,remove,dirty,issueCount,saving,onSave}:{dirty:boolean;issueCount:number;saving:boolean;onSave:()=>void;a:PlanActivity;doc:PlanDocument;result:PlanResult;rates:boolean;editable:boolean;labels:Record<string,Choice>;linkable:boolean;onPick:(c:Choice)=>void;onClose:()=>void;patch:(p:Partial<PlanActivity>)=>void;edit:(fn:(d:PlanDocument)=>PlanDocument)=>void;remove:()=>void}){
+function Drawer({a,doc,result,rates,editable,labels,linkable,onPick,onClose,patch,edit,remove,dirty,issueCount,saving,onSave,feedback}:{feedback:React.ReactNode;dirty:boolean;issueCount:number;saving:boolean;onSave:()=>void;a:PlanActivity;doc:PlanDocument;result:PlanResult;rates:boolean;editable:boolean;labels:Record<string,Choice>;linkable:boolean;onPick:(c:Choice)=>void;onClose:()=>void;patch:(p:Partial<PlanActivity>)=>void;edit:(fn:(d:PlanDocument)=>PlanDocument)=>void;remove:()=>void}){
  const r=result.activities[a.id],ro=!editable;
  const preds=doc.dependencies.filter(d=>d.to===a.id).map(d=>d.from);
  const setReq=(id:string,p:Partial<Requirement>)=>patch({requirements:a.requirements.map(x=>x.id===id?{...x,...p}:x)});
@@ -349,6 +361,6 @@ function Drawer({a,doc,result,rates,editable,labels,linkable,onPick,onClose,patc
    {a.kind==='activity'&&<p data-testid="activity-cost" className="rounded-lg bg-slate-50 p-3 text-sm">Activity cost: <strong>{costLabel(a,r.cost?.total,rates)}</strong>{rates&&r.cost&&r.cost.unknownCount>0&&<> · {r.cost.unknownCount} value{r.cost.unknownCount===1?'':'s'} unknown (known so far {money(r.cost.knownSubtotal,true)})</>}</p>}
    {!ro&&<Btn variant="danger" onClick={remove}><Trash2 aria-hidden className="size-4"/>Remove {a.kind}</Btn>}
   </div>
-  <div data-testid="drawer-footer" className="plan-drawer-foot flex flex-wrap items-center justify-between gap-2 px-4 py-3 sm:px-6"><p className="text-sm text-slate-600">{ro?'View only':dirty?<span className="font-medium text-amber-800">Edits not saved yet</span>:'No pending edits'}{a.kind==='activity'&&<span className="ml-2 text-slate-600">· Activity cost: <strong className="text-slate-900">{costLabel(a,r.cost?.total,rates)}</strong></span>}</p>
-   {!ro&&<Btn onClick={onSave} busy={saving} disabled={!dirty||issueCount>0}>Save changes</Btn>}</div></div></div>;
+  <div data-testid="drawer-footer" className="plan-drawer-foot grid max-h-[45vh] gap-2 overflow-y-auto px-4 py-3 sm:px-6">{feedback}<div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-600">{ro?'View only':dirty?<span className="font-medium text-amber-800">Edits not saved yet</span>:'No pending edits'}{a.kind==='activity'&&<span className="ml-2 text-slate-600">· Activity cost: <strong className="text-slate-900">{costLabel(a,r.cost?.total,rates)}</strong></span>}</p>
+   {!ro&&<Btn onClick={onSave} busy={saving} disabled={!dirty||issueCount>0}>Save changes</Btn>}</div></div></div></div>;
 }

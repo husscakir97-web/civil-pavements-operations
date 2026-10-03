@@ -24,6 +24,7 @@
     "test:migration-recovery": "node --env-file-if-exists=.env scripts/test-migration-recovery.mjs",
     "test:fresh": "node --env-file-if-exists=.env scripts/test-fresh-start.mjs",
     "test:planning-picker": "node --env-file-if-exists=.env scripts/planning-picker-journey.mjs",
+    "test:planning-feedback": "node --env-file-if-exists=.env scripts/planning-feedback-journey.mjs",
     "test:planning": "node --env-file-if-exists=.env scripts/planning-journey.mjs",
     "test:connected-workflow": "node --env-file-if-exists=.env scripts/connected-job-workflow.mjs",
     "test:v1": "node --env-file-if-exists=.env scripts/test-v1-journey.mjs",

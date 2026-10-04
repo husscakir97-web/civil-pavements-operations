@@ -140,6 +140,33 @@ try{
   check('C: no page errors',errors.length===0);await ctx.close();}
  await E.post({action:'save',scenarioId:sid,expectedRevision:await dbRev(),document:baseline});
 
+ // ================= C2. Partial failure, then another content edit (390px) =================
+ {const {ctx,page,errors}=await session(M);await goPlan(page,M);await track(page);
+  await page.getByRole('button',{name:'Canvas',exact:true}).click();
+  const node=page.getByRole('group',{name:/^Paving,/});const b=await node.boundingBox();
+  await page.mouse.move(b.x+60,b.y+20);await page.mouse.down();await page.mouse.move(b.x+90,b.y+60,{steps:5});await page.mouse.up();
+  await node.getByRole('button',{name:/^(Edit|View)$/}).click();await dlg(page).waitFor();await dlg(page).getByLabel('Activity name').fill('Paving first');
+  let failLayout=true;
+  await page.route('**/api/planning',r=>{const d=r.request().postData()||'';return failLayout&&r.request().method()==='POST'&&/"action":"positions"/.test(d)?r.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Forced layout failure'})}):r.fallback();});
+  const revStart=await dbRev();
+  await dlg(page).getByRole('button',{name:'Save changes'}).click();
+  await dlg(page).getByRole('button',{name:'Retry layout save'}).waitFor({timeout:6000}).catch(()=>{});
+  check('C2: after the partial failure the layout-only banner and retry are shown (nothing else is pending)',await dlg(page).getByRole('button',{name:'Retry layout save'}).isVisible()&&/only the node positions are pending/.test(await txt(dlg(page).getByTestId('partial-save'))));
+  await dlg(page).getByLabel('Notes').fill('Second edit after the partial failure');
+  await page.waitForTimeout(300);
+  await page.screenshot({path:`${OUT}/C2-partial-then-edit-mobile.png`});
+  const text=await txt(dlg(page).getByTestId('partial-save'));
+  check('C2: after another content edit the feedback says the new edits are also unsaved, and no longer claims only positions are pending',/earlier changes were saved/.test(text)&&/new edits that are not saved yet/.test(text)&&!/only the node positions are pending/.test(text),text);
+  check('C2: no layout-labelled action remains that could submit the new content (no "Retry layout save"); the ordinary Save changes is available; one alert',await dlg(page).getByRole('button',{name:'Retry layout save'}).count()===0&&await dlg(page).getByRole('button',{name:'Save changes'}).isEnabled()&&await alerts(page).count()===1);
+  check('C2: the new edit is retained and was not saved behind the user\'s back (notes unsaved, revision unchanged since the partial save)',await dlg(page).getByLabel('Notes').inputValue()==='Second edit after the partial failure'&&await dbRev()===revStart+1&&(await E.get(sid)).body.document.activities[0].notes==='');
+  failLayout=false;bodies.length=0;
+  await dlg(page).getByRole('button',{name:'Save changes'}).click();await dlg(page).getByRole('status').filter({hasText:'Saved.'}).waitFor({timeout:6000}).catch(()=>{});
+  const done=(await E.get(sid)).body;
+  check('C2: Save then saves the new content (against the revision returned by the partial save) and the layout',bodies.map(x=>x.action).join()==='save,positions'&&done.document.activities[0].notes==='Second edit after the partial failure'&&await dbRev()===revStart+2,JSON.stringify(bodies.map(x=>x.action)));
+  check('C2: the pending state clears: no alert or partial banner, the guard is off, the layout is stored',await alerts(page).count()===0&&await dlg(page).getByTestId('partial-save').count()===0&&await guard(page)===false&&Object.keys(done.positions).length>0);
+  check('C2: no page errors',errors.length===0);await ctx.close();}
+ await E.post({action:'save',scenarioId:sid,expectedRevision:await dbRev(),document:baseline});
+
  // ================= D. Mobile summary sheet (390px) =================
  {const {ctx,page,errors}=await session(M);await goPlan(page,M);
   await page.getByRole('button',{name:'Select Paving'}).click();const sheet=page.getByTestId('plan-inspector');await sheet.waitFor();

@@ -19,6 +19,7 @@ try{
   const targetColumns=schema.filter(c=>c.tableName===table),target=targetColumns.map(c=>c.columnName);
   // Every source column must exist (nothing is discarded). Destination columns added
   // by later migrations are allowed only when nullable or defaulted (e.g. V1 typed columns).
+  if(!targetColumns.length)throw new Error(`Destination table is missing: ${table}. Run the migrations (npm run db:migrate) against ${process.env.MYSQL_DATABASE} before importing; nothing was imported.`);
   const extras=targetColumns.filter(c=>!columns.includes(c.columnName));
   if(columns.some(c=>!target.includes(c))||extras.some(c=>c.nullable!=='YES'&&c.defaultValue===null))throw new Error(`Schema mismatch: ${table}. Add a reviewed migration; no columns will be discarded.`);
   const names=columns.map(identifier).join(',');

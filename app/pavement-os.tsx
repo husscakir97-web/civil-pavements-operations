@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { BarChart3, BriefcaseBusiness, Building2, CalendarCheck, CalendarDays, CircleUserRound, ClipboardCheck, ClipboardList, Contact, DollarSign, FolderOpen, Home, Menu, Search, Settings, ShieldCheck, Truck, UsersRound, type LucideIcon } from "lucide-react";
@@ -9,7 +9,8 @@ import { Toaster } from "@/components/ui/sonner";
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { WorkspaceBrandProvider } from "@/components/workspace-brand";
 import { useSession, Tabs } from "@/components/v1/kit";
-import { NavContext, parseRoute, routeHash, useNav, type Route } from "@/components/v1/nav";
+import { historyOffset } from "@/lib/v1/nav-history";
+import { NavContext, confirmLeave, parseRoute, routeHash, useNav, type Route } from "@/components/v1/nav";
 import { OfflineProvider } from "@/components/v1/offline";
 import { FIELD_SHELL_ROLES } from "@/lib/v1/navigation";
 import { NotificationCenter } from "@/components/v1/notification-center";
@@ -77,10 +78,33 @@ export function PavementOS() {
   return <WorkspaceBrandProvider><Router /></WorkspaceBrandProvider>;
 }
 
+// Two URL spellings of the same screen (#Projects//id/tab and #Projects/Projects/id/tab) must compare equal.
+const sameScreen = (a: string, b: string) => routeHash(resolveRoute(parseRoute(a))) === routeHash(resolveRoute(parseRoute(b)));
+
 function useRoute(): [Route, (area: string, sub?: string, id?: string, tab?: string) => void] {
   const [route, setRoute] = useState<Route>({ area: "Home" });
+  // The history entries this page load has seen and the one on screen, so a Back/Forward the user cancels (unsaved work)
+  // can be undone and the URL always matches the visible screen.
+  const trail = useRef({ stack: [""], at: 0 });
   useEffect(() => {
-    const restore = () => { if (window.location.hash === "#main-content") return; setRoute(resolveRoute(parseRoute(window.location.hash))); };
+    trail.current = { stack: [window.location.hash], at: 0 };
+    const restore = () => {
+      const hash = window.location.hash;
+      if (hash === "#main-content") return;
+      const t = trail.current;
+      if (!sameScreen(hash, t.stack[t.at])) {
+        const offset = historyOffset(t.stack, t.at, hash);
+        if (!confirmLeave()) {
+          // Stay on this screen: step the browser back to where it was (or, for an entry we cannot place, rewrite the URL).
+          if (offset !== 0) window.history.go(-offset);
+          else window.history.replaceState(window.history.state, "", t.stack[t.at] || window.location.pathname + window.location.search);
+          return;
+        }
+        if (offset !== 0) t.at += offset;
+        else { t.stack = [...t.stack.slice(0, t.at + 1), hash]; t.at += 1; }
+      }
+      setRoute(resolveRoute(parseRoute(hash)));
+    };
     restore();
     window.addEventListener("hashchange", restore);
     return () => window.removeEventListener("hashchange", restore);
@@ -88,9 +112,16 @@ function useRoute(): [Route, (area: string, sub?: string, id?: string, tab?: str
   const navigate = useCallback((area: string, sub?: string, id?: string, tab?: string) => {
     // Older area names (engines, Operations/…) are translated so every link lands in the current structure.
     const next = resolveRoute({ area, sub, id, tab });
-    setRoute(next);
     const hash = routeHash(next);
-    if (window.location.hash !== hash) window.history.pushState(null, "", hash);
+    const t = trail.current;
+    // Moving to another place may drop unsaved work: ask first. Re-selecting the current place is not leaving.
+    if (!sameScreen(hash, t.stack[t.at]) && !confirmLeave()) return;
+    setRoute(next);
+    if (window.location.hash !== hash) {
+      window.history.pushState(null, "", hash);
+      t.stack = [...t.stack.slice(0, t.at + 1), hash];
+      t.at += 1;
+    }
     window.scrollTo({ top: 0 });
   }, []);
   return [route, navigate];

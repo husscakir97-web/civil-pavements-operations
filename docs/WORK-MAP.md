@@ -63,6 +63,7 @@ pin behaviour in `components/v1/location.tsx` are unchanged (the tab only *shows
 * Archived areas cannot be restored in the UI (the row is kept).
 * Selection toggles by tapping the list row or the shape; reduced-motion and screen-reader behaviour of the SVG canvas have not been audited. Vertices are keyboard-focusable (arrows nudge 1 m, Shift 5 m, Delete removes).
 * In view mode on touch devices a vertical drag scrolls the page instead of panning the map; use the zoom/fit buttons and the two-finger pinch while editing.
+* **Unsaved work and navigation.** An unsaved drawing or reshape asks before any in-app route change (project tabs, the phone section picker and bottom bar, sidebar, project Back) and before browser Back/Forward, using the shared guard in `components/v1/nav.tsx` (`useNavGuard`, `confirmLeave`) wired into `useRoute` in `app/pavement-os.tsx`; reload and close are covered by `beforeunload`. Cancelling leaves the URL, screen and draft unchanged. The prompt is the browser's `confirm` dialog (the app's existing pattern). A Back/Forward jump to a history entry this page load never saw cannot be undone by step count, so the guard rewrites the URL back instead. The draft is not preserved across a confirmed discard, a different browser tab or a crash.
 * The browser journey is local-only (like the Planning journeys); CI runs the unit test through `npm test`.
 
 ## Demo fixture

@@ -7,6 +7,7 @@ import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {Archive,Crosshair,Maximize2,Minus,PenLine,Plus,Redo2,Trash2,Undo2} from 'lucide-react';
 import {api,useApi,useAction,Btn,Field,field,Section,Pill,EmptyState,ErrorState,Loading} from './kit';
 import {LocationSummary} from './location';
+import {useNavGuard} from './nav';
 import {DELIVERY_LABEL,DISCIPLINE_COLOUR,DISCIPLINE_LABEL,KIND_LABEL,WORK_AREA_DELIVERY,WORK_AREA_DISCIPLINES,WORK_AREA_KINDS,WORK_AREA_LIMITS,fromLocal,toLocal,validateRing,type WorkAreaDelivery,type WorkAreaDiscipline,type WorkAreaKind,type WorkAreaView,type WorkMapView,type Xy} from '@/lib/v1/work-areas';
 import {EMPTY_PARTS,type LatLng} from '@/lib/v1/location';
 
@@ -29,8 +30,8 @@ export function WorkMap({projectId}:{projectId:string}){
  const data=res.data;
  const [conflict,setConflict]=useState(false);
 
- // Guard against losing an unsaved shape on reload/close.
- useEffect(()=>{if(!edit?.dirty)return;const h=(e:BeforeUnloadEvent)=>{e.preventDefault();};window.addEventListener('beforeunload',h);return()=>window.removeEventListener('beforeunload',h);},[edit?.dirty]);
+ // An unsaved drawing or reshape lives only in this component: warn before any route change, reload or close drops it.
+ useNavGuard(edit?.dirty?'You have an unsaved work area on the map. Leave without saving? Your drawing and changes will be lost.':null);
 
  if(res.error&&!data)return <ErrorState error={res.error} onRetry={res.refresh}/>;
  if(!data)return <Loading label="Loading work map…"/>;

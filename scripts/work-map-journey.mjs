@@ -287,6 +287,94 @@ try{
  const fctx=await mkCtx(field,{viewport:{width:1280,height:800}});const fpage=await fctx.newPage();await fpage.goto(base+`/#Projects//${PE}/workmap`);await fpage.waitForTimeout(3000);
  check('field worker: no Work map content is reachable',await fpage.getByTestId('work-map').count()===0);
  await fctx.close();
+ // ---- unsaved-work navigation guard (desktop): an unsaved drawing or reshape must not vanish silently
+ const PN=await mkProject(a,'Nav guard project');
+ const gp=await dctx.newPage();gp.setDefaultTimeout(8000);gp.on('pageerror',e=>errors.push('guard: '+e.message));
+ const dialogs=[];let dialogMode='dismiss';gp.on('dialog',d=>{dialogs.push(d.message());void(dialogMode==='accept'?d.accept():d.dismiss());});
+ const writes=[];gp.on('request',r=>{if(['POST','PATCH','PUT','DELETE'].includes(r.method())&&/\/api\/projects\/work-areas/.test(r.url()))writes.push(r.method());});
+ const onTab=t=>new RegExp(`#Projects/(Projects)?/${PN}/${t}$`).test(gp.url());// in-app links write Projects/Projects/…, a reload keeps Projects//…
+ const tabBtn=n=>gp.locator('nav[aria-label="Project workspace"]').getByRole('button',{name:n,exact:true});
+ const pts=async()=>(await gp.getByTestId('point-count').count())?(await gp.getByTestId('point-count').innerText()).trim():'(gone)';
+ const settle=()=>gp.waitForTimeout(600);
+ const openMapPN=async()=>{await gp.goto(base+`/#Projects//${PN}/workmap`);await gp.reload();await gp.waitForSelector('[data-testid="work-map"]').catch(async e=>{throw new Error(`Work map did not open at ${gp.url()}: ${(await gp.locator('body').innerText().catch(()=>'')).slice(0,300)} (${e.message.split('\n')[0]})`);});};
+ const square=async(dx=60)=>{await gp.getByTestId('draw-start').click();const cv=await canvas(gp);for(const [x,y] of [[-dx,-dx],[dx,-dx],[dx,dx],[-dx,dx]])await gp.mouse.click(cv.cx+x,cv.cy+y);};
+ const active=async n=>(await tabBtn(n).getAttribute('aria-current'))==='page';
+ await openMapPN();
+
+ // A. leave by project tab with an unsaved drawing, then cancel
+ await square();dialogs.length=0;dialogMode='dismiss';
+ await tabBtn('Overview').click();await settle();
+ check('nav guard: leaving by project tab with an unsaved drawing asks first',dialogs.length===1&&/unsaved/i.test(dialogs[0]||''),`dialogs=${dialogs.length}`);
+ check('nav guard: cancel keeps the URL on the Work map',onTab('workmap'),gp.url().split('#')[1]);
+ check('nav guard: cancel keeps the screen and the drawing (4 points)',(await pts()).startsWith('4'),await pts());
+ check('nav guard: cancel keeps the Work map tab active',await active('Work map')&&!(await active('Overview')));
+ const askedBefore=dialogs.length;await tabBtn('Work map').click();await settle();
+ check('nav guard: re-selecting the current tab is not leaving (no prompt, draft kept)',dialogs.length===askedBefore&&(await pts()).startsWith('4'));
+ // B. confirm discard
+ dialogMode='accept';dialogs.length=0;writes.length=0;
+ await tabBtn('Overview').click();await settle();
+ check('nav guard: confirming the discard completes the navigation',onTab('overview')&&await gp.getByTestId('work-map').count()===0);
+ check('nav guard: discarding wrote nothing',writes.length===0&&(await apiAreas(PN)).length===0,`writes=${writes.length}`);
+ await tabBtn('Work map').click();await gp.waitForSelector('[data-testid="work-map"]');
+ check('nav guard: after a discard the editor reopens clean (no stale draft)',(await pts())==='(gone)');
+ // C. save, then navigate: no warning; reopening shows the saved geometry
+ dialogs.length=0;dialogMode='dismiss';
+ await square();await gp.getByTestId('form-name').fill('Guard stage');await gp.getByTestId('draw-finish').click();await gp.getByTestId('save').click();await gp.waitForSelector('[data-testid="area-row"]');
+ await tabBtn('Overview').click();await settle();
+ check('nav guard: after Save, leaving shows no warning',dialogs.length===0&&onTab('overview'),`dialogs=${dialogs.length}`);
+ await tabBtn('Work map').click();await gp.waitForSelector('[data-testid="area-row"]');
+ const savedPN=(await apiAreas(PN))[0];
+ check('nav guard: reopening shows the saved geometry',savedPN?.ring.length===4&&await gp.getByTestId('area-shape').count()===1);
+ // D. reshape an existing area, leave, cancel, then discard: stored shape unchanged
+ const ringBefore=JSON.stringify(savedPN.ring);
+ await gp.getByTestId('area-row').first().click();await gp.getByTestId('area-edit').click();
+ const gv=await gp.locator('g[data-vertex="1"] circle').first().boundingBox();
+ await gp.mouse.move(gv.x+gv.width/2,gv.y+gv.height/2);await gp.mouse.down();await gp.mouse.move(gv.x+gv.width/2+40,gv.y+gv.height/2+30,{steps:5});await gp.mouse.up();
+ dialogs.length=0;dialogMode='dismiss';
+ await tabBtn('Documents').click();await settle();
+ check('nav guard: leaving with an unsaved reshape asks first',dialogs.length===1,`dialogs=${dialogs.length}`);
+ check('nav guard: cancel keeps the reshape in the editor (Save available, URL unchanged)',onTab('workmap')&&await gp.getByTestId('save').count()===1&&(await pts()).startsWith('4'));
+ dialogMode='accept';writes.length=0;
+ await tabBtn('Documents').click();await settle();
+ const afterD=(await apiAreas(PN))[0];
+ check('nav guard: discarding a reshape leaves the stored geometry and revision untouched',onTab('documents')&&JSON.stringify(afterD.ring)===ringBefore&&afterD.revision===savedPN.revision&&writes.length===0);
+ // E. clean navigation is never blocked
+ await tabBtn('Work map').click();await gp.waitForSelector('[data-testid="area-row"]');dialogs.length=0;
+ await tabBtn('Overview').click();await settle();
+ check('nav guard: list view (nothing being edited) navigates without a prompt',dialogs.length===0&&onTab('overview'));
+ await tabBtn('Work map').click();await gp.waitForSelector('[data-testid="area-row"]');
+ await gp.getByTestId('area-row').first().click();await gp.getByTestId('area-edit').click();
+ await tabBtn('Overview').click();await settle();
+ check('nav guard: opening the editor without changing anything navigates without a prompt',dialogs.length===0&&onTab('overview'));
+ // F. leaving the project through the sidebar
+ await tabBtn('Work map').click();await gp.waitForSelector('[data-testid="area-row"]');
+ await square(40);dialogs.length=0;dialogMode='dismiss';
+ await gp.locator('aside').getByText('Schedule',{exact:true}).first().click();await settle();
+ check('nav guard: leaving the project by the sidebar asks first, cancel keeps the project and draft',dialogs.length===1&&onTab('workmap')&&(await pts()).startsWith('4'),`dialogs=${dialogs.length} ${gp.url().split('#')[1]}`);
+ dialogMode='accept';
+ await gp.locator('aside').getByText('Schedule',{exact:true}).first().click();await settle();
+ check('nav guard: confirming leaves the project',/#Schedule/.test(gp.url())&&await gp.getByTestId('work-map').count()===0);
+ // G. browser Back / Forward
+ await openMapPN();await tabBtn('Overview').click();await settle();await tabBtn('Work map').click();await settle();await gp.waitForSelector('[data-testid="work-map"]');
+ await square();dialogs.length=0;dialogMode='dismiss';
+ await gp.goBack();await settle();
+ check('nav guard: browser Back with an unsaved drawing asks first',dialogs.length===1,`dialogs=${dialogs.length}`);
+ check('nav guard: cancelling Back keeps URL, screen and drawing consistent',onTab('workmap')&&(await pts()).startsWith('4')&&await active('Work map'),gp.url().split('#')[1]);
+ await gp.goBack();await settle();
+ check('nav guard: Back can be cancelled repeatedly (history is not corrupted)',dialogs.length===2&&onTab('workmap')&&(await pts()).startsWith('4'),`dialogs=${dialogs.length}`);
+ dialogMode='accept';
+ await gp.goBack();await settle();
+ check('nav guard: confirming Back goes to the previous screen and URL together',onTab('overview')&&await gp.getByTestId('work-map').count()===0&&await active('Overview'),gp.url().split('#')[1]);
+ dialogs.length=0;
+ await gp.goForward();await settle();
+ check('nav guard: Forward onto the Work map is clean (no prompt, no stale draft)',dialogs.length===0&&onTab('workmap')&&(await pts())==='(gone)');
+ // H. closed project: unchanged behaviour, no editor, no prompt
+ const PC=await mkProject(a,'Nav guard closed');await db.execute("UPDATE jobs SET stage='closed',status='Closed' WHERE id=?",[PC]);
+ await gp.goto(base+`/#Projects//${PC}/workmap`);await gp.reload();await gp.waitForSelector('[data-testid="workmap-closed"]');dialogs.length=0;
+ await gp.locator('nav[aria-label="Project workspace"]').getByRole('button',{name:'Overview',exact:true}).click();await settle();
+ check('nav guard: closed project stays read-only and navigates without a prompt',dialogs.length===0&&new RegExp(`#Projects/(Projects)?/${PC}/overview$`).test(gp.url())&&await gp.getByTestId('draw-start').count()===0);
+ await gp.close();
+
  await dctx.close();
 
  // ---- mobile touch (390x844, touch events through CDP)
@@ -330,6 +418,31 @@ try{
  check('mobile reload: both areas reopen',await m.getByTestId('area-shape').count()===2);
  check('mobile: still no horizontal overflow after editing',await m.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1));
  await m.getByTestId('map-canvas').scrollIntoViewIfNeeded();await m.screenshot({path:`${OUT}/10-mobile-saved.png`});
+
+ // ---- unsaved-work navigation guard (mobile touch)
+ const PM=await mkProject(a,'Nav guard mobile');
+ const mg=await mctx.newPage();mg.setDefaultTimeout(8000);mg.on('pageerror',e=>errors.push('mobile guard: '+e.message));
+ const mdialogs=[];let mmode='dismiss';mg.on('dialog',d=>{mdialogs.push(d.message());void(mmode==='accept'?d.accept():d.dismiss());});
+ const mcdp=await mctx.newCDPSession(mg);
+ const mtap=async p=>{await mcdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:p.x,y:p.y,id:0}]});await mcdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});};
+ await mg.goto(base+`/#Projects//${PM}/workmap`);await mg.reload();await mg.waitForSelector('[data-testid="work-map"]');
+ await mg.getByTestId('draw-start').tap();
+ await mg.evaluate(()=>{const r=document.querySelector('[data-testid="map-canvas"] svg[role="application"]').getBoundingClientRect();window.scrollBy(0,r.top-170);});await mg.waitForTimeout(200);
+ const mgb=await mg.locator('[data-testid="map-canvas"] svg[role="application"]').boundingBox();
+ for(const [dx,dy] of [[-80,-60],[80,-60],[80,60],[-80,60]])await mtap({x:mgb.x+mgb.width/2+dx,y:mgb.y+mgb.height/2+dy});
+ const mpts=async()=>(await mg.getByTestId('point-count').count())?(await mg.getByTestId('point-count').innerText()).trim():'(gone)';
+ check('nav guard (mobile): touch drawing placed 4 points',(await mpts()).startsWith('4'),await mpts());
+ await mg.getByLabel('Project section').selectOption('overview');await mg.waitForTimeout(600);
+ check('nav guard (mobile): changing section with an unsaved drawing asks first',mdialogs.length===1,`dialogs=${mdialogs.length}`);
+ check('nav guard (mobile): cancel keeps URL, screen, drawing and the picker on Work map',mg.url().endsWith(`#Projects//${PM}/workmap`)&&(await mpts()).startsWith('4')&&(await mg.getByLabel('Project section').inputValue())==='workmap',`${mg.url().split('#')[1]} picker=${await mg.getByLabel('Project section').inputValue()}`);
+ await mg.goBack().catch(()=>{});await mg.waitForTimeout(600);
+ check('nav guard (mobile): browser Back with a draft asks and cancelling keeps the draft',mdialogs.length>=2&&mg.url().endsWith(`#Projects//${PM}/workmap`)&&(await mpts()).startsWith('4'),`dialogs=${mdialogs.length}`);
+ const askedMobile=mdialogs.length;await mg.locator('nav[aria-label="Quick navigation"]').getByText('Schedule',{exact:true}).tap();await mg.waitForTimeout(600);
+ check('nav guard (mobile): bottom-bar tap to another area asks first; cancel keeps URL, screen and draft',mdialogs.length===askedMobile+1&&mg.url().endsWith(`#Projects//${PM}/workmap`)&&(await mpts()).startsWith('4'),`dialogs=${mdialogs.length-askedMobile} ${mg.url().split('#')[1]}`);
+ mmode='accept';
+ await mg.getByLabel('Project section').selectOption('overview');await mg.waitForTimeout(600);
+ check('nav guard (mobile): confirming navigates, URL and screen agree, nothing written',new RegExp(`#Projects/(Projects)?/${PM}/overview$`).test(mg.url())&&(await mg.getByTestId('work-map').count())===0&&(await apiAreas(PM)).length===0&&(await mg.getByLabel('Project section').inputValue())==='overview');
+ await mg.close();
  await mctx.close();await browser.close();
  check('no uncaught page errors',errors.length===0,errors.join(' | ').slice(0,200));
 }finally{

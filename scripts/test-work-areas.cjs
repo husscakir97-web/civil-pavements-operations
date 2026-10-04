@@ -33,6 +33,10 @@ t('projection round-trips within 1 cm',()=>{const p={lat:-33.87,lng:151.21},q=w.
 t('limits are bounded',()=>{assert.ok(w.WORK_AREA_LIMITS.maxVertices<=200&&w.WORK_AREA_LIMITS.maxSpanMetres<=10000&&w.WORK_AREA_LIMITS.maxActivePerProject<=200);});
 t('DEMO marker',()=>{assert.ok(w.isDemoName('DEMO – Asphalt'));assert.ok(!w.isDemoName('Asphalt DEMO'));});
 
+// Back/Forward direction for the unsaved-work navigation guard (lib/v1/nav-history.ts).
+const nh=load('lib/v1/nav-history.ts');
+t('history offset: Back, Forward, multi-step, nearest duplicate and new entry',()=>{const st=['#A','#B','#C','#B'];assert.equal(nh.historyOffset(st,2,'#B'),-1,'a tie between Back and Forward prefers Back');assert.equal(nh.historyOffset(['#A','#B','#C','#A'],1,'#A'),-1,'nearest match wins');assert.equal(nh.historyOffset(st,3,'#C'),-1);assert.equal(nh.historyOffset(st,3,'#A'),-3,'multi-step Back');assert.equal(nh.historyOffset(st,1,'#C'),1);assert.equal(nh.historyOffset(st,1,'#Z'),0,'unknown hash is a new entry');assert.equal(nh.historyOffset(['#A'],0,'#A'),0,'the current entry is never an offset');});
+
 // Static contract checks on the server code (guards that cannot be bypassed by a client).
 const route=fs.readFileSync('app/api/projects/work-areas/route.ts','utf8'),svc=fs.readFileSync('lib/modules/projects/work-areas.ts','utf8');
 t('route: every handler is wrapped by api() with module+capability',()=>{assert.equal((route.match(/api\(\{permission:/g)||[]).length,3);assert.equal((route.match(/module:'projects'/g)||[]).length,3);assert.match(route,/GET=api\(\{permission:'read',module:'projects',capability:'project.view'/);assert.match(route,/POST=api\(\{permission:'write',module:'projects',capability:'project.edit'/);assert.match(route,/PATCH=api\(\{permission:'write',module:'projects',capability:'project.edit'/);});

@@ -1,38 +1,39 @@
 # Phone-accessible demonstration (staging path) — prepared, NOT activated
 
-Goal: the full synthetic demo company (`scripts/demo/*`, the same dataset as `docs/DEMO-COMPANY.md`) on a URL you can open on a phone, completely separate from the production site, its database and your newly entered records. Nothing in this document has been run against any hosted system.
+Goal: the full synthetic demo company (`scripts/demo/*`, the dataset in `docs/DEMO-COMPANY.md`) on a URL you can open on a phone, completely separate from the live site, its database and your newly entered records. Nothing here has been run against any hosted system, and no hosting fact below has been verified from the hosting account in this step.
 
-## Shortest safe route (uses only what the repository already deploys to)
-The repo deploys to **Hostinger Node.js hosting with MySQL** (`HOSTINGER-MIGRATION.md`, `docs/RUNBOOK.md`); there is no Docker/Vercel/Fly/Render configuration. The shortest route is therefore a **second, separate Hostinger Node.js web app** (own subdomain) with its **own new, empty MySQL database and database user**, running this branch in *staging demonstration mode*, then loading the demo company with the importer's allow-listed mode.
+## Protected live targets (refused regardless of any suffix)
+* Databases: `u840559204_infra_test` (the database you verified as the live one) and `u840559204_infrastruct` (the name still recorded in `.env.example` and `HOSTINGER-MIGRATION.md`). Both are refused by name, case-insensitively, and an operator can add more with `STAGING_REFUSE_DATABASES`. The repo cannot tell which is currently live; this document does not claim the live target has changed.
+* App URLs: `darkgray-buffalo-804670.hostingersite.com` (recorded in `docs/DEMO-COMPANY.md`) and any host starting `darkgray-` or `navajowhite-` (`docs/LOCATIONS.md` records both prefixes), plus anything in `STAGING_REFUSE_URLS`.
+* A name ending in `_test` proves nothing in either direction: the staging target must be named **exactly, twice** (`STAGING_DEMO_DATABASE`, `STAGING_DEMO_URL`) and must equal the real `MYSQL_DATABASE` / `BETTER_AUTH_URL`.
 
-| Item | Value |
-|---|---|
-| Hosting | Hostinger Node.js web app #2 (e.g. `demo.<your-domain>`), Node 22, build `npm run build`, start `npm start`, branch = the merged integration branch (or this branch) |
-| Database | A **new** hPanel MySQL database + a **new** user assigned only to it. Never `u840559204_infrastruct`, never a shared user. Its name does not need `_test`; the allow-list, not the name, is the safeguard |
-| Access protection | Staging mode (below): public sign-up closed after the one allow-listed administrator registers; strong password (min 12 chars); every external integration must be unconfigured or the app refuses to run authentication; `X-Robots-Tag: noindex`; HTTPS from Hostinger |
-| Seed | Same dataset, loaded by `scripts/import-demo-tenant.mjs --staging-allowlist …` from a trusted machine (the importer starts its own local, integration-free app on the remote database; the hosted app is not used as the writer) |
-| Cost | No new vendor, no paid service. Whether your current Hostinger plan includes a second Node.js app and a second database is **not knowable from the repo** — check hPanel; if not, the extra plan/add-on cost is Hostinger's published price for it |
-| Cloudflare R2 | Not used (staging refuses R2 settings; file upload/download is unavailable in the demo) |
+## Where the restrictions run (before any write)
+One policy (`lib/platform/staging-policy.mjs` for scripts, its TypeScript twin `lib/platform/staging.ts` for the app, asserted identical over 40+ environments) is evaluated **before a connection is opened** in every place that connects: the app pool (`lib/platform/database.ts`), every script through `scripts/mysql-config.mjs` — which includes `scripts/migrate.mjs`, therefore **`npm run build` (prebuild → `migrate-on-build.mjs`) and `npm start` (`start.mjs`)** — and `import-platform-knowledge.mjs`. With `STAGING_DEMO_MODE=true` a wrong environment stops the build/start with a clear message, before any migration, bootstrap write or import mutation. With the flag off nothing changes (the live app is unaffected). Proven on disposable local fixtures (`npm run test:staging-path`, 79 checks), including an empty and a migrated, populated fixture that merely *carries* the live database's name: every entry point refuses and every row of every table is unchanged.
 
-## What was built (all tested locally; branch `claude/staging-demo-path`, not pushed)
-* `lib/platform/staging.ts` — `STAGING_DEMO_MODE=true` makes authentication **fail closed** unless: `STAGING_DEMO_DATABASE` = `MYSQL_DATABASE`, `STAGING_DEMO_URL` = `BETTER_AUTH_URL`, the database is not a known production one (`u840559204_infrastruct` plus anything in `STAGING_REFUSE_DATABASES`), `STAGING_DEMO_ADMIN_EMAIL` is set, `EMAIL_ENABLED=false`, `AI_ENABLED` not true, `LOCATION_PROVIDER` is `fake` or `none`, and SMTP, billing, ABR, AI keys, Google Maps keys, R2 and operator-email settings are all unset. Sign-up allows only that administrator email and only while the database has no users. With the flag off, nothing changes.
-* `next.config.ts` — noindex header when the flag is on (evaluated at build/start).
-* `scripts/demo/staging-allowlist.mjs` + `--staging-allowlist <file>` in the importer — the only way the importer may write to a non-local or non-`_test` database. It **replaces only** the `_test` and local-host checks; the plan hash, baseline, integrations-off, administrator-of-the-named-organisation and own-isolated-app rules all still apply. The allow-list file names exact host/port/database/user/app URL/admin email; the operator supplies its SHA-256 (`STAGING_DEMO_CONFIRM_SHA256`) as typed confirmation; the file must not be writable by others; production database names and wildcards are refused; and the database must contain **exactly one organisation and exactly one user (the administrator)**.
-* `scripts/test-staging-path.mjs` (`npm run test:staging-path`, 52 checks) — covers every refusal above and a real end-to-end run on a local stand-in database.
+Also enforced while in staging mode: `EMAIL_ENABLED=false`; `LOCATION_PROVIDER` = `fake`/`none`; SMTP, billing, ABR, AI, Google Maps, R2/object storage and operator-email variables must be **unset**; sign-up is closed except the one allow-listed administrator, once; noindex header.
 
-## Steps (all need your action; none has been done)
-1. hPanel: create the new empty database + user; add the second Node.js web app on a new subdomain (see `HOSTINGER-MIGRATION.md` §5 for build/start settings).
-2. Environment variables on that app (values you choose; never reuse production values): `NODE_ENV=production`, `BETTER_AUTH_URL=https://<demo host>`, `BETTER_AUTH_SECRET=<new 64 hex>` (use `public/secret-generator.html`), `MYSQL_HOST/PORT/DATABASE/USER/PASSWORD` of the **new** database, `EMAIL_ENABLED=false`, `LOCATION_PROVIDER=fake`, `STAGING_DEMO_MODE=true`, `STAGING_DEMO_DATABASE=<same database>`, `STAGING_DEMO_URL=<same URL>`, `STAGING_DEMO_ADMIN_EMAIL=<your email>`. Leave SMTP, R2, AI, ABR, billing and Google variables **unset**.
-3. Deploy. `npm start` applies the migrations (0000–0028) to the new database.
-4. Open `/login` on the demo URL → create the account with `STAGING_DEMO_ADMIN_EMAIL` (once). Complete the first-run setup. Any other sign-up is refused.
-5. hPanel → Databases → **Remote MySQL**: allow the IP of the machine that will run the importer (remove it afterwards). 
-6. On that machine: clone the branch, `npm ci`, `npm run build`. Write the allow-list JSON (mode 600), compute its SHA-256, then:
-   `MYSQL_HOST=… MYSQL_PORT=… MYSQL_DATABASE=… MYSQL_USER=… MYSQL_PASSWORD=… node scripts/import-demo-tenant.mjs --organisation-id <org id> --staging-allowlist allow.json` (dry run — review the plan), then the same with `--apply --plan-hash <hash> --baseline baseline.json`, `DEMO_SEED_EMAIL/DEMO_SEED_PASSWORD` set to the administrator, and `STAGING_DEMO_CONFIRM_SHA256=<sha>`. Repeat-safe and resumable.
-7. Open the demo URL on your phone and sign in. Walkthrough: `docs/CONNECTED-WALKTHROUGH.md`.
+## The importer's allow-list mode (the only way it may touch a non-local / non-`_test` database)
+`--staging-allowlist allow.json` replaces only the `_test`/local-host checks. A reviewed file names exact `host/port/database/user/appUrl/adminEmail`; the SHA-256 of that file must be typed in as `STAGING_DEMO_CONFIRM_SHA256`; the environment must equal the file; protected databases/URLs, wildcards and files writable by others are refused (dry run too, before connecting). The database must hold **exactly one organisation, the allow-listed administrator, at most the dataset's own five team members, and exactly one login** — so a first run, an interrupted run, a repeat and a verification are all legitimate, while any other tenant, user or login is refused. The importer's own app is bound to the same database and has email/AI off and fake locations. `npm run staging:verify` (read-only) re-checks all of this and the demonstration records at any time.
 
-## What it still cannot do / open points
-* The organisation id comes from the database (`SELECT id FROM organisations`). 
-* Remote MySQL access to Hostinger (step 5) is an access grant only you can make; a temporary local tunnel or other host would be a new service and is not assumed.
-* Demo dates are relative to the day of import (re-import is additive; to refresh the dates, create a fresh database).
-* No aerial imagery; the address search uses the deterministic fake provider (fixture addresses such as "dover road rose bay", "24 york road ingleburn", "100 smith street parramatta").
-* Hosted apply of the importer against a *real customer tenant* remains out of scope and still refused.
+## One practical deployment sequence
+Prefer running the importer **inside the hosting environment** (database host `localhost`, no public database access). Legend: **YOU** = needs your hPanel/account access; **CLAUDE** = I can do locally/in-session once you approve.
+
+1. **YOU** — hPanel: create a new empty MySQL database and a new user assigned only to it (never reuse the live database or user). Create the second Node.js web app on a new subdomain (build `npm run build`, start `npm start`, Node 22, per `HOSTINGER-MIGRATION.md` §5), pointed at the approved branch.
+2. **YOU** — set the app's environment variables in hPanel (values you choose; do not paste them here): `NODE_ENV=production`, `BETTER_AUTH_URL=https://<new host>`, `BETTER_AUTH_SECRET=<new 64 hex>`, `MYSQL_HOST=localhost`, `MYSQL_PORT=3306`, `MYSQL_DATABASE/USER/PASSWORD` of the **new** database, `EMAIL_ENABLED=false`, `LOCATION_PROVIDER=fake`, `STAGING_DEMO_MODE=true`, `STAGING_DEMO_DATABASE=<same database>`, `STAGING_DEMO_URL=<same URL>`, `STAGING_DEMO_ADMIN_EMAIL=<your email>`. Leave SMTP, R2, AI, ABR, billing and Google variables **unset**.
+3. **YOU** — deploy. The build and start refuse (visibly, before touching the database) if anything above is wrong; otherwise `npm start` applies migrations 0000–0028 to the new database only.
+4. **YOU** — open `/login` on the new URL and register with `STAGING_DEMO_ADMIN_EMAIL` (once; any other sign-up is refused). Complete the first-run setup.
+5. **YOU (inside hosting, preferred)** — hPanel → Advanced → SSH Access (if your plan offers it), open the SSH shell, `cd` to the app directory, check `node -v` is 22. Create `allow.json` (mode 600) with the exact host (`localhost`), port, database, user, the HTTPS app URL and the admin email; `sha256sum allow.json`. Export the same `MYSQL_*` values, `DEMO_SEED_EMAIL` (the admin email) and `DEMO_SEED_PASSWORD` (typed at the prompt, not stored), and `STAGING_DEMO_CONFIRM_SHA256`.
+6. **YOU run, CLAUDE guides** — `node scripts/import-demo-tenant.mjs --organisation-id <id> --staging-allowlist allow.json` (dry run; the id is `SELECT id FROM organisations`). Review it, then repeat with `--apply --plan-hash <hash> --baseline baseline.json`. To resume after any interruption, re-run the dry run with `--baseline baseline.json --baseline-sha256 <sha256 of baseline.json>` and apply with the new hash.
+7. **YOU** — `npm run staging:verify -- --organisation-id <id> --staging-allowlist allow.json`, then delete `allow.json`, `baseline.json`, `plan*.json` from the server. Open the URL on your phone; walkthrough `docs/CONNECTED-WALKTHROUGH.md`.
+
+**If SSH is not available** the only remaining route is to run step 5–7 from your own machine against the hosting database, which needs Remote MySQL. That is an access grant and is **not** the default. Its exact, minimal form: hPanel → Databases → Remote MySQL → add **one** IP (your current public address, no wildcard, no `%`) for the **new staging database only**; use `MYSQL_SSL_CA` if hPanel provides a CA (otherwise the database password crosses the network unencrypted — use a throw-away password); run the import within the same sitting; then **remove the IP entry**, **change the staging database user's password**, and delete the local `allow.json`/`baseline.json`/`plan*.json`. Approve this only if SSH turns out to be unavailable.
+
+## hPanel facts or access genuinely needed
+1. Whether the current plan allows a **second Node.js web app** and a **second MySQL database** (plan limits / any extra cost — the repository cannot tell).
+2. Whether **SSH access** is available for the plan, and from that shell: `node -v` (needs 22), the app directory path, and that `localhost` is the database host.
+3. The new subdomain/URL, the new database name and user (names only — never the passwords).
+4. The administrator email to allow-list.
+5. (Fallback only) your public IP for a one-sitting Remote MySQL entry.
+
+## What it still cannot do
+No aerial imagery; address search uses the deterministic fake provider (fixture addresses: "dover road rose bay", "24 york road ingleburn", "100 smith street parramatta"); no file upload/download (R2 refused in staging); demo dates are relative to the import day; hosted apply against a real customer tenant remains refused.

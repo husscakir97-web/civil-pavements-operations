@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import mysql from 'mysql2/promise';
+import {assertStagingSafe} from '../lib/platform/staging-policy.mjs';
+assertStagingSafe();
 
 const PLATFORM_ORG='__infrastruct_platform__';
 const file=process.argv[2];

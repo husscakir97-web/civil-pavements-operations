@@ -1,7 +1,9 @@
 import mysql, { type Pool, type PoolConnection, type RowDataPacket, type ResultSetHeader } from 'mysql2/promise';
+import {assertStagingSafe} from './staging';
 let pool: Pool | undefined;
 export function getPool() {
   if (!pool) {
+    assertStagingSafe(); // no-op unless STAGING_DEMO_MODE=true; then nothing connects unless the environment is the allow-listed one
     for (const key of ['MYSQL_HOST','MYSQL_DATABASE','MYSQL_USER','MYSQL_PASSWORD']) if (!process.env[key]) throw new Error(`Missing ${key}`);
     pool = mysql.createPool({host:process.env.MYSQL_HOST,port:Number(process.env.MYSQL_PORT || 3306),database:process.env.MYSQL_DATABASE,user:process.env.MYSQL_USER,password:process.env.MYSQL_PASSWORD,charset:'utf8mb4',connectionLimit:5,decimalNumbers:true,ssl:process.env.MYSQL_SSL_CA?{ca:process.env.MYSQL_SSL_CA,rejectUnauthorized:true}:undefined});
   }

@@ -42,12 +42,15 @@ if(out&&existsSync(out)){console.error('Refusing to overwrite an existing file: 
 // configuration by construction. An already-running app cannot be used: nothing outside this process can prove what it is bound to.
 if(process.argv.includes('--base-url')){console.error('Refusing: --base-url is not accepted. The importer starts its own isolated app on the verified database and configuration (run npm run build first).');process.exit(2);}
 let stagingEntry=null;
+const allowFile=arg('--staging-allowlist');
+const stagingEval=allowFile?evaluateAllowlist(allowFile,process.env):null;
+// A dry run against an allow-listed database is held to the same allow-list BEFORE any connection is opened.
+if(allowFile&&!apply){if(stagingEval.problems.length){console.error('Refusing (staging allow-list):\n - '+stagingEval.problems.join('\n - '));process.exit(2);}stagingEntry=stagingEval.entry;}
 if(apply){
  const REFUSE=[];const need=(ok,why)=>{if(!ok)REFUSE.push(why);};
  // Default: a local *_test database. The only other way in is --staging-allowlist (scripts/demo/staging-allowlist.mjs): an exact, reviewed,
  // hash-confirmed allow-list that REPLACES just these two checks; every other guard below still applies and nothing is bypassed.
- const allowFile=arg('--staging-allowlist');
- if(allowFile){const ev=evaluateAllowlist(allowFile,process.env);for(const x of ev.problems)REFUSE.push('staging allow-list: '+x);stagingEntry=ev.entry;}
+ if(allowFile){for(const x of stagingEval.problems)REFUSE.push('staging allow-list: '+x);stagingEntry=stagingEval.entry;}
  else{
  need(/_test$/.test(process.env.MYSQL_DATABASE||''),'MYSQL_DATABASE must end in _test');
  need(['127.0.0.1','localhost','::1'].includes(process.env.MYSQL_HOST||''),'MYSQL_HOST must be this machine; remote databases are refused');
@@ -84,6 +87,7 @@ const render=plan=>{
 
 let app;
 try{
+ if(stagingEntry){const bad=await assertOnlyNamedOrganisation(raw,org,stagingEntry);if(bad.length){console.error('Refusing (staging database):\n - '+bad.join('\n - ')+'\nNothing was changed.');process.exit(3);}}
  // Provenance: with a verified baseline the plan can tell records this import created from records that were already there.
  const baselineFile=arg('--baseline');let loaded=null;
  if(baselineFile&&existsSync(baselineFile)){loaded=loadBaseline(baselineFile,arg('--baseline-sha256'),org,await schemaShape(raw));console.log('Verified pre-import baseline: records absent from it were created by this import.');}
@@ -98,7 +102,6 @@ try{
   if(refused){console.error('Refusing to apply: the plan has conflicts or blockers. Nothing was changed.');process.exit(3);}
   if(arg('--plan-hash')!==plan.planHash){console.error('Refusing to apply: --plan-hash does not match a fresh plan (the tenant changed since the plan was reviewed, or an earlier run was interrupted). Run the dry run again and review it. Nothing was changed.');process.exit(3);}
 
-  if(stagingEntry){const bad=await assertOnlyNamedOrganisation(raw,org,stagingEntry);if(bad.length){console.error('Refusing to apply:\n - '+bad.join('\n - ')+'\nNothing was changed.');process.exit(3);}}
   // the owner of THIS organisation, from the inspected database
   const email=process.env.DEMO_SEED_EMAIL,password=process.env.DEMO_SEED_PASSWORD;
   const [owner]=(await raw.query('SELECT id,organisation_id,role FROM users WHERE email=?',[email]))[0];

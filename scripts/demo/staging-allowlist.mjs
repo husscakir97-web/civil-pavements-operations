@@ -6,7 +6,9 @@
 import {readFileSync,statSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 
-export const KNOWN_PRODUCTION_DATABASES=['u840559204_infrastruct'];
+import {protectedDatabase,protectedUrl,PROTECTED_DATABASES} from '../../lib/platform/staging-policy.mjs';
+import {DEMO_TEAM} from './import-guards.mjs';
+export const KNOWN_PRODUCTION_DATABASES=PROTECTED_DATABASES;
 const KEYS=['environment','host','port','database','user','appUrl','adminEmail','refuseDatabases'];
 
 /** Returns {problems, entry}; problems is empty only when the file and the environment agree exactly. */
@@ -28,8 +30,8 @@ export function evaluateAllowlist(file,env=process.env){
  if(!Number.isInteger(entry.port)||entry.port<1||entry.port>65535)problems.push('port must be an integer');
  if(entry.refuseDatabases!==undefined&&!(Array.isArray(entry.refuseDatabases)&&entry.refuseDatabases.every(x=>typeof x==='string')))problems.push('refuseDatabases must be a list of names');
  if(problems.length)return {problems,entry};
- const refuse=[...KNOWN_PRODUCTION_DATABASES,...(entry.refuseDatabases||[])];
- if(refuse.includes(entry.database))problems.push('the allow-listed database is a production database');
+ if(protectedDatabase(entry.database,{STAGING_REFUSE_DATABASES:(entry.refuseDatabases||[]).join(',')}))problems.push('the allow-listed database is a protected live database (refused regardless of any suffix such as _test)');
+ if(protectedUrl(entry.appUrl,{}))problems.push('the allow-listed app URL is a protected live address');
  if(/[*?%\s]/.test(entry.host+entry.database+entry.user))problems.push('wildcards are not allowed in the allow-list');
  if(!/^https:\/\//.test(entry.appUrl)&&!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(entry.appUrl))problems.push('appUrl must be https (or a local address)');
  if(env.MYSQL_HOST!==entry.host)problems.push('MYSQL_HOST does not equal the allow-listed host');
@@ -40,13 +42,21 @@ export function evaluateAllowlist(file,env=process.env){
  return {problems,entry};
 }
 
-/** The target database must hold exactly the one named organisation and its users: no other tenant, ever. `raw` is a mysql2 connection. */
+/**
+ * The target database must hold exactly the one named organisation, its allow-listed administrator, and at most the dataset's own five
+ * demonstration team members (who have no login). It must have exactly ONE login (the administrator). That keeps a first run, a repeat run,
+ * an interrupted run and a verification all legitimate, while any other tenant, user or login is refused. `raw` is a mysql2 connection.
+ */
 export async function assertOnlyNamedOrganisation(raw,org,entry){
  const [orgs]=await raw.query('SELECT id FROM organisations');
  const [users]=await raw.query('SELECT organisation_id,email,role FROM users');
- const problems=[];
+ const [logins]=await raw.query('SELECT email FROM auth_user');
+ const problems=[],admin=entry.adminEmail.toLowerCase();
  if(orgs.length!==1||orgs[0].id!==org)problems.push(`the staging database must contain exactly one organisation and it must be the named one (found ${orgs.length})`);
  if(users.some(u=>u.organisation_id!==org))problems.push('the staging database has users in another organisation');
- if(users.length!==1||String(users[0]?.email||'').toLowerCase()!==entry.adminEmail.toLowerCase()||users[0]?.role!=='admin')problems.push('the staging database must contain exactly one user: the allow-listed administrator');
+ if(users.filter(u=>String(u.email||'').toLowerCase()===admin&&u.role==='admin').length!==1)problems.push('the allow-listed administrator must exist exactly once, with the administrator role');
+ const strangers=users.filter(u=>String(u.email||'').toLowerCase()!==admin&&!DEMO_TEAM.has(String(u.email||'').toLowerCase()));
+ if(strangers.length)problems.push(`the staging database has ${strangers.length} user(s) who are neither the administrator nor a demonstration team member`);
+ if(logins.length!==1||String(logins[0]?.email||'').toLowerCase()!==admin)problems.push('the staging database must have exactly one login: the allow-listed administrator');
  return problems;
 }

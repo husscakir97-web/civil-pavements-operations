@@ -21,6 +21,7 @@ import {AddressLocationPicker,LocationSummary,locationInputFrom} from './locatio
 import type {LocationInput,LocationView} from '@/lib/v1/location';
 import {allowedTransitions} from '@/lib/platform/workflow';
 import type {Forecast} from '@/lib/platform/finance';
+import {WorkMap} from './work-map';
 import {setupAreas,fixFor,categoryLabel,nextActionTarget,type SetupTarget} from '@/lib/v1/project-setup';
 import {PROJECT_ROLE_LABELS,type ProjectRole} from '@/lib/v1/project-roles';
 
@@ -80,8 +81,8 @@ function NewProjectForm({onDone}:{onDone:(id?:string)=>void}){
  </form>;
 }
 
-type TabKey='overview'|'setup'|'programme'|'delivery'|'communication'|'quality'|'commercial'|'documents'|'closeout';
-const TAB_LABEL:Record<TabKey,string>={overview:'Overview',setup:'Setup',programme:'Programme',delivery:'Delivery',communication:'Communication',quality:'Quality & HSEQ',commercial:'Commercial',documents:'Documents',closeout:'Closeout'};
+type TabKey='overview'|'setup'|'programme'|'workmap'|'delivery'|'communication'|'quality'|'commercial'|'documents'|'closeout';
+const TAB_LABEL:Record<TabKey,string>={overview:'Overview',setup:'Setup',programme:'Programme',workmap:'Work map',delivery:'Delivery',communication:'Communication',quality:'Quality & HSEQ',commercial:'Commercial',documents:'Documents',closeout:'Closeout'};
 function ProjectWorkspace({id,tab,area,onBack}:{id:string;tab?:string;area:'Prepare Work'|'Deliver Work';onBack:()=>void}){
  const {navigate}=useNav();const session=useSession();const {busy,error:actionError,run}=useAction();
  const active=(tab||'overview') as TabKey;
@@ -107,7 +108,7 @@ function ProjectWorkspace({id,tab,area,onBack}:{id:string;tab?:string;area:'Prep
  };
  const nextTarget=nextActionTarget(p.stage,p.nextAction);
  const nextGo=nextTarget&&!(nextTarget.kind==='tab'&&nextTarget.tab===active)?()=>goTarget(nextTarget):undefined;
- const tabs:Array<{key:TabKey;label:string;badge?:ReactNode;hidden?:boolean}>=[{key:'overview',label:'Overview'},{key:'setup',label:'Setup',badge:d.readiness.blockers.length&&p.stage==='setup'?<Pill tone="warning">{d.readiness.blockers.length}</Pill>:undefined},{key:'programme',label:'Programme'},{key:'delivery',label:'Delivery'},{key:'communication',label:'Communication',hidden:!session.can('communication.view')},{key:'quality',label:'Quality & HSEQ',hidden:!session.module('ims')},{key:'commercial',label:'Commercial',hidden:!session.can('commercial.view')||!session.module('commercial')},{key:'documents',label:'Documents'},{key:'closeout',label:'Closeout'}];
+ const tabs:Array<{key:TabKey;label:string;badge?:ReactNode;hidden?:boolean}>=[{key:'overview',label:'Overview'},{key:'setup',label:'Setup',badge:d.readiness.blockers.length&&p.stage==='setup'?<Pill tone="warning">{d.readiness.blockers.length}</Pill>:undefined},{key:'programme',label:'Programme'},{key:'workmap',label:'Work map'},{key:'delivery',label:'Delivery'},{key:'communication',label:'Communication',hidden:!session.can('communication.view')},{key:'quality',label:'Quality & HSEQ',hidden:!session.module('ims')},{key:'commercial',label:'Commercial',hidden:!session.can('commercial.view')||!session.module('commercial')},{key:'documents',label:'Documents'},{key:'closeout',label:'Closeout'}];
  const blockedReady=d.readiness.blockers.length>0,blockedClose=Boolean(d.closeout?.blockers.length);
  return <div>
   <div className="-mx-4 mb-4 border-b bg-[#f6f7f9]/95 px-4 pb-3 pt-1 backdrop-blur sm:sticky sm:top-[72px] sm:z-10 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
@@ -123,6 +124,7 @@ function ProjectWorkspace({id,tab,area,onBack}:{id:string;tab?:string;area:'Prep
   <label className="sticky top-[72px] z-10 -mx-4 mb-4 grid gap-1 border-b bg-[#f6f7f9]/95 px-4 pb-3 pt-2 text-sm backdrop-blur sm:hidden"><span className="truncate text-xs font-semibold uppercase tracking-wide text-slate-500">{p.name} · section</span><select aria-label="Project section" className={`${field} font-semibold`} value={active} onChange={e=>navigate(area,'Projects',id,e.target.value)}>{tabs.filter(t=>!t.hidden).map(t=><option key={t.key} value={t.key}>{t.label}{t.key==='setup'&&p.stage==='setup'&&d.readiness.blockers.length?` · ${d.readiness.blockers.length} blocker${d.readiness.blockers.length===1?'':'s'}`:''}</option>)}</select></label>
   <div className="hidden sm:block"><Tabs label="Project workspace" tabs={tabs} active={active} onChange={k=>navigate(area,'Projects',id,k)}/></div>
   {active==='overview'&&<Overview d={d} onTab={k=>navigate(area,'Projects',id,k)} goTarget={goTarget}/>}
+  {active==='workmap'&&<WorkMap projectId={id}/>}
   {active==='setup'&&<Setup d={d} onChanged={refresh} goTarget={goTarget} focus={checklistFocus} setFocus={setChecklistFocus}/>}
   {active==='programme'&&<ProgrammePanel projectId={id}/>}
    {active==='communication'&&<CommunicationPanel contextType="project" contextId={id} title="Project communication"/>}

@@ -995,3 +995,17 @@ export const planningCostLinks=mysqlTable('planning_cost_links',{
 export const planningCanvasPositions=mysqlTable('planning_canvas_positions',{
  id:id(),organisationId:org(),scenarioId:planningRef('scenario_id').notNull(),activityId:planningRef('activity_id').notNull(),x:int('x').notNull(),y:int('y').notNull(),
 },t=>[index('planning_canvas_positions_org_idx').on(t.organisationId),index('planning_canvas_positions_scenario_idx').on(t.organisationId,t.scenarioId),uniqueIndex('planning_canvas_positions_uq').on(t.scenarioId,t.activityId)]);
+
+// ---------------------------------------------------------------- Project work map (migration 0027)
+// Operational work-area / stage polygons per project. The stable id is the anchor later links (documents, measurements,
+// programme activities) attach to. Geometry is one open ring of WGS84 points in JSON; bbox/area/vertex count are typed for queries.
+export const projectWorkAreas=mysqlTable('project_work_areas',{
+ id:id(),organisationId:org(),projectId:varchar('project_id',{length:191}).notNull(),name:varchar('name',{length:160}).notNull(),
+ kind:varchar('kind',{length:20}).notNull().default('work_area'),discipline:varchar('discipline',{length:30}).notNull().default('other'),
+ delivery:varchar('delivery',{length:20}).notNull().default('own'),contractorLabel:varchar('contractor_label',{length:160}),sequence:int('sequence'),notes:text('notes'),
+ geometry:longtext('geometry').notNull(),vertexCount:int('vertex_count').notNull(),areaM2:double('area_m2').notNull(),
+ minLat:decimal('min_lat',{precision:10,scale:7}).notNull(),maxLat:decimal('max_lat',{precision:10,scale:7}).notNull(),minLng:decimal('min_lng',{precision:10,scale:7}).notNull(),maxLng:decimal('max_lng',{precision:10,scale:7}).notNull(),
+ status:varchar('status',{length:20}).notNull().default('active'),revision:int('revision').notNull().default(1),
+ createdBy:varchar('created_by',{length:191}),updatedBy:varchar('updated_by',{length:191}),createdAt:varchar('created_at',{length:40}).notNull(),updatedAt:varchar('updated_at',{length:40}).notNull(),
+ archivedAt:varchar('archived_at',{length:40}),archivedBy:varchar('archived_by',{length:191}),
+},t=>[index('project_work_areas_org_idx').on(t.organisationId),index('project_work_areas_project_idx').on(t.organisationId,t.projectId,t.status)]);

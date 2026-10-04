@@ -1,0 +1,588 @@
+{
+ "description": "Every table the demonstration import writes to, measured by importing the dataset into an empty tenant (scripts/test-import-demo-tenant.mjs).",
+ "tables": {
+  "business_units": {
+   "kind": "direct",
+   "expected": 3,
+   "byKey": {
+    "APM": 1,
+    "PRF": 1,
+    "TC": 1
+   }
+  },
+  "clients": {
+   "kind": "direct",
+   "expected": 4,
+   "byKey": {
+    "DEMO-C1": 1,
+    "DEMO-C2": 1,
+    "DEMO-C3": 1,
+    "DEMO-C4": 1
+   }
+  },
+  "client_sites": {
+   "kind": "derived",
+   "parent": "client",
+   "expected": 6,
+   "byKey": {
+    "DEMO-C1": 2,
+    "DEMO-C2": 2,
+    "DEMO-C3": 1,
+    "DEMO-C4": 1
+   }
+  },
+  "client_contacts": {
+   "kind": "derived",
+   "parent": "client",
+   "expected": 6,
+   "byKey": {
+    "DEMO-C1": 2,
+    "DEMO-C2": 1,
+    "DEMO-C3": 2,
+    "DEMO-C4": 1
+   }
+  },
+  "workers": {
+   "kind": "direct",
+   "expected": 14,
+   "byKey": {
+    "DEMO-E01": 1,
+    "DEMO-E02": 1,
+    "DEMO-E03": 1,
+    "DEMO-E04": 1,
+    "DEMO-E05": 1,
+    "DEMO-E06": 1,
+    "DEMO-E07": 1,
+    "DEMO-E08": 1,
+    "DEMO-E09": 1,
+    "DEMO-E10": 1,
+    "DEMO-E11": 1,
+    "DEMO-E12": 1,
+    "DEMO-E13": 1,
+    "DEMO-E14": 1
+   }
+  },
+  "worker_competencies": {
+   "kind": "derived",
+   "parent": "worker",
+   "expected": 31,
+   "byKey": {
+    "DEMO-E01": 4,
+    "DEMO-E02": 2,
+    "DEMO-E03": 2,
+    "DEMO-E04": 2,
+    "DEMO-E05": 3,
+    "DEMO-E06": 2,
+    "DEMO-E07": 2,
+    "DEMO-E08": 2,
+    "DEMO-E09": 2,
+    "DEMO-E10": 2,
+    "DEMO-E11": 2,
+    "DEMO-E12": 2,
+    "DEMO-E13": 2,
+    "DEMO-E14": 2
+   }
+  },
+  "plant": {
+   "kind": "direct",
+   "expected": 12,
+   "byKey": {
+    "DEMO-P01": 1,
+    "DEMO-P02": 1,
+    "DEMO-P03": 1,
+    "DEMO-P04": 1,
+    "DEMO-P05": 1,
+    "DEMO-P06": 1,
+    "DEMO-P07": 1,
+    "DEMO-P08": 1,
+    "DEMO-P09": 1,
+    "DEMO-P10": 1,
+    "DEMO-P11": 1,
+    "DEMO-P12": 1
+   }
+  },
+  "crews": {
+   "kind": "direct",
+   "expected": 3,
+   "byKey": {
+    "DEMO Paving Crew A": 1,
+    "DEMO Profiling Crew": 1,
+    "DEMO Traffic Control Crew": 1
+   }
+  },
+  "suppliers": {
+   "kind": "direct",
+   "expected": 2,
+   "byKey": {
+    "DEMO Coastline Asphalt (supplier)": 1,
+    "DEMO Roadsign Supplies (supplier)": 1
+   }
+  },
+  "subcontractors": {
+   "kind": "direct",
+   "expected": 2,
+   "byKey": {
+    "DEMO Boundary Survey Services (subcontractor)": 1,
+    "DEMO Stripe Right Linemarking (subcontractor)": 1
+   }
+  },
+  "users": {
+   "kind": "direct",
+   "expected": 5,
+   "byKey": {
+    "elena.voss@kestrel-demo.example.invalid": 1,
+    "hana.kobayashi@kestrel-demo.example.invalid": 1,
+    "joel.mercer@kestrel-demo.example.invalid": 1,
+    "marcus.doyle@kestrel-demo.example.invalid": 1,
+    "rina.patel@kestrel-demo.example.invalid": 1
+   }
+  },
+  "opportunities": {
+   "kind": "direct",
+   "expected": 11,
+   "byKey": {
+    "Coastal Motorway — Night Traffic Control Services": 1,
+    "Coastal Tollways — Resurfacing Panel (lost)": 1,
+    "DEMO Ironbark — Warehouse Hardstand Extension (qualified)": 1,
+    "DEMO Marrow Shire — Footpath and Kerb Programme (lead)": 1,
+    "DEMO Ridgeway City — Line Marking Panel 2027 (lead)": 1,
+    "Ironbark Eastlink Industrial Estate — Pavement Rehabilitation": 1,
+    "Ironbark Warehouse Carpark Profiling (pricing in progress)": 1,
+    "Marrow Shire — Depot Hardstand Rehabilitation": 1,
+    "Marrow Shire 2026/27 Resurfacing — Quarry Road": 1,
+    "Ridgeway Anzac Parade — Kerb-to-Kerb Profiling": 1,
+    "Ridgeway City — Stage 2 Road Rehabilitation": 1
+   }
+  },
+  "tenders": {
+   "kind": "direct",
+   "expected": 8,
+   "byKey": {
+    "DEMO-T-001": 1,
+    "DEMO-T-002": 1,
+    "DEMO-T-003": 1,
+    "DEMO-T-004": 1,
+    "DEMO-T-005": 1,
+    "DEMO-T-006": 1,
+    "DEMO-T-007": 1,
+    "DEMO-T-008": 1
+   }
+  },
+  "tender_bid_reviews": {
+   "kind": "derived",
+   "parent": "tender",
+   "expected": 8,
+   "byKey": {
+    "DEMO-T-001": 1,
+    "DEMO-T-002": 1,
+    "DEMO-T-003": 1,
+    "DEMO-T-004": 1,
+    "DEMO-T-005": 1,
+    "DEMO-T-006": 1,
+    "DEMO-T-007": 1,
+    "DEMO-T-008": 1
+   }
+  },
+  "estimates": {
+   "kind": "derived",
+   "parent": "tender",
+   "expected": 7,
+   "byKey": {
+    "DEMO-T-001": 1,
+    "DEMO-T-002": 1,
+    "DEMO-T-003": 1,
+    "DEMO-T-004": 1,
+    "DEMO-T-005": 1,
+    "DEMO-T-006": 1,
+    "DEMO-T-007": 1
+   }
+  },
+  "estimate_revisions": {
+   "kind": "derived",
+   "parent": "estimate",
+   "expected": 6,
+   "byKey": {
+    "DEMO-T-001": 1,
+    "DEMO-T-002": 1,
+    "DEMO-T-003": 1,
+    "DEMO-T-004": 1,
+    "DEMO-T-005": 1,
+    "DEMO-T-006": 1
+   }
+  },
+  "quote_revisions": {
+   "kind": "derived",
+   "parent": "estimate",
+   "expected": 17,
+   "byKey": {
+    "DEMO-T-001": 3,
+    "DEMO-T-002": 3,
+    "DEMO-T-003": 3,
+    "DEMO-T-004": 2,
+    "DEMO-T-005": 2,
+    "DEMO-T-006": 2,
+    "DEMO-T-007": 2
+   }
+  },
+  "jobs": {
+   "kind": "derived",
+   "parent": "tender",
+   "expected": 3,
+   "byKey": {
+    "DEMO-T-001": 1,
+    "DEMO-T-002": 1,
+    "DEMO-T-003": 1
+   }
+  },
+  "project_baselines": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 3,
+   "byKey": {
+    "DEMO-T-001": 1,
+    "DEMO-T-002": 1,
+    "DEMO-T-003": 1
+   }
+  },
+  "project_members": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 9,
+   "byKey": {
+    "DEMO-T-001": 3,
+    "DEMO-T-002": 3,
+    "DEMO-T-003": 3
+   }
+  },
+  "project_cost_codes": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 18,
+   "byKey": {
+    "DEMO-T-001": 6,
+    "DEMO-T-002": 6,
+    "DEMO-T-003": 6
+   }
+  },
+  "project_checklist_items": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 49,
+   "byKey": {
+    "DEMO-T-001": 13,
+    "DEMO-T-002": 23,
+    "DEMO-T-003": 13
+   }
+  },
+  "job_ims_items": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 45,
+   "byKey": {
+    "DEMO-T-001": 15,
+    "DEMO-T-002": 15,
+    "DEMO-T-003": 15
+   }
+  },
+  "risks": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 2,
+   "byKey": {
+    "DEMO-T-001": 1,
+    "DEMO-T-002": 1
+   }
+  },
+  "itps": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 2,
+   "byKey": {
+    "DEMO-T-001": 1,
+    "DEMO-T-002": 1
+   }
+  },
+  "itp_items": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 6,
+   "byKey": {
+    "DEMO-T-001": 3,
+    "DEMO-T-002": 3
+   }
+  },
+  "swms": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 2,
+   "byKey": {
+    "DEMO-T-001": 1,
+    "DEMO-T-002": 1
+   }
+  },
+  "swms_revisions": {
+   "kind": "derived",
+   "parent": "swms",
+   "expected": 2,
+   "byKey": {
+    "DEMO-T-001: SWMS": 1,
+    "DEMO-T-002: SWMS": 1
+   }
+  },
+  "hseq_incidents": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 2,
+   "byKey": {
+    "DEMO-T-001": 2
+   }
+  },
+  "hseq_ncrs": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 1,
+   "byKey": {
+    "DEMO-T-001": 1
+   }
+  },
+  "hseq_actions": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 3,
+   "byKey": {
+    "DEMO-T-001": 3
+   }
+  },
+  "program_activities": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 7,
+   "byKey": {
+    "DEMO-T-001": 7
+   }
+  },
+  "shifts": {
+   "kind": "direct",
+   "expected": 15,
+   "byKey": {
+    "Final wearing course and linemarking — Quarry Road": 1,
+    "Night traffic control — motorway lane closure 1": 1,
+    "Night traffic control — motorway lane closure 2": 1,
+    "Paving Quarry Road — chainage 0–800": 1,
+    "Paving Quarry Road — chainage 1600–2400": 1,
+    "Paving Quarry Road — chainage 2400–3200": 1,
+    "Paving Quarry Road — chainage 800–1600": 1,
+    "Profiling Anzac Parade — night 1": 1,
+    "Profiling Anzac Parade — night 2": 1,
+    "Profiling Anzac Parade — night 3": 1,
+    "Profiling Quarry Road — stage 1": 1,
+    "TEST — Expired qualification": 1,
+    "TEST — Unavailable plant": 1,
+    "TEST CLASH — Profiling carpark enquiry": 1,
+    "TEST CLASH — Profiling Quarry Road second crew": 1
+   }
+  },
+  "shift_assignments": {
+   "kind": "derived",
+   "parent": "shift",
+   "expected": 127,
+   "byKey": {
+    "Final wearing course and linemarking — Quarry Road": 10,
+    "Night traffic control — motorway lane closure 1": 6,
+    "Night traffic control — motorway lane closure 2": 6,
+    "Paving Quarry Road — chainage 0–800": 14,
+    "Paving Quarry Road — chainage 1600–2400": 14,
+    "Paving Quarry Road — chainage 2400–3200": 14,
+    "Paving Quarry Road — chainage 800–1600": 14,
+    "Profiling Anzac Parade — night 1": 9,
+    "Profiling Anzac Parade — night 2": 9,
+    "Profiling Anzac Parade — night 3": 9,
+    "Profiling Quarry Road — stage 1": 8,
+    "TEST — Expired qualification": 3,
+    "TEST — Unavailable plant": 4,
+    "TEST CLASH — Profiling carpark enquiry": 3,
+    "TEST CLASH — Profiling Quarry Road second crew": 4
+   }
+  },
+  "dockets": {
+   "kind": "direct",
+   "expected": 8,
+   "byKey": {
+    "DEMO-D-001": 1,
+    "DEMO-D-002": 1,
+    "DEMO-D-003": 1,
+    "DEMO-D-004": 1,
+    "DEMO-D-005": 1,
+    "DEMO-D-006": 1,
+    "DEMO-D-007": 1,
+    "DEMO-D-008": 1
+   }
+  },
+  "cost_transactions": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 6,
+   "byKey": {
+    "DEMO-T-001": 4,
+    "DEMO-T-002": 2
+   }
+  },
+  "progress_claims": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 4,
+   "byKey": {
+    "DEMO-T-001 #1": 1,
+    "DEMO-T-001 #2": 1,
+    "DEMO-T-001 #3": 1,
+    "DEMO-T-002 #1": 1
+   }
+  },
+  "claim_lines": {
+   "kind": "derived",
+   "parent": "claim",
+   "expected": 5,
+   "byKey": {
+    "DEMO-T-001 #1": 1,
+    "DEMO-T-001 #2": 1,
+    "DEMO-T-001 #3": 2,
+    "DEMO-T-002 #1": 1
+   }
+  },
+  "client_invoices": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 2,
+   "byKey": {
+    "DEMO-T-001": 1,
+    "DEMO-T-002": 1
+   }
+  },
+  "planning_plans": {
+   "kind": "direct",
+   "expected": 1,
+   "byKey": {
+    "Quarry Road resurfacing — methodology options (DEMO)": 1
+   }
+  },
+  "planning_scenarios": {
+   "kind": "derived",
+   "parent": "plan",
+   "expected": 3,
+   "byKey": {
+    "Quarry Road resurfacing — methodology options (DEMO) / Alternative: night works (lower productivity, higher rates)": 1,
+    "Quarry Road resurfacing — methodology options (DEMO) / Alternative: subcontract profiling (quote pending: total unknown)": 1,
+    "Quarry Road resurfacing — methodology options (DEMO) / Base: day shift, one paving crew": 1
+   }
+  },
+  "planning_activities": {
+   "kind": "derived",
+   "parent": "scenario",
+   "expected": 21,
+   "byKey": {
+    "Quarry Road resurfacing — methodology options (DEMO) / Alternative: night works (lower productivity, higher rates)": 7,
+    "Quarry Road resurfacing — methodology options (DEMO) / Alternative: subcontract profiling (quote pending: total unknown)": 7,
+    "Quarry Road resurfacing — methodology options (DEMO) / Base: day shift, one paving crew": 7
+   }
+  },
+  "planning_dependencies": {
+   "kind": "derived",
+   "parent": "scenario",
+   "expected": 21,
+   "byKey": {
+    "Quarry Road resurfacing — methodology options (DEMO) / Alternative: night works (lower productivity, higher rates)": 7,
+    "Quarry Road resurfacing — methodology options (DEMO) / Alternative: subcontract profiling (quote pending: total unknown)": 7,
+    "Quarry Road resurfacing — methodology options (DEMO) / Base: day shift, one paving crew": 7
+   }
+  },
+  "planning_cost_items": {
+   "kind": "derived",
+   "parent": "scenario",
+   "expected": 13,
+   "byKey": {
+    "Quarry Road resurfacing — methodology options (DEMO) / Alternative: night works (lower productivity, higher rates)": 4,
+    "Quarry Road resurfacing — methodology options (DEMO) / Alternative: subcontract profiling (quote pending: total unknown)": 5,
+    "Quarry Road resurfacing — methodology options (DEMO) / Base: day shift, one paving crew": 4
+   }
+  },
+  "planning_cost_links": {
+   "kind": "derived",
+   "parent": "scenario",
+   "expected": 8,
+   "byKey": {
+    "Quarry Road resurfacing — methodology options (DEMO) / Alternative: night works (lower productivity, higher rates)": 3,
+    "Quarry Road resurfacing — methodology options (DEMO) / Alternative: subcontract profiling (quote pending: total unknown)": 2,
+    "Quarry Road resurfacing — methodology options (DEMO) / Base: day shift, one paving crew": 3
+   }
+  },
+  "planning_requirements": {
+   "kind": "derived",
+   "parent": "scenario",
+   "expected": 36,
+   "byKey": {
+    "Quarry Road resurfacing — methodology options (DEMO) / Alternative: night works (lower productivity, higher rates)": 13,
+    "Quarry Road resurfacing — methodology options (DEMO) / Alternative: subcontract profiling (quote pending: total unknown)": 10,
+    "Quarry Road resurfacing — methodology options (DEMO) / Base: day shift, one paving crew": 13
+   }
+  },
+  "asset_meter_readings": {
+   "kind": "derived",
+   "parent": "plant",
+   "expected": 3,
+   "byKey": {
+    "DEMO-P01": 1,
+    "DEMO-P05": 1,
+    "DEMO-P07": 1
+   }
+  },
+  "asset_service_events": {
+   "kind": "derived",
+   "parent": "plant",
+   "expected": 3,
+   "byKey": {
+    "DEMO-P01": 1,
+    "DEMO-P05": 1,
+    "DEMO-P07": 1
+   }
+  },
+  "workshop_orders": {
+   "kind": "derived",
+   "parent": "plant",
+   "expected": 3,
+   "byKey": {
+    "DEMO-P02": 1,
+    "DEMO-P03": 1,
+    "DEMO-P04": 1
+   }
+  },
+  "workshop_entries": {
+   "kind": "derived",
+   "parent": "order",
+   "expected": 5,
+   "byKey": {
+    "DEMO-P02: Hydraulic leak on cutter drum drive": 1,
+    "DEMO-P03: Paver conveyor chain tension out of tolerance": 2,
+    "DEMO-P04: Roller sprinkler nozzle blocked": 2
+   }
+  },
+  "client_requests": {
+   "kind": "derived",
+   "parent": "plant",
+   "expected": 1,
+   "byKey": {
+    "DEMO-P01": 1
+   }
+  }
+ },
+ "bootstrapRowsIfMissing": {
+  "organisation_entitlements": 0,
+  "organisation_profiles": 0,
+  "rate_libraries": 1
+ },
+ "bookkeepingRowsApproximate": {
+  "audit_log": 308,
+  "audit_events": 62,
+  "domain_events": 14
+ },
+ "attachmentsAndFiles": 0
+}

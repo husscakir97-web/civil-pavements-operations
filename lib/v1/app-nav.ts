@@ -22,6 +22,8 @@ export const NAV:NavArea[]=[
   {key:'Opportunities',module:'pipeline',capability:'pipeline.view'},
   {key:'Tenders',module:'pipeline',capability:'pipeline.view'},
   {key:'Estimates',module:'estimating',anyOf:['pipeline.view','estimate.edit']},
+  // Planning v0.1 belongs to Estimating: usable standalone, with every other module off.
+  {key:'Planning',module:'estimating',anyOf:['pipeline.view','estimate.edit']},
  ]},
  {key:'Projects',label:'Projects',subs:[
   {key:'Projects',module:'projects',capability:'project.view'},

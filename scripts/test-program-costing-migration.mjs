@@ -24,7 +24,7 @@ try{
  // Rewind only this disposable fixture's five additions to an existing 0024 database.
  for(const column of columns)await db.query('ALTER TABLE program_activities DROP COLUMN '+identifier(column));
  await db.query('DELETE FROM app_migration_steps WHERE name=?',[migration]);await db.query('DELETE FROM app_migrations WHERE name=?',[migration]);
- const [[last]]=await db.query('SELECT MAX(name) AS name FROM app_migrations');assert.equal(last.name,'0024_workshop_service_due.sql');
+ const [[last]]=await db.query("SELECT MAX(name) AS name FROM app_migrations WHERE name<'0025'");assert.equal(last.name,'0024_workshop_service_due.sql'); // later migrations stay applied
  await db.query("INSERT INTO program_activities(id,organisation_id,project_id,name,start_date,duration_days,planned_quantity,quantity_unit,production_per_day,status,revision,created_at,updated_at) VALUES ('kept','synthetic','synthetic','Keep this activity','2026-10-03',3,125.25,'t',0,'planned',7,'2026-10-02','2026-10-02')");
  assert(run().includes('Applied '+migration));
  const [[row]]=await db.query("SELECT * FROM program_activities WHERE id='kept'");assert.equal(row.name,'Keep this activity');assert.equal(row.planned_quantity,125.25);assert.equal(row.production_per_day,0);assert.equal(row.revision,7);assert.equal(row.duration_days,3);

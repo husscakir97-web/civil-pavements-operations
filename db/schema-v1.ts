@@ -956,3 +956,42 @@ export const formSubmissionAmendments=mysqlTable('form_submission_amendments',{
  id:id(),organisationId:org(),submissionId:ref('submission_id').notNull(),sequence:int('sequence').notNull(),responsesJson:longtext('responses_json').notNull(),
  changedFields:text('changed_fields'),reason:varchar('reason',{length:1000}).notNull(),amendedBy:ref('amended_by').notNull(),amendedAt:stamp('amended_at').notNull(),createdAt:stamp('created_at').notNull(),
 },t=>[uniqueIndex('idx_form_submission_amendments_seq').on(t.organisationId,t.submissionId,t.sequence),index('idx_form_submission_amendments_org').on(t.organisationId)]);
+
+// ---------------------------------------------------------------- Planning v0.1 (migration 0026)
+// Tenant-owned planning scenarios (docs/PLANNING-V0-1-DECISION.md). Proposed data only: never published into estimates or bookings.
+const planningRef=(name:string)=>varchar(name,{length:191});
+export const planningPlans=mysqlTable('planning_plans',{
+ id:id(),organisationId:org(),name:varchar('name',{length:180}).notNull(),ownerUserId:varchar('owner_user_id',{length:191}).notNull(),
+ accessScope:varchar('access_scope',{length:20}).notNull().default('organisation'),
+ estimateId:planningRef('estimate_id'),tenderId:planningRef('tender_id'),projectId:planningRef('project_id'),
+ status:varchar('status',{length:20}).notNull().default('active'),...lifecycle(),
+},t=>[index('planning_plans_org_idx').on(t.organisationId),index('planning_plans_owner_idx').on(t.organisationId,t.ownerUserId),index('planning_plans_estimate_idx').on(t.organisationId,t.estimateId)]);
+export const planningScenarios=mysqlTable('planning_scenarios',{
+ id:id(),organisationId:org(),planId:planningRef('plan_id').notNull(),name:varchar('name',{length:180}).notNull(),
+ status:varchar('status',{length:20}).notNull().default('draft'),basedOnScenarioId:planningRef('based_on_scenario_id'),...lifecycle(),
+},t=>[index('planning_scenarios_org_idx').on(t.organisationId),index('planning_scenarios_plan_idx').on(t.organisationId,t.planId)]);
+export const planningActivities=mysqlTable('planning_activities',{
+ id:id(),organisationId:org(),scenarioId:planningRef('scenario_id').notNull(),kind:varchar('kind',{length:20}).notNull().default('activity'),
+ name:varchar('name',{length:180}).notNull(),notes:text('notes'),sort:int('sort').notNull().default(0),
+ quantity:decimal('quantity',{precision:15,scale:3}),unit:varchar('unit',{length:20}),productivity:decimal('productivity',{precision:15,scale:6}),productivityUnit:varchar('productivity_unit',{length:20}),
+ durationMode:varchar('duration_mode',{length:10}).notNull().default('entered'),durationDays:decimal('duration_days',{precision:9,scale:3}),hoursPerDay:decimal('hours_per_day',{precision:5,scale:2}),plannedStart:day('planned_start'),
+},t=>[index('planning_activities_org_idx').on(t.organisationId),index('planning_activities_scenario_idx').on(t.organisationId,t.scenarioId)]);
+export const planningDependencies=mysqlTable('planning_dependencies',{
+ id:id(),organisationId:org(),scenarioId:planningRef('scenario_id').notNull(),predecessorId:planningRef('predecessor_id').notNull(),successorId:planningRef('successor_id').notNull(),
+},t=>[index('planning_dependencies_org_idx').on(t.organisationId),index('planning_dependencies_scenario_idx').on(t.organisationId,t.scenarioId),uniqueIndex('planning_dependencies_pair_uq').on(t.scenarioId,t.predecessorId,t.successorId)]);
+export const planningRequirements=mysqlTable('planning_requirements',{
+ id:id(),organisationId:org(),scenarioId:planningRef('scenario_id').notNull(),activityId:planningRef('activity_id').notNull(),kind:varchar('kind',{length:10}).notNull(),
+ name:varchar('name',{length:180}).notNull(),sort:int('sort').notNull().default(0),quantity:decimal('quantity',{precision:15,scale:3}),rate:decimal('rate',{precision:15,scale:4}),
+ rateBasis:varchar('rate_basis',{length:10}).notNull().default('hour'),resourceRefType:varchar('resource_ref_type',{length:10}),resourceRefId:planningRef('resource_ref_id'),
+},t=>[index('planning_requirements_org_idx').on(t.organisationId),index('planning_requirements_scenario_idx').on(t.organisationId,t.scenarioId)]);
+export const planningCostItems=mysqlTable('planning_cost_items',{
+ id:id(),organisationId:org(),scenarioId:planningRef('scenario_id').notNull(),scope:varchar('scope',{length:10}).notNull(),activityId:planningRef('activity_id'),
+ label:varchar('label',{length:180}).notNull(),amount:money('amount'),sort:int('sort').notNull().default(0),
+},t=>[index('planning_cost_items_org_idx').on(t.organisationId),index('planning_cost_items_scenario_idx').on(t.organisationId,t.scenarioId)]);
+export const planningCostLinks=mysqlTable('planning_cost_links',{
+ id:id(),organisationId:org(),scenarioId:planningRef('scenario_id').notNull(),costItemId:planningRef('cost_item_id').notNull(),activityId:planningRef('activity_id').notNull(),
+},t=>[index('planning_cost_links_org_idx').on(t.organisationId),index('planning_cost_links_scenario_idx').on(t.organisationId,t.scenarioId),uniqueIndex('planning_cost_links_uq').on(t.scenarioId,t.costItemId,t.activityId)]);
+// Layout only: moving a box never changes a business revision.
+export const planningCanvasPositions=mysqlTable('planning_canvas_positions',{
+ id:id(),organisationId:org(),scenarioId:planningRef('scenario_id').notNull(),activityId:planningRef('activity_id').notNull(),x:int('x').notNull(),y:int('y').notNull(),
+},t=>[index('planning_canvas_positions_org_idx').on(t.organisationId),index('planning_canvas_positions_scenario_idx').on(t.organisationId,t.scenarioId),uniqueIndex('planning_canvas_positions_uq').on(t.scenarioId,t.activityId)]);

@@ -410,6 +410,23 @@ try{
  dialogs.length=0;
  await gp.goForward();await settle();
  check('nav guard (after reload): Forward onto the Work map is clean',dialogs.length===0&&onTab('workmap')&&(await pts())==='(gone)');
+ // L. push after Back replaces the forward branch: Work map → Overview → Documents, Back to Overview, Work map (new branch), draw, Back, cancel.
+ // The new entry sits next to Overview, so cancelling must step the browser back by exactly one entry.
+ await openMapPN();await tabBtn('Overview').click();await settle();await tabBtn('Documents').click();await settle();
+ dialogs.length=0;dialogMode='dismiss';
+ await gp.goBack();await settle();
+ check('nav guard (forward branch replaced): Back from Documents to Overview is clean',onTab('overview')&&dialogs.length===0);
+ await tabBtn('Work map').click();await settle();await gp.waitForSelector('[data-testid="work-map"]');
+ await square();
+ await gp.goBack();await settle();
+ check('nav guard (forward branch replaced): Back with an unsaved drawing asks first',dialogs.length===1,`dialogs=${dialogs.length}`);
+ check('nav guard (forward branch replaced): cancelling Back keeps URL, screen and drawing',onTab('workmap')&&(await pts()).startsWith('4')&&await active('Work map'),`${gp.url().split('#')[1]} pts=${await pts()}`);
+ dialogMode='accept';
+ await gp.goBack();await settle();
+ check('nav guard (forward branch replaced): confirming Back lands on Overview and discards the draft',onTab('overview')&&await gp.getByTestId('work-map').count()===0,gp.url().split('#')[1]);
+ dialogs.length=0;
+ await gp.goForward();await settle();
+ check('nav guard (forward branch replaced): Forward onto the new Work map entry is clean',dialogs.length===0&&onTab('workmap')&&(await pts())==='(gone)');
  // J. an entry this app did not stamp (manual hash edit): cancel restores the URL, confirm navigates
  await tabBtn('Work map').click();await settle();await gp.waitForSelector('[data-testid="work-map"]');
  await square(40);dialogs.length=0;dialogMode='dismiss';

@@ -9,7 +9,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { WorkspaceBrandProvider } from "@/components/workspace-brand";
 import { useSession, Tabs } from "@/components/v1/kit";
-import { entryIndex, moveBetween, stampState } from "@/lib/v1/nav-history";
+import { createNavController, type HistoryPort, type NavController } from "@/lib/v1/nav-history";
 import { NavContext, confirmLeave, parseRoute, routeHash, useNav, type Route } from "@/components/v1/nav";
 import { OfflineProvider } from "@/components/v1/offline";
 import { FIELD_SHELL_ROLES } from "@/lib/v1/navigation";
@@ -83,53 +83,33 @@ const sameScreen = (a: string, b: string) => routeHash(resolveRoute(parseRoute(a
 
 function useRoute(): [Route, (area: string, sub?: string, id?: string, tab?: string) => void] {
   const [route, setRoute] = useState<Route>({ area: "Home" });
-  // Where the visible screen sits in the browser's history (see lib/v1/nav-history.ts): the stamped position of its entry (null
-  // when unknown), the highest position seen (new entries always go above it) and the hash on screen. A Back/Forward the user
-  // cancels because of unsaved work is undone by the exact distance it moved, so the URL always matches the visible screen.
-  const trail = useRef<{ idx: number | null; max: number; hash: string }>({ idx: 0, max: 0, hash: "" });
+  // The unsaved-work guard and the history model live in lib/v1/nav-history.ts (pure, tested against a simulated browser);
+  // this only wires them to window.history and React state.
+  const controller = useRef<NavController | null>(null);
   useEffect(() => {
-    const known = entryIndex(window.history.state);
-    if (known === null) window.history.replaceState(stampState(window.history.state, 0), "");
-    trail.current = { idx: known ?? 0, max: known ?? 0, hash: window.location.hash };
-    const restore = () => {
-      const hash = window.location.hash;
-      if (hash === "#main-content") return;
-      const t = trail.current;
-      if (!sameScreen(hash, t.hash)) {
-        if (!confirmLeave()) {
-          // Stay on this screen. With a known position the browser is stepped back by exactly the distance it moved; for an
-          // entry this app did not stamp (a manual hash edit, an old entry) the distance is unknown, so the URL is rewritten.
-          const moved = moveBetween(t.idx, window.history.state);
-          if (moved !== null) window.history.go(-moved);
-          else window.history.replaceState(window.history.state, "", t.hash || window.location.pathname + window.location.search);
-          return;
-        }
-        t.hash = hash;
-      }
-      t.idx = entryIndex(window.history.state);
-      if (t.idx !== null) t.max = Math.max(t.max, t.idx);
-      setRoute(resolveRoute(parseRoute(hash)));
+    const port: HistoryPort = {
+      state: () => window.history.state,
+      hash: () => window.location.hash,
+      push: (state, hash) => window.history.pushState(state, "", hash),
+      replace: (state, hash) => window.history.replaceState(state, "", hash === undefined ? undefined : hash || window.location.pathname + window.location.search),
+      go: delta => window.history.go(delta),
     };
-    restore();
-    window.addEventListener("hashchange", restore);
-    return () => window.removeEventListener("hashchange", restore);
+    const makeId = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
+    const c = createNavController(port, { confirmLeave, sameScreen, makeId, show: hash => setRoute(resolveRoute(parseRoute(hash))) });
+    controller.current = c;
+    c.mount();
+    const onHash = () => c.onHashChange(), onPop = () => c.onPopState();
+    window.addEventListener("hashchange", onHash);
+    window.addEventListener("popstate", onPop);
+    return () => { window.removeEventListener("hashchange", onHash); window.removeEventListener("popstate", onPop); controller.current = null; };
   }, []);
   const navigate = useCallback((area: string, sub?: string, id?: string, tab?: string) => {
     // Older area names (engines, Operations/…) are translated so every link lands in the current structure.
     const next = resolveRoute({ area, sub, id, tab });
-    const hash = routeHash(next);
-    const t = trail.current;
-    // Moving to another place may drop unsaved work: ask first. Re-selecting the current place is not leaving.
-    if (!sameScreen(hash, t.hash) && !confirmLeave()) return;
-    setRoute(next);
-    if (window.location.hash !== hash) {
-      const idx = t.max + 1;
-      window.history.pushState(stampState(window.history.state, idx), "", hash);
-      t.idx = idx;
-      t.max = idx;
-      t.hash = hash;
-    }
-    window.scrollTo({ top: 0 });
+    const c = controller.current;
+    // Moving to another place may drop unsaved work: the controller asks first. Re-selecting the current place is not leaving.
+    if (!c) { setRoute(next); return; }
+    if (c.navigate(routeHash(next))) window.scrollTo({ top: 0 });
   }, []);
   return [route, navigate];
 }

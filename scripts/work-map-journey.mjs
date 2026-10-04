@@ -368,6 +368,56 @@ try{
  dialogs.length=0;
  await gp.goForward();await settle();
  check('nav guard: Forward onto the Work map is clean (no prompt, no stale draft)',dialogs.length===0&&onTab('workmap')&&(await pts())==='(gone)');
+ // I. repeated routes: Work map → Overview → Work map → Overview, Back to the second Work map, draw, Forward, cancel.
+ // The two Overview (and two Work map) entries have identical hashes, so the direction of a traversal cannot be read from the URL.
+ await openMapPN();
+ await gp.evaluate(()=>{window.__navMarker='same-document';});
+ const frameworkKeys=await gp.evaluate(()=>Object.keys(history.state||{}).filter(k=>k!=='infrastructNavIdx'));
+ await tabBtn('Overview').click();await settle();await tabBtn('Work map').click();await settle();await tabBtn('Overview').click();await settle();
+ dialogs.length=0;dialogMode='dismiss';writes.length=0;
+ await gp.goBack();await settle();
+ check('nav guard (repeated routes): Back to the second Work map is clean (no prompt)',dialogs.length===0&&onTab('workmap')&&(await pts())==='(gone)',`dialogs=${dialogs.length}`);
+ await square();
+ await gp.goForward();await settle();
+ check('nav guard (repeated routes): Forward with an unsaved drawing asks first',dialogs.length===1,`dialogs=${dialogs.length}`);
+ check('nav guard (repeated routes): cancelling Forward keeps the URL on the Work map and the drawing',onTab('workmap')&&(await pts()).startsWith('4')&&await active('Work map'),gp.url().split('#')[1]);
+ dialogMode='accept';
+ await gp.goBack();await settle();
+ check('nav guard (repeated routes): after a cancelled Forward the browser really is on the second Work map (Back reaches the first Overview)',onTab('overview')&&await gp.getByTestId('work-map').count()===0&&dialogs.length===2,`${gp.url().split('#')[1]} dialogs=${dialogs.length}`);
+ dialogs.length=0;
+ await gp.goForward();await settle();
+ check('nav guard (repeated routes): Forward back onto the Work map is clean after a discard',dialogs.length===0&&onTab('workmap')&&(await pts())==='(gone)');
+ await square();dialogMode='dismiss';
+ await gp.goForward();await settle();
+ check('nav guard (repeated routes): Forward cancel is repeatable',dialogs.length===1&&onTab('workmap')&&(await pts()).startsWith('4'));
+ await gp.goBack();await settle();
+ check('nav guard (repeated routes): Back cancel from the same entry keeps URL, screen and drawing',dialogs.length===2&&onTab('workmap')&&(await pts()).startsWith('4'),`dialogs=${dialogs.length}`);
+ dialogMode='accept';
+ await gp.goForward();await settle();
+ check('nav guard (repeated routes): confirming Forward discards and lands on the last Overview',onTab('overview')&&await gp.getByTestId('work-map').count()===0&&writes.length===0,`${gp.url().split('#')[1]} writes=${writes.length}`);
+ check('nav guard: no full page reload during any traversal (same document, same JS)',(await gp.evaluate(()=>window.__navMarker))==='same-document');
+ const keysNow=await gp.evaluate(()=>Object.keys(history.state||{}));
+ check('nav guard: history entries keep the framework-owned state fields (Next __NA and router tree)',frameworkKeys.includes('__NA')&&frameworkKeys.every(k=>keysNow.includes(k)),`initial=${frameworkKeys.join(',')} now=${keysNow.join(',')}`);
+ // K. a reload in the middle of the history: the browser keeps each entry's state, so positions (and exact cancellation) survive it
+ await openMapPN();await tabBtn('Overview').click();await settle();await tabBtn('Work map').click();await settle();
+ await gp.reload();await gp.waitForSelector('[data-testid="work-map"]');
+ await square();dialogs.length=0;dialogMode='dismiss';
+ await gp.goBack();await settle();
+ check('nav guard (after reload): Back with an unsaved drawing asks; cancel keeps URL, screen and drawing',dialogs.length===1&&onTab('workmap')&&(await pts()).startsWith('4'),`dialogs=${dialogs.length} ${gp.url().split('#')[1]}`);
+ dialogMode='accept';
+ await gp.goBack();await settle();
+ check('nav guard (after reload): confirming Back lands on the previous entry',onTab('overview')&&await gp.getByTestId('work-map').count()===0);
+ dialogs.length=0;
+ await gp.goForward();await settle();
+ check('nav guard (after reload): Forward onto the Work map is clean',dialogs.length===0&&onTab('workmap')&&(await pts())==='(gone)');
+ // J. an entry this app did not stamp (manual hash edit): cancel restores the URL, confirm navigates
+ await tabBtn('Work map').click();await settle();await gp.waitForSelector('[data-testid="work-map"]');
+ await square(40);dialogs.length=0;dialogMode='dismiss';
+ await gp.evaluate(h=>{location.hash=h;},`#Projects//${PN}/overview`);await settle();
+ check('nav guard (unstamped entry): a manual hash change asks first; cancel restores URL, screen and drawing',dialogs.length===1&&onTab('workmap')&&(await pts()).startsWith('4'),`dialogs=${dialogs.length} ${gp.url().split('#')[1]}`);
+ dialogMode='accept';
+ await gp.evaluate(h=>{location.hash=h;},`#Projects//${PN}/overview`);await settle();
+ check('nav guard (unstamped entry): confirming navigates',onTab('overview')&&await gp.getByTestId('work-map').count()===0);
  // H. closed project: unchanged behaviour, no editor, no prompt
  const PC=await mkProject(a,'Nav guard closed');await db.execute("UPDATE jobs SET stage='closed',status='Closed' WHERE id=?",[PC]);
  await gp.goto(base+`/#Projects//${PC}/workmap`);await gp.reload();await gp.waitForSelector('[data-testid="workmap-closed"]');dialogs.length=0;

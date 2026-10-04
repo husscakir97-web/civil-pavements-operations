@@ -9,7 +9,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { WorkspaceBrandProvider } from "@/components/workspace-brand";
 import { useSession, Tabs } from "@/components/v1/kit";
-import { historyOffset } from "@/lib/v1/nav-history";
+import { entryIndex, moveBetween, stampState } from "@/lib/v1/nav-history";
 import { NavContext, confirmLeave, parseRoute, routeHash, useNav, type Route } from "@/components/v1/nav";
 import { OfflineProvider } from "@/components/v1/offline";
 import { FIELD_SHELL_ROLES } from "@/lib/v1/navigation";
@@ -83,26 +83,31 @@ const sameScreen = (a: string, b: string) => routeHash(resolveRoute(parseRoute(a
 
 function useRoute(): [Route, (area: string, sub?: string, id?: string, tab?: string) => void] {
   const [route, setRoute] = useState<Route>({ area: "Home" });
-  // The history entries this page load has seen and the one on screen, so a Back/Forward the user cancels (unsaved work)
-  // can be undone and the URL always matches the visible screen.
-  const trail = useRef({ stack: [""], at: 0 });
+  // Where the visible screen sits in the browser's history (see lib/v1/nav-history.ts): the stamped position of its entry (null
+  // when unknown), the highest position seen (new entries always go above it) and the hash on screen. A Back/Forward the user
+  // cancels because of unsaved work is undone by the exact distance it moved, so the URL always matches the visible screen.
+  const trail = useRef<{ idx: number | null; max: number; hash: string }>({ idx: 0, max: 0, hash: "" });
   useEffect(() => {
-    trail.current = { stack: [window.location.hash], at: 0 };
+    const known = entryIndex(window.history.state);
+    if (known === null) window.history.replaceState(stampState(window.history.state, 0), "");
+    trail.current = { idx: known ?? 0, max: known ?? 0, hash: window.location.hash };
     const restore = () => {
       const hash = window.location.hash;
       if (hash === "#main-content") return;
       const t = trail.current;
-      if (!sameScreen(hash, t.stack[t.at])) {
-        const offset = historyOffset(t.stack, t.at, hash);
+      if (!sameScreen(hash, t.hash)) {
         if (!confirmLeave()) {
-          // Stay on this screen: step the browser back to where it was (or, for an entry we cannot place, rewrite the URL).
-          if (offset !== 0) window.history.go(-offset);
-          else window.history.replaceState(window.history.state, "", t.stack[t.at] || window.location.pathname + window.location.search);
+          // Stay on this screen. With a known position the browser is stepped back by exactly the distance it moved; for an
+          // entry this app did not stamp (a manual hash edit, an old entry) the distance is unknown, so the URL is rewritten.
+          const moved = moveBetween(t.idx, window.history.state);
+          if (moved !== null) window.history.go(-moved);
+          else window.history.replaceState(window.history.state, "", t.hash || window.location.pathname + window.location.search);
           return;
         }
-        if (offset !== 0) t.at += offset;
-        else { t.stack = [...t.stack.slice(0, t.at + 1), hash]; t.at += 1; }
+        t.hash = hash;
       }
+      t.idx = entryIndex(window.history.state);
+      if (t.idx !== null) t.max = Math.max(t.max, t.idx);
       setRoute(resolveRoute(parseRoute(hash)));
     };
     restore();
@@ -115,12 +120,14 @@ function useRoute(): [Route, (area: string, sub?: string, id?: string, tab?: str
     const hash = routeHash(next);
     const t = trail.current;
     // Moving to another place may drop unsaved work: ask first. Re-selecting the current place is not leaving.
-    if (!sameScreen(hash, t.stack[t.at]) && !confirmLeave()) return;
+    if (!sameScreen(hash, t.hash) && !confirmLeave()) return;
     setRoute(next);
     if (window.location.hash !== hash) {
-      window.history.pushState(null, "", hash);
-      t.stack = [...t.stack.slice(0, t.at + 1), hash];
-      t.at += 1;
+      const idx = t.max + 1;
+      window.history.pushState(stampState(window.history.state, idx), "", hash);
+      t.idx = idx;
+      t.max = idx;
+      t.hash = hash;
     }
     window.scrollTo({ top: 0 });
   }, []);

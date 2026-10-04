@@ -21,8 +21,9 @@ export const workAreaFields={
  contractorLabel:text(160),sequence:z.number().int().min(1).max(999).nullish().transform(v=>v??null),notes:text(L.maxNotesLength),
  ring:z.array(pointSchema).max(L.maxVertices+1),
 };
-export const createInput=z.object({projectId:z.string().min(1).max(191),...workAreaFields});
-export const updateInput=z.object({id:z.string().min(1).max(191),revision:z.number().int(),archive:z.boolean().optional(),name:workAreaFields.name.optional(),kind:workAreaFields.kind.optional(),discipline:workAreaFields.discipline.optional(),delivery:workAreaFields.delivery.optional(),contractorLabel:workAreaFields.contractorLabel.optional(),sequence:workAreaFields.sequence.optional(),notes:workAreaFields.notes.optional(),ring:workAreaFields.ring.optional()});
+// Strict on purpose: a caller (a person's browser today, a draft generator later) cannot choose id, status, revision or tenant — unknown keys are refused, not ignored.
+export const createInput=z.object({projectId:z.string().min(1).max(191),...workAreaFields}).strict();
+export const updateInput=z.object({id:z.string().min(1).max(191),revision:z.number().int(),archive:z.boolean().optional(),name:workAreaFields.name.optional(),kind:workAreaFields.kind.optional(),discipline:workAreaFields.discipline.optional(),delivery:workAreaFields.delivery.optional(),contractorLabel:workAreaFields.contractorLabel.optional(),sequence:workAreaFields.sequence.optional(),notes:workAreaFields.notes.optional(),ring:workAreaFields.ring.optional()}).strict();
 
 function ringOf(raw:unknown):LatLng[]{try{const v=JSON.parse(String(raw));return Array.isArray(v)?v:[];}catch{return [];}}
 export const presentWorkArea=(r:Row):WorkAreaView=>({id:r.id,projectId:r.project_id,name:r.name,kind:r.kind,discipline:r.discipline,delivery:r.delivery,contractorLabel:r.contractor_label??null,sequence:r.sequence==null?null:Number(r.sequence),notes:r.notes??null,ring:ringOf(r.geometry),areaM2:Number(r.area_m2),status:r.status==='archived'?'archived':'active',revision:Number(r.revision),createdAt:r.created_at,updatedAt:r.updated_at,archivedAt:r.archived_at??null,demo:isDemoName(String(r.name))});

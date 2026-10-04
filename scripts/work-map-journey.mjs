@@ -65,6 +65,13 @@ try{
  r=await a('/api/projects/work-areas','POST',{projectId:PA,...valid('Own crew',{delivery:'own',contractorLabel:'Ignored',ring:ring(40,{x:120,y:0})})});
  check('contractor label is dropped for own-crew work',r.status===201&&r.body.area.contractorLabel===null);
 
+ // ------------------------------------------------------------------ write contract (also the contract any future draft generator must meet)
+ r=await a('/api/projects/work-areas','POST',{projectId:PA,...valid('Chosen id',{ring:ring(25,{x:0,y:-200})}),id:'caller-chosen-id'});
+ check('caller cannot choose the id (unknown key refused 400)',r.status===400);
+ for(const k of [{status:'archived'},{revision:9},{organisationId:B.org},{createdBy:'someone'},{source:'ai'}]){const x=await a('/api/projects/work-areas','POST',{projectId:PA,...valid('Extra '+Object.keys(k)[0],{ring:ring(25,{x:0,y:-200})}),...k});check(`unknown field refused, nothing written: ${Object.keys(k)[0]}`,x.status===400,String(x.status));}
+ const [[extra]]=await db.query("SELECT COUNT(*) n FROM project_work_areas WHERE project_id=? AND (name LIKE 'Extra %' OR name='Chosen id')",[PA]);check('refused contract violations wrote no rows',Number(extra.n)===0);
+ check('server-generated ids are uuids and the stored row is active at revision 1',/^[0-9a-f-]{36}$/.test(areaA.id)&&row.status==='active'&&Number(row.revision)===1);
+ r=await a('/api/projects/work-areas','PATCH',{id:areaA.id,revision:1,status:'active'});check('update cannot set status either (400)',r.status===400);
  // ------------------------------------------------------------------ invalid geometry
  const bad=async(label,over,codes=[422,400])=>{const x=await a('/api/projects/work-areas','POST',{projectId:PA,...valid('Bad '+label,over)});check(`invalid geometry refused: ${label}`,codes.includes(x.status),`${x.status} ${JSON.stringify(x.body).slice(0,90)}`);};
  await bad('bow-tie',{ring:[[0,0],[40,40],[40,0],[0,40]].map(([x,y])=>ring(1)[0]&&({lat:PIN.lat+y/111194.9,lng:PIN.lng+x/92400}))});
@@ -93,7 +100,7 @@ try{
  check('stale write left the record untouched',after.name==='Stage A (rev)'&&Number(after.revision)===2);
  r=await a('/api/projects/work-areas','PATCH',{id:areaA.id,revision:2,ring:[{lat:1,lng:1},{lat:1,lng:2}]});
  check('invalid geometry on update refused 422',r.status===422);
- r=await a('/api/projects/work-areas','PATCH',{id:areaA.id,revision:2,projectId:PB,name:'Stage A (rev)'});
+ r=await a('/api/projects/work-areas','PATCH',{id:areaA.id,revision:2,projectId:PB,name:'Stage A (rev)'});check('moving an area to another project is refused (400)',r.status===400);
  const [[still]]=await db.query('SELECT project_id FROM project_work_areas WHERE id=?',[areaA.id]);
  check('an area can never be moved to another project',still.project_id===PA);
  const [[locAfter]]=await db.query('SELECT pin_lat,pin_lng,revision FROM locations WHERE id=?',[locBefore.id]);

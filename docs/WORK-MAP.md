@@ -15,7 +15,7 @@ Save/Cancel, and reopen the same saved geometry. It does not depend on the compa
 | HTTP handler | `app/api/projects/work-areas/route.ts` (`GET`, `POST`, `PATCH`) |
 | Editor | `components/v1/work-map.tsx`, shown as the **Work map** tab of a project |
 | Table | `project_work_areas` — migration `0027_project_work_areas.sql`, `db/schema-v1.ts` |
-| Tests | `scripts/test-work-areas.cjs` (in `npm test`), `scripts/work-map-journey.mjs` (`npm run test:work-map`) |
+| Tests | `scripts/test-work-areas.cjs` (in `npm test`), `scripts/test-work-areas-migration.mjs` (runs inside `test:migration-recovery`), `scripts/work-map-journey.mjs` (`npm run test:work-map`) |
 | Demo fixture | `scripts/seed-work-map-demo.mjs` (`npm run seed:work-map-demo`) |
 
 The `jobs` record **is** the project; no second project entity was introduced. The module is `projects`
@@ -72,3 +72,28 @@ pin behaviour in `components/v1/location.tsx` are unchanged (the tab only *shows
 `DEMO …`: two stages (stabilisation, asphalt), an asphalt intersection patch, two **subcontracted** traffic-control
 areas, and a compound. It uses fixed ids and `INSERT IGNORE`, so repeating it changes nothing; `--reset` restores the
 original shapes. It refuses to run unless the database name ends in `_test` and the host/URL are local.
+
+## Contract for future AI-generated drafts (nothing AI is built here)
+
+No AI call, key, billing or autonomous write exists in this feature. The contract below is what a later, separately
+approved slice could rely on without changing the work-area model:
+
+* **Stable ids.** The server generates every id (uuid). Callers cannot choose `id`, `status`, `revision`, tenant or creator: both request schemas are `.strict()`, so an unknown key is refused with 400 rather than silently ignored. An update never changes the id; archiving keeps it.
+* **One geometry gate.** `validateRing` (pure, isomorphic, `lib/v1/work-areas.ts`) is the only way geometry reaches storage; both write paths go through it, and a person's browser and any generator are held to the same bounds.
+* **Exported, typed schemas.** `createInput` / `updateInput` in `lib/modules/projects/work-areas.ts` are the validated service contract.
+* **Human-owned today.** Every area is written `active` by a person holding `project.edit`, and audited with that person.
+* **What an AI slice must add first (CLAUDE.md §7).** Today there is no `suggested`/`draft` status, no `source_reference`, confidence or extraction time, and no state machine refusing `suggested → active` without a human capability. These need an additive migration and an approval transition; until then a generator must not write to this table.
+
+## Adding the Work map to the existing full demo company
+
+The complete demo company is the seed on PR 64 (`chatgpt/demo-company-seed`: `scripts/seed-demo-company.mjs`, `scripts/demo/*`, `docs/DEMO-COMPANY.md`). It is not on `main`, and `scripts/seed-work-map-demo.mjs` here is a standalone fixture, not a second company seed. **Minimal integration point:** one new stage in `scripts/demo/stages.mjs`, `['workmap', workMapStage]` in `STAGES`, placed **before** `['close', closeStage]` (the closed project B2 refuses writes). It would:
+
+1. for each demo project (B1 active, B2 closed later, B3 setup), set a project location pin through the already-allowed `PATCH /api/projects/workspace` (none of the `crm`, `pipeline` or `projects` stages sets a location, so the demo projects have no pin or inherited site pin);
+2. `GET /api/projects/work-areas`, then `POST` any missing `DEMO – …` area. The natural key is the area name, because active names are unique per project, so the stage is idempotent like the others;
+3. reuse the shapes and `polyArea`/projection helpers from `scripts/seed-work-map-demo.mjs` (move them into `scripts/demo/workmap.mjs`).
+
+**Blockers, deliberately not changed here** (the task excludes changing the hosted importer):
+* The importer's write guard (`scripts/demo/import-guards.mjs`) allows only listed routes. `POST /api/projects/work-areas` is not listed.
+* `docs/DEMO-IMPORT-FOOTPRINT.json`, the `import-footprint.mjs` table spec (`project_work_areas` as a derived table with `project` as parent) and `DEMO-COMPANY-MANIFEST.json` would need the new table and counts; `test:import-demo` and `test:import-review` assert them.
+* PR 64 is stacked on PR 63's branch and still open; this branch is on `main`. Both change `package.json` scripts, so expect a trivial merge there. Migration 0027 is already on this branch; no open PR adds a competing 0027.
+* Hosted full-company demo loading is unfinished: PR 64's apply refuses anything except a local `_test` database.

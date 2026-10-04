@@ -5,8 +5,10 @@ import * as schema from '@/db/auth-schema';
 import {getPool} from './database';
 import {sendEmail,isEmailEnabled} from './email';
 import {provisionOrganisation} from './provision';
+import {assertStagingSafe,stagingSignupDecision,stagingActive} from './staging';
 let auth:ReturnType<typeof createAuth>|undefined;
 function createAuth(){
+ assertStagingSafe();// no-op unless STAGING_DEMO_MODE=true; then refuses to start unless the environment is the allow-listed one
  if(!process.env.BETTER_AUTH_SECRET||process.env.BETTER_AUTH_SECRET.length<32)throw new Error('BETTER_AUTH_SECRET must contain at least 32 random characters');
  if(!process.env.BETTER_AUTH_URL)throw new Error('Missing BETTER_AUTH_URL');
  return betterAuth({appName:'Infrastruct',baseURL:process.env.BETTER_AUTH_URL,secret:process.env.BETTER_AUTH_SECRET,
@@ -15,7 +17,7 @@ function createAuth(){
  emailAndPassword:{enabled:true,requireEmailVerification:isEmailEnabled(),minPasswordLength:12,revokeSessionsOnPasswordReset:true,sendResetPassword:async({user,url})=>sendEmail(user.email,'Reset your password',`Reset your password: ${url}`)},
  emailVerification:{sendOnSignUp:isEmailEnabled(),sendOnSignIn:isEmailEnabled(),autoSignInAfterVerification:true,sendVerificationEmail:async({user,url})=>sendEmail(user.email,'Verify your email',`Verify your email address: ${url}`)},
  session:{expiresIn:60*60*24*7,updateAge:60*60*24,cookieCache:{enabled:false}},
- databaseHooks:{user:{create:{after:provisionOrganisation}}}
+ databaseHooks:{user:{create:{before:async user=>{if(!stagingActive())return;const [rows]=await getPool().query('SELECT COUNT(*) AS n FROM auth_user') as unknown as [{n:number}[]];if(!stagingSignupDecision(String(user.email||''),Number(rows[0]?.n||0)).allowed)return false;},after:provisionOrganisation}}}
  });
 }
 export function getAuth(){return auth??=createAuth();}

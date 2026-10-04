@@ -363,7 +363,7 @@
   },
   "shifts": {
    "kind": "direct",
-   "expected": 15,
+   "expected": 17,
    "byKey": {
     "Final wearing course and linemarking — Quarry Road": 1,
     "Night traffic control — motorway lane closure 1": 1,
@@ -376,6 +376,8 @@
     "Profiling Anzac Parade — night 2": 1,
     "Profiling Anzac Parade — night 3": 1,
     "Profiling Quarry Road — stage 1": 1,
+    "Stabilisation Quarry Road — chainage 0–800": 1,
+    "Stabilisation Quarry Road — chainage 800–1600": 1,
     "TEST — Expired qualification": 1,
     "TEST — Unavailable plant": 1,
     "TEST CLASH — Profiling carpark enquiry": 1,
@@ -385,7 +387,7 @@
   "shift_assignments": {
    "kind": "derived",
    "parent": "shift",
-   "expected": 127,
+   "expected": 139,
    "byKey": {
     "Final wearing course and linemarking — Quarry Road": 10,
     "Night traffic control — motorway lane closure 1": 6,
@@ -398,6 +400,8 @@
     "Profiling Anzac Parade — night 2": 9,
     "Profiling Anzac Parade — night 3": 9,
     "Profiling Quarry Road — stage 1": 8,
+    "Stabilisation Quarry Road — chainage 0–800": 6,
+    "Stabilisation Quarry Road — chainage 800–1600": 6,
     "TEST — Expired qualification": 3,
     "TEST — Unavailable plant": 4,
     "TEST CLASH — Profiling carpark enquiry": 3,
@@ -572,6 +576,58 @@
    "byKey": {
     "DEMO-P01": 1
    }
+  },
+  "project_work_areas": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 20,
+   "byKey": {
+    "DEMO-T-001": 12,
+    "DEMO-T-002": 4,
+    "DEMO-T-003": 4
+   }
+  },
+  "project_work_points": {
+   "kind": "derived",
+   "parent": "project",
+   "expected": 3,
+   "byKey": {
+    "DEMO-T-001": 1,
+    "DEMO-T-002": 1,
+    "DEMO-T-003": 1
+   }
+  },
+  "shift_work_areas": {
+   "kind": "derived",
+   "parent": "shift",
+   "expected": 27,
+   "byKey": {
+    "Final wearing course and linemarking — Quarry Road": 3,
+    "Night traffic control — motorway lane closure 1": 2,
+    "Night traffic control — motorway lane closure 2": 2,
+    "Paving Quarry Road — chainage 0–800": 2,
+    "Paving Quarry Road — chainage 1600–2400": 2,
+    "Paving Quarry Road — chainage 2400–3200": 2,
+    "Paving Quarry Road — chainage 800–1600": 2,
+    "Profiling Anzac Parade — night 1": 2,
+    "Profiling Anzac Parade — night 2": 2,
+    "Profiling Anzac Parade — night 3": 2,
+    "Profiling Quarry Road — stage 1": 2,
+    "Stabilisation Quarry Road — chainage 0–800": 2,
+    "Stabilisation Quarry Road — chainage 800–1600": 2
+   }
+  },
+  "locations": {
+   "kind": "derived",
+   "parent": "client|project",
+   "expected": 5,
+   "byKey": {
+    "DEMO-C1": 1,
+    "DEMO-C2": 1,
+    "DEMO-C4": 1,
+    "DEMO-T-002": 1,
+    "DEMO-T-003": 1
+   }
   }
  },
  "bootstrapRowsIfMissing": {
@@ -580,8 +636,8 @@
   "rate_libraries": 1
  },
  "bookkeepingRowsApproximate": {
-  "audit_log": 308,
-  "audit_events": 62,
+  "audit_log": 350,
+  "audit_events": 64,
   "domain_events": 14
  },
  "attachmentsAndFiles": 0

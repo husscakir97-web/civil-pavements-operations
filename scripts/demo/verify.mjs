@@ -1,6 +1,6 @@
 // Read-only verification of the seeded demo company: counts, relationships, totals, test conditions and tenant isolation.
 // Returns the dataset manifest. Throws (non-zero exit) when anything is off.
-const EXPECT={divisions:3,workers:14,competencies:29,plant:12,crews:3,suppliers:2,subcontractors:2,clients:4,sites:6,contacts:6,opportunities:11,tenders:8,estimates:7,projects:3,users:6,shifts:15,dockets:8,claims:4,invoices:2,incidents:2,ncrs:1,actions:3,workshopOrders:3,programme:7,plans:1,scenarios:3};
+const EXPECT={divisions:3,workers:14,competencies:29,plant:12,crews:3,suppliers:2,subcontractors:2,clients:4,sites:6,contacts:6,opportunities:11,tenders:8,estimates:7,projects:3,users:6,shifts:17,workAreas:20,workPoints:3,shiftAreaLinks:27,locations:5,dockets:8,claims:4,invoices:2,incidents:2,ncrs:1,actions:3,workshopOrders:3,programme:7,plans:1,scenarios:3};
 
 export async function verify(c){
  const {one,all,org,call,d,log,db}=c;
@@ -37,6 +37,10 @@ export async function verify(c){
   actions:await n("SELECT COUNT(*) n FROM hseq_actions WHERE organisation_id=?"),
   workshopOrders:await n("SELECT COUNT(*) n FROM workshop_orders WHERE organisation_id=?"),
   serviceEvents:await n("SELECT COUNT(*) n FROM asset_service_events WHERE organisation_id=?"),
+  workAreas:await n("SELECT COUNT(*) n FROM project_work_areas WHERE organisation_id=?"),
+  workPoints:await n("SELECT COUNT(*) n FROM project_work_points WHERE organisation_id=?"),
+  shiftAreaLinks:await n("SELECT COUNT(*) n FROM shift_work_areas WHERE organisation_id=?"),
+  locations:await n("SELECT COUNT(*) n FROM locations WHERE organisation_id=?"),
   programme:await n("SELECT COUNT(*) n FROM program_activities WHERE organisation_id=?"),
   plans:await n("SELECT COUNT(*) n FROM planning_plans WHERE organisation_id=?"),
   scenarios:await n("SELECT COUNT(*) n FROM planning_scenarios WHERE organisation_id=?"),
@@ -91,6 +95,17 @@ export async function verify(c){
  check('Planning: three scenarios saved; the base and night totals are known, the pending-quote scenario is unknown',loaded.length===3&&loaded[0].result.cost.total!==null&&loaded[1].result.cost.total!==null&&loaded[2].result.cost.total===null,loaded.map(l=>l.result.cost.total).join(' / '));
  check('Planning: parallel join (programme path = longest predecessor, not the sum) and a shared cost counted once',loaded[0].result.activities[loaded[0].document.activities.find(a=>a.name.startsWith('Tack')).id].start===Math.max(...['Profile existing wearing course','Install signage and delineation'].map(nm=>loaded[0].result.activities[loaded[0].document.activities.find(a=>a.name===nm).id].finish))&&loaded[0].result.cost.sharedCosts.find(s=>/Mobilisation/.test(s.label)).usedBy.length===2);
  check('Planning: night works is slower and costs more than the base scenario',loaded[1].result.duration.days>loaded[0].result.duration.days&&loaded[1].result.cost.total>loaded[0].result.cost.total,`${loaded[0].result.duration.days}d $${loaded[0].result.cost.total} vs ${loaded[1].result.duration.days}d $${loaded[1].result.cost.total}`);
+ // work map: synthetic pins, confirmed work points, shared areas, linked shifts
+ const mapProjects={};for(const key of ['B1','B2','B3'])mapProjects[key]=(await call('/api/projects/work-areas?projectId='+c.ids['project:'+key]+'&archived=1')).body;
+ const allAreas=Object.values(mapProjects).flatMap(m=>m.areas);
+ check('Work map: asphalt, stabilisation and traffic management areas all exist, every one marked DEMO',['asphalt','stabilisation','traffic_management'].every(k=>allAreas.some(a=>a.discipline===k))&&allAreas.every(a=>/^DEMO –/.test(a.name)),String(allAreas.length));
+ check('Work map: own-crew and subcontracted areas exist, and every subcontracted area names its subcontractor',allAreas.some(a=>a.delivery==='own')&&allAreas.some(a=>a.delivery==='subcontracted')&&allAreas.filter(a=>a.delivery==='subcontracted').every(a=>a.contractorLabel));
+ check('Work map: one archived area is kept, hidden by default and never deleted',allAreas.filter(a=>a.status==='archived').length===1&&(await call('/api/projects/work-areas?projectId='+c.ids['project:B1'])).body.areas.every(a=>a.status==='active'));
+ check('Work map: B1 inherits the client site location and its work point is confirmed',mapProjects.B1.workPoint.status==='confirmed'&&mapProjects.B1.workPoint.source==='site',JSON.stringify([mapProjects.B1.workPoint.status,mapProjects.B1.workPoint.source]));
+ check('Work map: B2 holds its own project pin (the site pin is not changed) and its work point is confirmed',mapProjects.B2.workPoint.status==='confirmed'&&mapProjects.B2.workPoint.source==='project'&&await n("SELECT COUNT(*) n FROM client_sites s JOIN locations l ON l.id=s.location_id WHERE s.organisation_id=? AND s.name='Anzac Parade' AND ABS(l.pin_lat-(-33.2305))<0.00001 AND ABS(l.pin_lng-149.0702)<0.00001")===1);
+ check('Work map: B3 location moved away from its confirmed work point is flagged for review while the areas stay where they were drawn',mapProjects.B3.workPoint.status==='moved'&&Math.abs(mapProjects.B3.workPoint.distanceM-450)<5&&mapProjects.B3.areas.length===4,JSON.stringify([mapProjects.B3.workPoint.status,mapProjects.B3.workPoint.distanceM]));
+ check('Work map: every shift link points at a work area of the shift\'s own project (no copied geometry, no cross-project link)',await n("SELECT COUNT(*) n FROM shift_work_areas l JOIN shifts s ON s.id=l.shift_id JOIN project_work_areas a ON a.id=l.work_area_id WHERE l.organisation_id=? AND (a.project_id<>s.project_id OR l.project_id<>s.project_id OR a.organisation_id<>l.organisation_id)")===0);
+ check('Work map: linked shifts cover asphalt, stabilisation, traffic management and subcontracted work',await n("SELECT COUNT(DISTINCT a.discipline) n FROM shift_work_areas l JOIN project_work_areas a ON a.id=l.work_area_id WHERE l.organisation_id=?")>=3&&await n("SELECT COUNT(*) n FROM shift_work_areas l JOIN project_work_areas a ON a.id=l.work_area_id WHERE l.organisation_id=? AND a.delivery='subcontracted'")>=1);
  // isolation
  const orphan=await n("SELECT COUNT(*) n FROM planning_activities a JOIN planning_scenarios s ON s.id=a.scenario_id WHERE a.organisation_id=? AND s.organisation_id<>a.organisation_id");
  const crossShift=await n("SELECT COUNT(*) n FROM shifts s JOIN jobs j ON j.id=s.project_id WHERE s.organisation_id=? AND j.organisation_id<>s.organisation_id");

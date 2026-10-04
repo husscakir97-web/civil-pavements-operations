@@ -8,6 +8,7 @@ import {Archive,Crosshair,Maximize2,Minus,PenLine,Plus,Redo2,Trash2,Undo2} from 
 import {api,useApi,useAction,Btn,Field,field,Section,Pill,EmptyState,ErrorState,Loading} from './kit';
 import {LocationSummary} from './location';
 import {useNavGuard} from './nav';
+import {WorkPointPanel} from './work-point';
 import {DELIVERY_LABEL,DISCIPLINE_COLOUR,DISCIPLINE_LABEL,KIND_LABEL,WORK_AREA_DELIVERY,WORK_AREA_DISCIPLINES,WORK_AREA_KINDS,WORK_AREA_LIMITS,fromLocal,toLocal,validateRing,type WorkAreaDelivery,type WorkAreaDiscipline,type WorkAreaKind,type WorkAreaView,type WorkMapView,type Xy} from '@/lib/v1/work-areas';
 import {EMPTY_PARTS,type LatLng} from '@/lib/v1/location';
 
@@ -21,10 +22,10 @@ const niceStep=(m:number)=>{const p=10**Math.floor(Math.log10(m)),f=m/p;return (
 const fmtArea=(m2:number)=>m2>=10000?`${(m2/10000).toFixed(2)} ha`:`${Math.round(m2).toLocaleString('en-AU')} m²`;
 const fmtLen=(m:number)=>m>=1000?`${m/1000} km`:`${m} m`;
 
-export function WorkMap({projectId}:{projectId:string}){
+export function WorkMap({projectId,focusId}:{projectId:string;focusId?:string}){
  const [showArchived,setShowArchived]=useState(false);
  const res=useApi<WorkMapView>(`/api/projects/work-areas?projectId=${encodeURIComponent(projectId)}${showArchived?'&archived=1':''}`);
- const [selected,setSelected]=useState<string|null>(null);
+ const [selected,setSelected]=useState<string|null>(focusId??null);
  const [edit,setEdit]=useState<Edit|null>(null);
  const act=useAction();
  const data=res.data;
@@ -59,11 +60,12 @@ export function WorkMap({projectId}:{projectId:string}){
   <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900" role="note"><strong>Operational work-area overview.</strong> Not an approved traffic management plan, survey or design. Drawn on a plain grid anchored to the project pin; no aerial imagery is used.</div>
   {data.closed&&<p role="status" className="rounded-lg border bg-slate-50 p-3 text-sm text-slate-700" data-testid="workmap-closed">This project is closed. The work map is read-only.</p>}
   {!data.closed&&!data.canEdit&&<p role="status" className="rounded-lg border bg-slate-50 p-3 text-sm text-slate-700">You can view the work map. Editing needs permission to edit projects.</p>}
+  <WorkPointPanel data={data} onChanged={res.refresh}/>
   <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
    <Section title="Work map" description={data.pin?undefined:'This project has no location pin yet. Set the project location in Setup to anchor the map.'} actions={<div className="flex flex-wrap items-center gap-2">
      {data.canEdit&&!edit&&<Btn onClick={startDraw} disabled={!canDraw} data-testid="draw-start"><PenLine aria-hidden className="size-4"/>Draw area</Btn>}
      <label className="flex min-h-11 items-center gap-2 text-xs text-slate-600"><input type="checkbox" className="size-4" checked={showArchived} disabled={Boolean(edit)} onChange={e=>setShowArchived(e.target.checked)}/>Show archived</label></div>}>
-    <Canvas data={data} edit={edit} selected={selected} onSelect={setSelected} setRing={setRing} onFinish={()=>setEdit(e=>e&&{...e,drawing:false,sel:null})} showArchived={showArchived}/>
+    <Canvas data={data} confirmed={data.workPoint.status==='moved'?data.workPoint.confirmed?.point??null:null} edit={edit} selected={selected} onSelect={setSelected} setRing={setRing} onFinish={()=>setEdit(e=>e&&{...e,drawing:false,sel:null})} showArchived={showArchived}/>
     <Legend/>
     {data.pin&&<div className="mt-3 border-t pt-3"><LocationSummary label="Project address pin (not edited here)" location={{...EMPTY_PARTS,pin:data.pin,formattedAddress:data.address}}/></div>}
    </Section>
@@ -127,7 +129,7 @@ function EditPanel({edit,patchForm,setRing,setEdit,ringValid,busy,error,conflict
 }
 
 // ---------------------------------------------------------------- canvas
-function Canvas({data,edit,selected,onSelect,setRing,onFinish,showArchived}:{data:WorkMapView;edit:Edit|null;selected:string|null;onSelect:(id:string|null)=>void;setRing:(r:LatLng[],sel?:number|null)=>void;onFinish:()=>void;showArchived:boolean}){
+function Canvas({data,confirmed,edit,selected,onSelect,setRing,onFinish,showArchived}:{data:WorkMapView;confirmed:LatLng|null;edit:Edit|null;selected:string|null;onSelect:(id:string|null)=>void;setRing:(r:LatLng[],sel?:number|null)=>void;onFinish:()=>void;showArchived:boolean}){
  const box=useRef<HTMLDivElement>(null),[size,setSize]=useState({w:600,h:420}),[measured,setMeasured]=useState(false);
  useEffect(()=>{const el=box.current;if(!el)return;const ro=new ResizeObserver(([e])=>{setSize({w:Math.max(200,Math.round(e.contentRect.width)),h:Math.round(e.contentRect.width<640?340:440)});setMeasured(true);});ro.observe(el);return()=>ro.disconnect();},[]);
  // Local metric origin: the project pin, else the first area. Fixed for the life of the canvas so panning never shifts shapes.
@@ -236,6 +238,7 @@ function Canvas({data,edit,selected,onSelect,setRing,onFinish,showArchived}:{dat
      <circle cx={q.x} cy={q.y} r={edit.sel===i?9:7} fill={edit.sel===i?'#f59e0b':i===0?'#16a34a':'#fff'} stroke={col} strokeWidth={2.5} data-vertex={i} pointerEvents="none"/>
     </g>)}
    </g>}
+   {confirmed&&(()=>{const q=toPx(confirmed);return <g pointerEvents="none" data-testid="confirmed-point"><circle cx={q.x} cy={q.y} r={10} fill="none" stroke="#1d4ed8" strokeWidth={2} strokeDasharray="4 3"/><text x={q.x+12} y={q.y+14} fontSize={11} fill="#1e3a8a" stroke="#fff" strokeWidth={3} paintOrder="stroke">Confirmed work point</text></g>;})()}
    {pinPx&&<g pointerEvents="none" data-testid="project-pin"><circle cx={pinPx.x} cy={pinPx.y} r={9} fill="#dc2626" fillOpacity={0.25}/><circle cx={pinPx.x} cy={pinPx.y} r={4.5} fill="#dc2626" stroke="#fff" strokeWidth={1.5}/><text x={pinPx.x+10} y={pinPx.y-8} fontSize={11} fill="#7f1d1d" stroke="#fff" strokeWidth={3} paintOrder="stroke">Project pin</text></g>}
    <g pointerEvents="none"><line x1={12} x2={12+barPx} y1={size.h-14} y2={size.h-14} stroke="#0f172a" strokeWidth={3}/><text x={12} y={size.h-20} fontSize={11} fill="#0f172a" stroke="#fff" strokeWidth={3} paintOrder="stroke">{fmtLen(barM)}</text>
     <text x={size.w-18} y={22} fontSize={13} fontWeight={700} fill="#0f172a" textAnchor="middle" stroke="#fff" strokeWidth={3} paintOrder="stroke">N</text><path d={`M${size.w-18},28 l-5,12 l5,-3 l5,3 z`} fill="#0f172a"/></g>

@@ -37,6 +37,7 @@
     "test:backfill": "node --env-file-if-exists=.env scripts/test-resource-backfill.mjs && node --env-file-if-exists=.env scripts/test-document-backfill.mjs && node --env-file-if-exists=.env scripts/test-business-unit-backfill.mjs",
     "knowledge:import-platform": "node --env-file-if-exists=.env scripts/import-platform-knowledge.mjs",
     "test:work-map": "node --env-file-if-exists=.env scripts/work-map-journey.mjs",
+    "test:connected-workmap": "node --env-file-if-exists=.env scripts/connected-workmap-journey.mjs",
     "seed:work-map-demo": "node --env-file-if-exists=.env scripts/seed-work-map-demo.mjs"
   },
   "dependencies": {

@@ -8,7 +8,7 @@ import {audit} from '@/lib/platform/audit';
 import {fail} from '@/lib/platform/http';
 import {query,one,exec,tx,nowIso,uuid,type Row,type Conn} from '@/lib/platform/sql';
 import {loadProject,projectLocations,stageOf} from './projects';
-import {validateRing,isDemoName,WORK_AREA_KINDS,WORK_AREA_DISCIPLINES,WORK_AREA_DELIVERY,WORK_AREA_LIMITS,WORK_MAP_DISCLAIMER,type WorkAreaView,type WorkMapView} from '@/lib/v1/work-areas';
+import {validateRing,isDemoName,workPointStatus,WORK_POINT_TOLERANCE_M,WORK_AREA_KINDS,WORK_AREA_DISCIPLINES,WORK_AREA_DELIVERY,WORK_AREA_LIMITS,WORK_MAP_DISCLAIMER,type WorkAreaView,type WorkMapView} from '@/lib/v1/work-areas';
 import type {LatLng} from '@/lib/v1/location';
 
 const actor=()=>actorContext.getStore()!;
@@ -42,8 +42,34 @@ const stale=()=>fail(409,'This work area was changed by someone else. Reload to 
 export async function getWorkMap(projectId:string,includeArchived=false):Promise<WorkMapView>{
  const p=await loadProject(projectId),org=actor().organisationId;
  const rows=await query(`SELECT * FROM project_work_areas WHERE organisation_id=? AND project_id=?${includeArchived?'':" AND status='active'"} ORDER BY (status='archived'),COALESCE(sequence,9999),created_at,id`,[org,projectId]);
- const loc=(await projectLocations([p]))(p).location;
- return {projectId,projectName:p.name,projectNumber:p.project_number??null,stage:stageOf(p),closed:stageOf(p)==='closed',canEdit:can(actor().role,'project.edit')&&stageOf(p)!=='closed',pin:loc?.pin??null,address:loc?.formattedAddress??null,areas:rows.map(presentWorkArea),limits:L,disclaimer:WORK_MAP_DISCLAIMER};
+ const where=(await projectLocations([p]))(p),loc=where.location,pin=loc?.pin??null;
+ const wp=await one('SELECT * FROM project_work_points WHERE organisation_id=? AND project_id=?',[org,projectId]);
+ const confirmedPoint=wp?{lat:Number(wp.lat),lng:Number(wp.lng)}:null,st=workPointStatus(pin,confirmedPoint);
+ const by=wp?.confirmed_by?await one<{name:string}>('SELECT name FROM users WHERE organisation_id=? AND id=?',[org,wp.confirmed_by]):null;
+ return {projectId,projectName:p.name,projectNumber:p.project_number??null,projectRevision:Number(p.revision||1),stage:stageOf(p),closed:stageOf(p)==='closed',canEdit:can(actor().role,'project.edit')&&stageOf(p)!=='closed',pin,address:loc?.formattedAddress??null,
+  workPoint:{status:st.status,source:(where.locationSource as 'project'|'site'|null)??null,label:loc?.formattedAddress??loc?.label??null,current:pin,confirmed:wp&&confirmedPoint?{point:confirmedPoint,source:String(wp.source),confirmedAt:String(wp.confirmed_at),confirmedBy:by?.name??null}:null,distanceM:st.distanceM,toleranceM:WORK_POINT_TOLERANCE_M},
+  areas:rows.map(presentWorkArea),limits:L,disclaimer:WORK_MAP_DISCLAIMER};
+}
+
+/**
+ * Confirms the project's CURRENT effective location (its own override, else the client site's) as the work point the shared work
+ * areas are read against. Saved polygons are never moved or edited by this; it only records what was confirmed, so a later change of
+ * address or pin is flagged for review instead of passing silently. Needs project.edit and an open project; audited.
+ */
+export async function confirmWorkPoint(projectId:string){
+ const a=actor();
+ await tx(async conn=>{
+  const p=await loadProject(projectId,conn,true);assertEditable(p);
+  const where=(await projectLocations([p],conn))(p),pin=where.location?.pin;
+  if(!pin)fail(422,'Set the project location (search an address or enter coordinates) before confirming the work point.');
+  const cur=await one('SELECT * FROM project_work_points WHERE organisation_id=? AND project_id=? FOR UPDATE',[a.organisationId,projectId],conn),now=nowIso();
+  const source=where.locationSource||'project',locationId=where.location?.id??null;
+  let id=cur?.id as string|undefined;
+  if(cur)await exec('UPDATE project_work_points SET lat=?,lng=?,source=?,location_id=?,revision=revision+1,confirmed_by=?,confirmed_at=?,updated_at=? WHERE organisation_id=? AND id=?',[pin.lat,pin.lng,source,locationId,a.userId,now,now,a.organisationId,cur.id],conn);
+  else{id=uuid();await exec('INSERT INTO project_work_points (id,organisation_id,project_id,lat,lng,source,location_id,revision,confirmed_by,confirmed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',[id,a.organisationId,projectId,pin.lat,pin.lng,source,locationId,1,a.userId,now,now,now],conn);}
+  await audit({event:'workmap.work_point_confirmed',entityType:'project_work_point',entityId:id!,projectId,summary:`Work point confirmed (${source} location) at ${pin.lat.toFixed(6)}, ${pin.lng.toFixed(6)}`,before:cur?{lat:Number(cur.lat),lng:Number(cur.lng),source:cur.source}:null,after:{lat:pin.lat,lng:pin.lng,source,locationId}},conn);
+ });
+ return getWorkMap(projectId);
 }
 
 const columns=(v:ReturnType<typeof geometry>&{ok:true})=>({geometry:JSON.stringify(v.ring),vertex_count:v.ring.length,area_m2:v.areaM2,min_lat:v.bbox.minLat,max_lat:v.bbox.maxLat,min_lng:v.bbox.minLng,max_lng:v.bbox.maxLng});

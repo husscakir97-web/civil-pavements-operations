@@ -28,7 +28,8 @@ The seed refuses (exit 2, nothing changed, no database connection opened for env
 | CRM | 4 clients, 6 sites, 6 contacts |
 | Pipeline | 3 leads/qualified opportunities, 8 tenders (awarded ×3, submitted, internal approval, pricing ×2, lost), 7 estimates (draft, in review, approved) |
 | Projects | 3 (PRJ-0001 Quarry Road *active*, PRJ-0002 Anzac Parade *closed*, PRJ-0003 Night TC *setup*) with baselines, team, risks, SWMS, ITPs, readiness/closeout, programme (7 activities with saved costing assumptions) |
-| Resourcing | 15 shifts, 127 resource allocations (completed, in progress, planned, draft) |
+| Resourcing | 17 shifts, 139 resource allocations (completed, in progress, planned, draft) |
+| Work map | 3 synthetic site pins (client sites) and 1 project override, 3 confirmed work points (one deliberately **moved** by 450 m), 20 work areas (asphalt, stabilisation, traffic management — own crew and subcontracted, one archived), 27 shift-to-area links. All names start `DEMO –`; pins are synthetic points in a fictional shire. Operational markup only, not a traffic management plan. |
 | Money | 8 dockets, 6 posted actual-cost rows, 4 claims (paid ×2, submitted, internal approval), 2 invoices (retention and GST applied by the platform) |
 | Safety & quality | 3 workshop orders (critical defect with safety hold, 2 repairs awaiting independent verification), 3 service events/plans, 2 incidents, 1 NCR, 3 corrective actions |
 | Planning | 1 plan linked to the approved estimate and project, 3 scenarios (base, night works, subcontract profiling), 21 activities, 21 dependencies, 6 shared costs |

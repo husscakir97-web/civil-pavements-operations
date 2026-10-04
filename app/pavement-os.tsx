@@ -81,7 +81,7 @@ export function PavementOS() {
 // Two URL spellings of the same screen (#Projects//id/tab and #Projects/Projects/id/tab) must compare equal.
 const sameScreen = (a: string, b: string) => routeHash(resolveRoute(parseRoute(a))) === routeHash(resolveRoute(parseRoute(b)));
 
-function useRoute(): [Route, (area: string, sub?: string, id?: string, tab?: string) => void] {
+function useRoute(): [Route, (area: string, sub?: string, id?: string, tab?: string, focus?: string) => void] {
   const [route, setRoute] = useState<Route>({ area: "Home" });
   // The unsaved-work guard and the history model live in lib/v1/nav-history.ts (pure, tested against a simulated browser);
   // this only wires them to window.history and React state.
@@ -103,9 +103,9 @@ function useRoute(): [Route, (area: string, sub?: string, id?: string, tab?: str
     window.addEventListener("popstate", onPop);
     return () => { window.removeEventListener("hashchange", onHash); window.removeEventListener("popstate", onPop); controller.current = null; };
   }, []);
-  const navigate = useCallback((area: string, sub?: string, id?: string, tab?: string) => {
+  const navigate = useCallback((area: string, sub?: string, id?: string, tab?: string, focus?: string) => {
     // Older area names (engines, Operations/…) are translated so every link lands in the current structure.
-    const next = resolveRoute({ area, sub, id, tab });
+    const next = resolveRoute({ area, sub, id, tab, focus });
     const c = controller.current;
     // Moving to another place may drop unsaved work: the controller asks first. Re-selecting the current place is not leaving.
     if (!c) { setRoute(next); return; }

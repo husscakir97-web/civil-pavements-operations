@@ -97,6 +97,16 @@ export const SPEC={
  workshop_orders:{kind:'derived',parent:'plant',rows:via('workshop_orders','asset_id','plant')},
  workshop_entries:{kind:'derived',parent:'order',rows:via('workshop_entries','order_id','order')},
  client_requests:{kind:'derived',parent:'plant',rows:via('client_requests','entity_id','plant')},
+ // Work map (synthetic pins, work points, shared areas, shift references). A location row hangs from a demo client (site pins) or a demo project.
+ project_work_areas:{kind:'derived',parent:'project',rows:via('project_work_areas','project_id','project')},
+ project_work_points:{kind:'derived',parent:'project',rows:via('project_work_points','project_id','project')},
+ shift_work_areas:{kind:'derived',parent:'shift',rows:via('shift_work_areas','shift_id','shift')},
+ locations:{kind:'derived',parent:'client|project',rows:async(q,org,P)=>{
+  const clients=[...P.client.keys()],pids=[...P.project.keys()];
+  const sites=await q(`SELECT l.id,s.client_id c FROM locations l JOIN client_sites s ON s.id=l.owner_id AND s.organisation_id=l.organisation_id WHERE l.organisation_id=? AND l.owner_type='client_site' AND s.client_id IN (${list(clients)})`,[org,...clients]);
+  const projects=await q(`SELECT l.id,l.owner_id p FROM locations l WHERE l.organisation_id=? AND l.owner_type='project' AND l.owner_id IN (${list(pids)})`,[org,...pids]);
+  return [...sites.map(r=>P.client.get(r.c)),...projects.map(r=>P.project.get(r.p))];
+ }},
 };
 
 const tally=keys=>{const o={};for(const k of keys)o[k]=(o[k]||0)+1;return Object.fromEntries(Object.entries(o).sort(([a],[b])=>a.localeCompare(b)));};

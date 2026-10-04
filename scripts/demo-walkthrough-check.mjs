@@ -8,7 +8,7 @@ import {mkdirSync,writeFileSync} from 'node:fs';
 const require=createRequire(import.meta.url);
 const base=process.env.BASE_URL||'http://localhost:3191',OUT=process.argv[2]||'/tmp/demo-walkthrough';
 if(!/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(base))throw new Error('BASE_URL must be a local test app');
-const email=process.env.DEMO_SEED_EMAIL,password=process.env.DEMO_SEED_PASSWORD,SEED=process.env.SEED_DATE||'2026-10-05';
+const email=process.env.DEMO_SEED_EMAIL,password=process.env.DEMO_SEED_PASSWORD,SEED=process.env.SEED_DATE||new Date().toISOString().slice(0,10);
 if(!email||!password)throw new Error('Set DEMO_SEED_EMAIL and DEMO_SEED_PASSWORD');
 mkdirSync(OUT,{recursive:true});
 const loadPlaywright=()=>{for(const p of [process.env.PLAYWRIGHT_MODULE,'playwright','/opt/node22/lib/node_modules/playwright'].filter(Boolean)){try{return require(p);}catch{/* next */}}throw new Error('Playwright is not available: set PLAYWRIGHT_MODULE');};

@@ -7,6 +7,8 @@ const crew=(...keys)=>keys.map(k=>['workers',W[k]]);
 const kit=(...keys)=>keys.map(k=>['plant',P[k]]);
 
 // [name, project(B1|B2|B3), dayOffset, start, finish, status, workers, plant, requiredCompetencies, activity, notes]
+import {NEW_SHIFTS} from './workmap.mjs';
+const WORKMAP_SHIFTS=NEW_SHIFTS.map(([name,proj,day,start,finish,status,workers,plant,required,activity,notes])=>[name,proj,day,start,finish,status,[...crew(...workers)],[...kit(...plant)],required,activity,notes]);
 export const SHIFTS=[
  ['Profiling Quarry Road — stage 1','B1',-21,'06:00','15:00','Completed',[...crew('karl','leah','sam','mia','liam')],[...kit('profiler','water','vms')],'Construction Induction (White Card)','Profiling','Completed; 4,200 m2 profiled.'],
  ['Paving Quarry Road — chainage 0–800','B1',-14,'06:00','16:00','Completed',[...crew('dan','tom','priya','ben','jess','mia','liam')],[...kit('paver','roller3','roller8','tipA','tipB','vms','ute')],'Construction Induction (White Card)','Paving','Completed.'],
@@ -24,6 +26,8 @@ export const SHIFTS=[
  ['TEST CLASH — Profiling carpark enquiry','B1',4,'07:00','14:00','Draft',[...crew('karl','leah')],[...kit('profiler')],'Construction Induction (White Card)','Profiling','TEST: resource clash (double-booked worker and plant with the shift above).'],
  ['TEST — Unavailable plant','B1',6,'06:00','15:00','Draft',[...crew('dan','tom')],[...kit('profiler2','tip6')],'Construction Induction (White Card)','Profiling','TEST: plant P02 has a safety hold and P12 has expired registration.'],
  ['TEST — Expired qualification','B1',6,'06:00','15:00','Draft',[...crew('sofia','mia')],[...kit('vms')],'Traffic Controller (TC)','Traffic control','TEST: Sofia Marchetti’s Traffic Controller (TC) qualification expired 30 days before the seed date.'],
+ // ---- Work map demo shifts (stabilisation; linked to shared work areas in scripts/demo/workmap.mjs) ----
+ ...WORKMAP_SHIFTS,
 ];
 
 export async function shiftsStage(c){

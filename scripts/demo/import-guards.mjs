@@ -17,6 +17,8 @@ const MUTATIONS=[
  ['POST','/api/registers/incidents'],['PATCH','/api/registers/incidents'],['POST','/api/registers/ncrs'],['PATCH','/api/registers/ncrs'],['POST','/api/registers/actions'],['PATCH','/api/registers/actions'],
  ['POST','/api/operations/resources'],['POST','/api/os/records'],['POST','/api/delivery'],['POST','/api/workshop'],['PUT','/api/dockets'],['POST','/api/dockets'],
  ['POST','/api/commercial/claims'],['POST','/api/planning'],
+ // Work map: confirm a project's work point, draw/archive shared work areas, and reference them from scheduled shifts.
+ ['POST','/api/projects/work-point'],['POST','/api/projects/work-areas'],['PATCH','/api/projects/work-areas'],['POST','/api/delivery/work-areas'],
 ];
 const OS_MODULES=new Set(['crews','suppliers','subcontractors']);
 const DIVISION_CODES=new Set(DIVISIONS.map(d=>d[0]));

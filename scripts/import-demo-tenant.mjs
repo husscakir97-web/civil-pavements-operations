@@ -29,7 +29,7 @@ import {verifyImport} from './demo/import-verify.mjs';
 const arg=(name,fallback)=>{const i=process.argv.indexOf(name);return i>=0?process.argv[i+1]:fallback;};
 const flag=name=>process.argv.includes(name);
 const org=arg('--organisation-id');
-const SEED_DATE=arg('--seed-date','2026-10-05');
+const SEED_DATE=arg('--seed-date',new Date().toISOString().slice(0,10));  // the current date unless given
 const apply=flag('--apply');
 if(!org||org.startsWith('--')){console.error('Usage: --organisation-id <id> [--seed-date YYYY-MM-DD] [--out plan.json]   (dry run)\n       --organisation-id <id> --apply --plan-hash <hash> --baseline <file>   (test environments only)');process.exit(2);}
 if(!/^\d{4}-\d{2}-\d{2}$/.test(SEED_DATE)||Number.isNaN(Date.parse(SEED_DATE))){console.error('--seed-date must be a valid YYYY-MM-DD date');process.exit(2);}

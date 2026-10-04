@@ -12,10 +12,10 @@ const base=process.env.MYSQL_DATABASE,suffix=randomUUID().slice(0,8),names={fres
 const admin=await connect(),opened=[],dbs=[];
 const NAME='0027_project_work_areas.sql';
 const files=readdirSync('migrations/mysql').filter(f=>f.endsWith('.sql')).sort();
-assert(files.includes(NAME),'0027 exists');assert.equal(files.at(-1),NAME,'0027 is the newest migration');
+assert(files.includes(NAME),'0027 exists');const later=files.filter(f=>f>NAME);// migrations added after 0027 (0028…): "main" for this test is everything before 0027
 // A copy of the runner pointed at the pre-0027 migration set (what main has today).
 const old=mkdtempSync(join(tmpdir(),'wa-main-'));mkdirSync(join(old,'migrations'));cpSync('scripts',join(old,'scripts'),{recursive:true});cpSync('migrations/mysql',join(old,'migrations/mysql'),{recursive:true});
-rmSync(join(old,'migrations/mysql',NAME));for(const d of ['node_modules','lib','db'])symlinkSync(join(process.cwd(),d),join(old,d));// the backfills read shared lib files
+for(const f of [NAME,...later])rmSync(join(old,'migrations/mysql',f));for(const d of ['node_modules','lib','db'])symlinkSync(join(process.cwd(),d),join(old,d));// the backfills read shared lib files
 const migrate=(database,script='scripts/migrate.mjs',cwd=process.cwd())=>{const r=spawnSync(process.execPath,[script],{cwd,env:{...process.env,MYSQL_DATABASE:database},encoding:'utf8',timeout:240000});assert.equal(r.status,0,r.stdout+'\n'+r.stderr+'\n'+String(r.error||''));return r.stdout;};
 const open=async n=>{await admin.query('CREATE DATABASE '+identifier(n)+' CHARACTER SET utf8mb4 COLLATE utf8mb4_bin');opened.push(n);process.env.MYSQL_DATABASE=n;try{const d=await connect();dbs.push(d);return d;}finally{process.env.MYSQL_DATABASE=base;}};
 const COLS={id:'varchar(191)',organisation_id:'varchar(191)',project_id:'varchar(191)',name:'varchar(160)',kind:'varchar(20)',discipline:'varchar(30)',delivery:'varchar(20)',contractor_label:'varchar(160)',sequence:'int',notes:'text',geometry:'longtext',vertex_count:'int',area_m2:'double',min_lat:'decimal(10,7)',max_lat:'decimal(10,7)',min_lng:'decimal(10,7)',max_lng:'decimal(10,7)',status:'varchar(20)',revision:'int',created_by:'varchar(191)',updated_by:'varchar(191)',created_at:'varchar(40)',updated_at:'varchar(40)',archived_at:'varchar(40)',archived_by:'varchar(191)'};
@@ -40,18 +40,18 @@ try{
  // ---------------------------------------------------------------- upgrade from current main
  const up=await open(names.upgrade);
  const first=migrate(names.upgrade,'scripts/migrate.mjs',old);
- assert(!first.includes(NAME),'baseline is main (no 0027)');assert.equal((first.match(/Applied /g)||[]).length,files.length-1,'main set applied');
+ assert(!first.includes(NAME),'baseline is main (no 0027)');assert.equal((first.match(/Applied /g)||[]).length,files.length-1-later.length,'main set applied');
  const [[pre]]=await up.query("SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='project_work_areas'");assert.equal(Number(pre.n),0);
  const t='2026-01-01T00:00:00.000Z';
  await up.query("INSERT INTO jobs (id,organisation_id,name,status,metadata,created_at) VALUES ('job-main','org-main','Existing project','Planning','{}',?)",[t]);
  await up.query("INSERT INTO audit_log (id,organisation_id,event_type,entity_type,entity_id,project_id,summary,created_at) VALUES ('audit-main','org-main','project.created','project','job-main','job-main','before upgrade',?)",[t]);
  const [[before]]=await up.query('SELECT COUNT(*) migrations FROM app_migrations');
  const second=migrate(names.upgrade);
- assert.equal((second.match(/Applied /g)||[]).length,1);assert(second.includes('Applied '+NAME),'upgrade from main applies only 0027');
+ assert.equal((second.match(/Applied /g)||[]).length,1+later.length);assert(second.includes('Applied '+NAME),'upgrade from main applies 0027 (then any later migration)');
  await checkShape(up,'upgrade');
  const [[job]]=await up.query("SELECT name FROM jobs WHERE id='job-main'");assert.equal(job.name,'Existing project','existing project data survives');
  const [[aud]]=await up.query("SELECT summary FROM audit_log WHERE id='audit-main'");assert.equal(aud.summary,'before upgrade');
- const [[after]]=await up.query('SELECT COUNT(*) migrations FROM app_migrations');assert.equal(Number(after.migrations),Number(before.migrations)+1);
+ const [[after]]=await up.query('SELECT COUNT(*) migrations FROM app_migrations');assert.equal(Number(after.migrations),Number(before.migrations)+1+later.length);
  const [[empty]]=await up.query('SELECT COUNT(*) n FROM project_work_areas');assert.equal(Number(empty.n),0,'new table starts empty: nothing is backfilled or invented');
  // the new table is usable with real values (decimal(10,7) keeps 7 dp, defaults apply)
  await up.query("INSERT INTO project_work_areas (id,organisation_id,project_id,name,geometry,vertex_count,area_m2,min_lat,max_lat,min_lng,max_lng,created_at,updated_at) VALUES ('wa1','org-main','job-main','Stage 1','[]',3,10.5,-33.7960123,-33.7959,150.9050123,150.9051,?,?)",[t,t]);

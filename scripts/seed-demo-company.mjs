@@ -14,7 +14,7 @@ import {connect} from './mysql-config.mjs';
 import {STAGES,hydrate} from './demo/stages.mjs';
 
 const arg=(name,fallback)=>{const i=process.argv.indexOf(name);return i>=0?process.argv[i+1]:fallback;};
-export const SEED_DATE=arg('--seed-date','2026-10-05');
+export const SEED_DATE=arg('--seed-date',new Date().toISOString().slice(0,10));  // the current date unless --seed-date is given
 if(!/^\d{4}-\d{2}-\d{2}$/.test(SEED_DATE)||Number.isNaN(Date.parse(SEED_DATE)))throw new Error('--seed-date must be a valid YYYY-MM-DD date');
 const base=arg('--base-url');
 const only=arg('--only');

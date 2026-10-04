@@ -1009,3 +1009,18 @@ export const projectWorkAreas=mysqlTable('project_work_areas',{
  createdBy:varchar('created_by',{length:191}),updatedBy:varchar('updated_by',{length:191}),createdAt:varchar('created_at',{length:40}).notNull(),updatedAt:varchar('updated_at',{length:40}).notNull(),
  archivedAt:varchar('archived_at',{length:40}),archivedBy:varchar('archived_by',{length:191}),
 },t=>[index('project_work_areas_org_idx').on(t.organisationId),index('project_work_areas_project_idx').on(t.organisationId,t.projectId,t.status)]);
+
+// ---------------------------------------------------------------- Work point and shift links (migration 0028)
+// The point a project's work areas were confirmed against (never moves a polygon: it only lets a changed address or pin be flagged),
+// and the typed link from a scheduled shift to the shared project work-area ids (geometry is never copied).
+export const projectWorkPoints=mysqlTable('project_work_points',{
+ id:id(),organisationId:org(),projectId:varchar('project_id',{length:191}).notNull(),
+ lat:decimal('lat',{precision:10,scale:7}).notNull(),lng:decimal('lng',{precision:10,scale:7}).notNull(),
+ source:varchar('source',{length:20}).notNull().default('project'),locationId:varchar('location_id',{length:191}),
+ revision:int('revision').notNull().default(1),confirmedBy:varchar('confirmed_by',{length:191}),confirmedAt:varchar('confirmed_at',{length:40}).notNull(),
+ createdAt:varchar('created_at',{length:40}).notNull(),updatedAt:varchar('updated_at',{length:40}).notNull(),
+},t=>[index('project_work_points_org_idx').on(t.organisationId),uniqueIndex('project_work_points_project_uq').on(t.organisationId,t.projectId)]);
+export const shiftWorkAreas=mysqlTable('shift_work_areas',{
+ id:id(),organisationId:org(),shiftId:varchar('shift_id',{length:191}).notNull(),workAreaId:varchar('work_area_id',{length:191}).notNull(),projectId:varchar('project_id',{length:191}).notNull(),
+ createdBy:varchar('created_by',{length:191}),createdAt:varchar('created_at',{length:40}).notNull(),
+},t=>[index('shift_work_areas_org_idx').on(t.organisationId),index('shift_work_areas_area_idx').on(t.organisationId,t.workAreaId),uniqueIndex('shift_work_areas_pair_uq').on(t.organisationId,t.shiftId,t.workAreaId)]);

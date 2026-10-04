@@ -32,7 +32,7 @@ type Detail={project:Project;readiness:{percent:number|null;blockers:string[];ca
 export function ProjectsView(){
  const {route,navigate}=useNav();
  const area=route.area==='Deliver Work'?'Deliver Work':'Prepare Work';
- if(route.id)return <ProjectWorkspace id={route.id} tab={route.tab} area={area} onBack={()=>navigate(area,'Projects')}/>;
+ if(route.id)return <ProjectWorkspace id={route.id} tab={route.tab} focus={route.focus} area={area} onBack={()=>navigate(area,'Projects')}/>;
  return <ProjectRegister area={area}/>;
 }
 
@@ -83,7 +83,7 @@ function NewProjectForm({onDone}:{onDone:(id?:string)=>void}){
 
 type TabKey='overview'|'setup'|'programme'|'workmap'|'delivery'|'communication'|'quality'|'commercial'|'documents'|'closeout';
 const TAB_LABEL:Record<TabKey,string>={overview:'Overview',setup:'Setup',programme:'Programme',workmap:'Work map',delivery:'Delivery',communication:'Communication',quality:'Quality & HSEQ',commercial:'Commercial',documents:'Documents',closeout:'Closeout'};
-function ProjectWorkspace({id,tab,area,onBack}:{id:string;tab?:string;area:'Prepare Work'|'Deliver Work';onBack:()=>void}){
+function ProjectWorkspace({id,tab,focus,area,onBack}:{id:string;tab?:string;focus?:string;area:'Prepare Work'|'Deliver Work';onBack:()=>void}){
  const {navigate}=useNav();const session=useSession();const {busy,error:actionError,run}=useAction();
  const active=(tab||'overview') as TabKey;
  const [checklistFocus,setChecklistFocus]=useState<string|null>(null);
@@ -124,7 +124,7 @@ function ProjectWorkspace({id,tab,area,onBack}:{id:string;tab?:string;area:'Prep
   <label className="sticky top-[72px] z-10 -mx-4 mb-4 grid gap-1 border-b bg-[#f6f7f9]/95 px-4 pb-3 pt-2 text-sm backdrop-blur sm:hidden"><span className="truncate text-xs font-semibold uppercase tracking-wide text-slate-500">{p.name} · section</span><select aria-label="Project section" className={`${field} font-semibold`} value={active} onChange={e=>navigate(area,'Projects',id,e.target.value)}>{tabs.filter(t=>!t.hidden).map(t=><option key={t.key} value={t.key}>{t.label}{t.key==='setup'&&p.stage==='setup'&&d.readiness.blockers.length?` · ${d.readiness.blockers.length} blocker${d.readiness.blockers.length===1?'':'s'}`:''}</option>)}</select></label>
   <div className="hidden sm:block"><Tabs label="Project workspace" tabs={tabs} active={active} onChange={k=>navigate(area,'Projects',id,k)}/></div>
   {active==='overview'&&<Overview d={d} onTab={k=>navigate(area,'Projects',id,k)} goTarget={goTarget}/>}
-  {active==='workmap'&&<WorkMap projectId={id}/>}
+  {active==='workmap'&&<WorkMap key={`${id}:${focus||''}`} projectId={id} focusId={focus}/>}
   {active==='setup'&&<Setup d={d} onChanged={refresh} goTarget={goTarget} focus={checklistFocus} setFocus={setChecklistFocus}/>}
   {active==='programme'&&<ProgrammePanel projectId={id}/>}
    {active==='communication'&&<CommunicationPanel contextType="project" contextId={id} title="Project communication"/>}

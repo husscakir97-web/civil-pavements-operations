@@ -77,8 +77,24 @@ export function validateRing(input:unknown):RingResult{
  return {ok:true,ring:pts,areaM2:Math.round(area*10)/10,spanM:Math.round(span),bbox:{minLat:Math.min(...lats),maxLat:Math.max(...lats),minLng:Math.min(...lngs),maxLng:Math.max(...lngs)},centroid:roundPoint(c)};
 }
 
+// ---------------------------------------------------------------- work point
+// The work point is the saved site/project location a person has explicitly confirmed as where the work happens. Polygons are stored in
+// absolute coordinates and never follow the address or pin; if the effective location later moves away from the confirmed point the
+// work map flags it for review instead of silently shifting (or trusting) the saved shapes.
+export const WORK_POINT_TOLERANCE_M=5;
+export type WorkPointStatus='none'|'unconfirmed'|'confirmed'|'moved';
+export type WorkPointView={status:WorkPointStatus;/** where the project's location comes from */source:'project'|'site'|null;label:string|null;current:LatLng|null;confirmed:{point:LatLng;source:string;confirmedAt:string;confirmedBy:string|null}|null;distanceM:number|null;toleranceM:number};
+export const distanceMetres=(a:LatLng,b:LatLng)=>{const q=toLocal(b,a);return Math.round(Math.hypot(q.x,q.y)*10)/10;};
+/** Pure status rule: no location → none; a location nobody confirmed → unconfirmed; within tolerance of the confirmed point → confirmed; otherwise moved (review). */
+export function workPointStatus(current:LatLng|null,confirmed:LatLng|null,toleranceM=WORK_POINT_TOLERANCE_M):{status:WorkPointStatus;distanceM:number|null}{
+ if(!current)return {status:'none',distanceM:null};
+ if(!confirmed)return {status:'unconfirmed',distanceM:null};
+ const d=distanceMetres(confirmed,current);
+ return {status:d<=toleranceM?'confirmed':'moved',distanceM:d};
+}
+
 export type WorkAreaView={id:string;projectId:string;name:string;kind:WorkAreaKind;discipline:WorkAreaDiscipline;delivery:WorkAreaDelivery;contractorLabel:string|null;sequence:number|null;notes:string|null;ring:LatLng[];areaM2:number;status:'active'|'archived';revision:number;createdAt:string;updatedAt:string;archivedAt:string|null;demo:boolean};
-export type WorkMapView={projectId:string;projectName:string;projectNumber:string|null;stage:string;closed:boolean;canEdit:boolean;pin:LatLng|null;address:string|null;areas:WorkAreaView[];limits:typeof WORK_AREA_LIMITS;disclaimer:string};
+export type WorkMapView={projectId:string;projectName:string;projectNumber:string|null;projectRevision:number;stage:string;closed:boolean;canEdit:boolean;pin:LatLng|null;address:string|null;workPoint:WorkPointView;areas:WorkAreaView[];limits:typeof WORK_AREA_LIMITS;disclaimer:string};
 
 /** Rows are marked DEMO by name only; nothing else in the product keys off it. */
 export const isDemoName=(name:string)=>/^DEMO\b/i.test(name.trim());

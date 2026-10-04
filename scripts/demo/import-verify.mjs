@@ -41,6 +41,7 @@ export async function scopedCounts(q,org,s){
   users:await n('SELECT COUNT(*) n FROM users WHERE organisation_id=? AND email LIKE ?',[org,'%'+DEMO_EMAIL_DOMAIN]),
   shifts:shifts.length,
   shiftAssignments:await n(`SELECT COUNT(*) n FROM shift_assignments WHERE organisation_id=? AND shift_id IN (${list(shifts)})`,[org,...shifts]),
+  workAreas:await inP('project_work_areas'),workPoints:await inP('project_work_points'),shiftAreaLinks:await n(`SELECT COUNT(*) n FROM shift_work_areas WHERE organisation_id=? AND shift_id IN (${list(shifts)})`,[org,...shifts]),
   dockets:await n("SELECT COUNT(*) n FROM dockets WHERE organisation_id=? AND docket_no LIKE 'DEMO-D-%'",[org]),
   costTransactions:await inP('cost_transactions'),claims:await inP('progress_claims'),invoices:await inP('client_invoices'),
   risks:await inP('risks'),swms:await inP('swms'),itps:await inP('itps'),incidents:await inP('hseq_incidents'),ncrs:await inP('hseq_ncrs'),actions:await inP('hseq_actions'),

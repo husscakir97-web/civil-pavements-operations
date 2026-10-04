@@ -39,4 +39,17 @@ t('route: every handler is wrapped by api() with module+capability',()=>{assert.
 t('service: scoped by organisation, project access, closed rule, revision, audit',()=>{assert.match(svc,/loadProject\(/);assert.match(svc,/stageOf\(p\)==='closed'/);assert.match(svc,/revision=\?/);assert.match(svc,/workmap\.area_created/);assert.match(svc,/workmap\.area_updated|workmap\.area_archived/);assert.ok(!/DELETE FROM project_work_areas/.test(svc),'areas are archived, never deleted');for(const line of svc.split('\n').filter(l=>/(FROM|UPDATE|INTO) project_work_areas/.test(l)))assert.match(line,/organisation_id/,line.slice(0,80));});
 t('service: strict input schemas and one geometry gate',()=>{assert.equal((svc.match(/\)\.strict\(\)/g)||[]).length,2,'create and update schemas are strict');assert.match(svc,/function geometry\(/);assert.equal((svc.match(/geometry\(input\.ring\)/g)||[]).length,2,'both write paths validate through validateRing');assert.ok(!/INSERT INTO project_work_areas[^\n]*\$\{/.test(svc),'no interpolated SQL');});
 t('service: no cross-module imports',()=>{assert.ok(!/from '@\/lib\/modules\/(?!projects)/.test(svc));});
+// Work point: the pure status rule and the static contracts for the work-point and shift-link seams.
+const P={lat:-33.2010,lng:149.0610},east=m=>w.fromLocal({x:m,y:0},P);
+t('work point: no location → none; unconfirmed; within tolerance → confirmed; beyond → moved with the distance',()=>{
+ assert.equal(w.workPointStatus(null,P).status,'none');assert.equal(w.workPointStatus(null,null).status,'none');
+ assert.equal(w.workPointStatus(P,null).status,'unconfirmed');
+ assert.equal(w.workPointStatus(east(3),P).status,'confirmed');assert.equal(w.workPointStatus(P,P).distanceM,0);
+ const m=w.workPointStatus(east(450),P);assert.equal(m.status,'moved');assert.ok(Math.abs(m.distanceM-450)<1,String(m.distanceM));
+ assert.equal(w.workPointStatus(east(10),P,20).status,'confirmed','tolerance is a parameter');});
+t('work point: distance is symmetric and zero for the same point',()=>{assert.equal(w.distanceMetres(P,P),0);assert.ok(Math.abs(w.distanceMetres(P,east(100))-w.distanceMetres(east(100),P))<0.2);});
+const wpRoute=fs.readFileSync('app/api/projects/work-point/route.ts','utf8'),shiftRoute=fs.readFileSync('app/api/delivery/work-areas/route.ts','utf8'),seam=fs.readFileSync('lib/seams/shift-work-areas.ts','utf8');
+t('work-point route: strict body, project.edit capability, projects module',()=>{assert.match(wpRoute,/\.strict\(\)/);assert.match(wpRoute,/project\.edit/);assert.match(wpRoute,/module:'projects'/);});
+t('shift-link routes: strict ids-only body, schedule.edit to write, operations module',()=>{assert.match(shiftRoute,/\.strict\(\)/);assert.match(shiftRoute,/schedule\.edit/);assert.match(shiftRoute,/module:'operations'/);});
+t('shift-link seam: gated by requireSeam, never selects geometry, audits, no cross-module import',()=>{assert.match(seam,/requireSeam\('shift\.workarea'\)/);assert.ok(!/ring_json|\bring\b|SELECT \*/.test(seam.replace(/\/\/.*$/gm,'')),'no geometry column is read');assert.match(seam,/shift\.work_areas_changed/);assert.ok(!/from '@\/lib\/modules\/(?!projects\/projects)/.test(seam));});
 console.log(`\n${n} passed, 0 failed`);

@@ -178,7 +178,7 @@ try{
  const mkCtx=async(who,opts={})=>{const ctx=await browser.newContext(opts);await ctx.addCookies(who.cookies.map(c=>{const [n,...v]=c.split('=');return {name:n,value:v.join('='),url:base};}));return ctx;};
  const errors=[];
  const open=async(page,id)=>{await page.goto(base+`/#Projects//${id}/workmap`);await page.reload();await page.waitForSelector('[data-testid="work-map"]',{timeout:20000});};
- const canvas=async page=>{const b=await page.locator('[data-testid="map-canvas"] svg[role="application"]').boundingBox();return {...b,cx:b.x+b.width/2,cy:b.y+b.height/2};};
+ const canvas=async page=>{await page.getByTestId('map-canvas').evaluate(e=>e.scrollIntoView({block:'center'}));await page.waitForTimeout(150);const b=await page.locator('[data-testid="map-canvas"] svg[role="application"]').boundingBox();return {...b,cx:b.x+b.width/2,cy:b.y+b.height/2};};
  const selectRow=async(pg,name)=>{const row=pg.getByTestId('area-row').filter({hasText:name});if(await row.getAttribute('aria-pressed')!=='true')await row.click();};
  const apiAreas=async(id,arch=0)=>(await a(`/api/projects/work-areas?projectId=${id}&archived=${arch}`)).body.areas;
 

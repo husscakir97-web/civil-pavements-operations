@@ -5,6 +5,7 @@ import {crmStage} from './crm.mjs';
 import {pipelineStage} from './pipeline.mjs';
 import {projectsStage,closeProject} from './projects.mjs';
 import {shiftsStage} from './shifts.mjs';
+import {workMapStage} from './workmap.mjs';
 import {workshopStage} from './workshop.mjs';
 import {commercialStage} from './commercial.mjs';
 import {hseqStage} from './hseq.mjs';
@@ -50,4 +51,4 @@ export async function hydrate(c){
 
 async function closeStage(c){await closeProject(c,'B2');c.log('B2 stage:',(await c.one('SELECT stage FROM jobs WHERE organisation_id=? AND id=?',[c.org,c.ids['project:B2']])).stage);}
 
-export const STAGES=[['company',companyStage],['resources',resourceStage],['crm',crmStage],['pipeline',pipelineStage],['projects',projectsStage],['shifts',shiftsStage],['workshop',workshopStage],['commercial',commercialStage],['close',closeStage],['hseq',hseqStage],['planning',planningStage],['verify',async c=>{c.manifest=await verify(c);}]];
+export const STAGES=[['company',companyStage],['resources',resourceStage],['crm',crmStage],['pipeline',pipelineStage],['projects',projectsStage],['shifts',shiftsStage],['workmap',workMapStage],['workshop',workshopStage],['commercial',commercialStage],['close',closeStage],['hseq',hseqStage],['planning',planningStage],['verify',async c=>{c.manifest=await verify(c);}]];

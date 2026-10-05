@@ -2,7 +2,7 @@
 // Planning v0.1 (docs/PLANNING-V0-1-DECISION.md): an undated methodology canvas with live costing, saved scenarios and a
 // relative timeline. One calculation (lib/v1/planning.ts) drives the preview here and the authoritative server result.
 import {useEffect,useMemo,useRef,useState,type PointerEvent as ReactPointerEvent} from 'react';
-import {Download,GitBranch,Link2,Milestone,Plus,Trash2,X,ChevronRight} from 'lucide-react';
+import {Download,GitBranch,Link2,Milestone,Plus,Trash2,X,ChevronRight,ArrowLeft} from 'lucide-react';
 import {api,useApi,useAction,useSession,PageHeader,Section,ErrorState,EmptyState,Btn,Pill,Tabs,Field,field as fieldClass,money} from './kit';
 import {FIELDS,KNOWN_UNITS,blankActivity,calculatePlan,findCycle,fits,newId,validatePlan,type FieldSpec,type PlanActivity,type PlanDocument,type PlanResult,type Positions,type Requirement} from '@/lib/v1/planning';
 
@@ -143,7 +143,8 @@ function Editor({scenarioId,onBack}:{scenarioId:string;onBack:()=>void}){
   <PageHeader compact crumbs={[{label:'Planning',onClick:leave},{label:data.plan.name}]} title={data.plan.name} subtitle="Undated methodology plan. The timeline is relative: working days from the start of the plan, with no availability claims."
    badges={<><Pill tone="info">Scenario: {data.scenario.name}</Pill>{dirty&&<Pill tone="warning">Unsaved changes</Pill>}</>}/>
   <div data-testid="plan-actionbar" className="plan-actionbar sticky top-0 z-30 -mx-1 flex flex-wrap items-center justify-between gap-2 rounded-xl px-3 py-2">
-   <p className="text-sm text-slate-600" aria-live="off">{!editable?'View only':dirty?<span className="font-medium text-amber-800">Edits not saved yet</span>:'No pending edits'}</p>
+   <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1"><Btn variant="ghost" className="sm:hidden !min-h-11 !px-2" data-testid="plan-back" onClick={leave}><ArrowLeft aria-hidden className="size-4"/>Back to plans</Btn>
+   <p className="text-sm text-slate-600" aria-live="off">{!editable?'View only':dirty?<span className="font-medium text-amber-800">Edits not saved yet</span>:'No pending edits'}</p></div>
    <div className="flex flex-wrap items-center gap-2">
     {editable&&dirty&&<Btn variant="ghost" onClick={discard}>Discard changes</Btn>}
     <a className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50" href={`/api/planning?scenarioId=${data.scenario.id}&export=csv`}><Download aria-hidden className="size-4"/>Export CSV</a>

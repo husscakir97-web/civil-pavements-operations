@@ -229,5 +229,27 @@ try{
   must(await E.post({action:'positions',scenarioId:osid,positions:roomy}),[200],'roomy');await page.reload();await page.waitForTimeout(2500);
   await page.getByRole('heading',{name:'Planning'}).first().waitFor().catch(()=>{});
   check('F: no page errors',errors.length===0);await ctx.close();}
+
+ // ================= G. Mobile return path (390px): the compact header hides the breadcrumb, so a visible guarded "Back to plans" must remain =================
+ {const {ctx,page,errors}=await session(M);await goPlan(page,M);
+  const back=page.getByTestId('plan-back');await back.waitFor();
+  const crumbShown=await page.getByRole('navigation',{name:'Breadcrumb'}).first().isVisible().catch(()=>false);const bb=await back.boundingBox();
+  check('G: at 390px the compact breadcrumb is hidden and a visible "Back to plans" button replaces it (44px target, inside the viewport)',!crumbShown&&await back.isVisible()&&/Back to plans/.test(await back.innerText())&&bb.height>=44&&await inView(page,back),JSON.stringify(bb));
+  const plansHeading=page.getByRole('heading',{name:'Plans',exact:true});
+  let asked0=0;const count=()=>{asked0++;};page.on('dialog',count);
+  await back.click();await plansHeading.waitFor();
+  check('G: returning from a saved plan goes to the plan list without any confirmation',await plansHeading.isVisible()&&asked0===0&&await page.getByTestId('plan-actionbar').count()===0);
+  page.off('dialog',count);
+  await page.getByRole('button',{name:'Open',exact:true}).first().click();await page.getByTestId('plan-actionbar').waitFor();
+  await page.getByRole('button',{name:'Canvas',exact:true}).click();
+  await page.getByRole('group',{name:/^Paving,/}).getByRole('button',{name:'Edit'}).click();await dlg(page).waitFor();await dlg(page).getByLabel('Activity name').fill('Back-path edit');
+  await dlg(page).getByRole('button',{name:'Close'}).click();await page.getByText('Unsaved changes').waitFor();
+  let asked='';page.once('dialog',d=>{asked=d.message();void d.dismiss();});
+  await back.click();await page.waitForTimeout(500);
+  check('G: unsaved edits make Back ask first, and cancelling keeps the plan open with the edits and the guard intact',/unsaved changes/i.test(asked)&&await back.isVisible()&&await page.getByText('Unsaved changes').isVisible()&&await plansHeading.count()===0&&await guard(page)===true,asked);
+  let asked2='';page.once('dialog',d=>{asked2=d.message();void d.accept();});
+  await back.click();await plansHeading.waitFor();
+  check('G: confirming leaves for the plan list, and the unsaved edit was not stored',/unsaved changes/i.test(asked2)&&await plansHeading.isVisible()&&await dbName()!=='Back-path edit'&&await guard(page)===false,asked2);
+  check('G: no page errors',errors.length===0);await ctx.close();}
 }catch(e){console.error(e.stack||e);record('Harness ran to completion','fail',String(e.message).slice(0,300));}
 finally{await browser?.close();server.kill();s3.close();await db.end();const failed=results.filter(x=>x.status==='fail').length;console.log(`\n${results.length-failed} passed, ${failed} failed`);process.exit(failed?1:0);}

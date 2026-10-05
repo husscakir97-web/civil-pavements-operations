@@ -1,3 +1,4 @@
+import {assertNotMaintenance} from './maintenance';
 // Location provider abstraction. Business modules never call a mapping vendor directly: they
 // use lib/platform/locations.ts and the AddressLocationPicker, which talk to a LocationProvider.
 //  - google: Google Maps Platform. Autocomplete, place details and reverse geocoding run in the
@@ -60,6 +61,7 @@ export const fakeProvider:LocationProvider={
 // ---------------------------------------------------------------- google (server-side)
 const FIELD_MASK='id,formattedAddress,addressComponents,location,types';
 async function gfetch(url:string,init:RequestInit){
+ assertNotMaintenance('the address provider');
  let r:Response;
  try{r=await fetch(url,{...init,signal:AbortSignal.timeout(8000)});}catch{throw new ProviderUnavailable();}
  if(r.status===429)throw new ProviderUnavailable('The address provider quota has been reached. Enter the address by hand.');

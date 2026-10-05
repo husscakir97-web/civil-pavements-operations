@@ -61,8 +61,10 @@ export async function estimateVsActual(projectId:string){
  const snap=safeJson<{data?:EstimateData;totals?:EstimateTotals}>(baseline?.snapshot,{});
  const data=snap.data,totals=snap.totals;
  const estLabourHours=data&&totals?round2((data.labour||[]).reduce((n,l)=>n+l.headcount*l.hoursPerShift*totals.estimatedShifts,0)+(data.items||[]).filter(i=>i.category==='labour').reduce((n,i)=>n+itemHours(i),0)):null;
+ // This comparison is in tonnes. Keep every approved docket's hours/count,
+ // but never add area, item or unspecified quantities to the tonne total.
  const [dockets,fields]=await Promise.all([
-  one<{hours:number;qty:number;n:number}>("SELECT COALESCE(SUM(labour_hours),0) AS hours,COALESCE(SUM(quantity),0) AS qty,COUNT(*) AS n FROM dockets WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(links,'$.jobId'))=? AND status IN ('approved','included_claim','invoiced')",[org,projectId]),
+  one<{hours:number;qty:number;n:number}>("SELECT COALESCE(SUM(labour_hours),0) AS hours,COALESCE(SUM(CASE WHEN LOWER(TRIM(quantity_unit)) IN ('t','tonne','tonnes') THEN quantity ELSE 0 END),0) AS qty,COUNT(*) AS n FROM dockets WHERE organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(links,'$.jobId'))=? AND status IN ('approved','included_claim','invoiced')",[org,projectId]),
   query("SELECT f.data FROM field_records f JOIN shifts s ON s.id=f.shift_id AND s.organisation_id=f.organisation_id WHERE f.organisation_id=? AND JSON_UNQUOTE(JSON_EXTRACT(s.metadata,'$.jobId'))=? AND f.status='Submitted'",[org,projectId]),
  ]);
  const fieldHours=fields.reduce((n,f)=>n+((safeJson<FieldData>(f.data,{} as FieldData).resources||[]) as FieldData['resources']).filter(r=>['workers','crews'].includes(String(r.category))).reduce((v,r)=>v+resourceHours(r),0),0);

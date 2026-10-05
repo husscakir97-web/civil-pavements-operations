@@ -38,9 +38,9 @@ export const MODULE_REGISTRY:Record<ModuleKey,ModuleContract>={
  core:contract('core',['organisations','users','documents','knowledge_packs','audit_log','domain_events','communication_threads','communication_messages','communication_receipts','notifications','notification_preferences','external_access_tokens','external_responses'],{area:'Home'},['org.admin','knowledge.view','communication.view','communication.send'],{kind:'core',coreDependencies:[]}),
  pipeline:contract('pipeline',['opportunities','tenders','tender_requirements'],{area:'Win Work',sub:'Tenders'},['pipeline.view','pipeline.edit','tender.award'],{optionalSeams:['award.project'],reporting:['pipeline']}),
  estimating:contract('estimating',['estimates','estimate_revisions','planning_plans','planning_scenarios'],{area:'Win Work',sub:'Estimates'},['estimate.edit','estimate.approve'],{optionalSeams:['award.project']}),
- projects:contract('projects',['jobs','project_baselines','project_checklist_items','cost_transactions'],{area:'Prepare Work',sub:'Projects'},['project.view','project.edit'],{publishedEvents:['project.awarded'],optionalSeams:['award.project','docket.cost','project.ims'],reporting:['projects']}),
+ projects:contract('projects',['jobs','project_work_areas','project_work_points','project_baselines','project_checklist_items','cost_transactions'],{area:'Prepare Work',sub:'Projects'},['project.view','project.edit'],{publishedEvents:['project.awarded'],optionalSeams:['award.project','docket.cost','project.ims','shift.workarea'],reporting:['projects']}),
  ims:contract('ims',['swms','itp_items','hseq_incidents','hseq_ncrs','hseq_actions'],{area:'Prepare Work',sub:'IMS & HSEQ'},['hseq.view','hseq.edit','hseq.report'],{optionalSeams:['project.ims','form.defect'],reporting:['hseq'],fieldCapabilities:['swms.acknowledge','itp.complete','hseq.report']}),
- operations:contract('operations',['shifts','shift_assignments','workers','worker_competencies','plant'],{area:'Resource Work',sub:'Schedule'},['schedule.view','schedule.edit','resources.edit'],{reporting:['operations']}),
+ operations:contract('operations',['shifts','shift_assignments','workers','worker_competencies','plant'],{area:'Resource Work',sub:'Schedule'},['schedule.view','schedule.edit','resources.edit'],{optionalSeams:['shift.workarea'],reporting:['operations']}),
  field:contract('field',['field_records'],{area:'Field'},['field.capture'],{kind:'surface',fieldCapabilities:['field.capture','offline.sync']}),
  dockets:contract('dockets',['dockets'],{area:'Deliver Work',sub:'Dockets'},['docket.submit','docket.approve'],{publishedEvents:['docket.approved'],optionalSeams:['docket.cost'],reporting:['dockets'],fieldCapabilities:['docket.submit']}),
  commercial:contract('commercial',['project_variations','progress_claims','client_invoices'],{area:'Control Money',sub:'Commercial'},['commercial.view','claim.edit','invoice.manage'],{reporting:['commercial']}),
@@ -54,5 +54,7 @@ export const MODULE_SEAMS={
  'docket.cost':{modules:['dockets','projects'],capability:'docket.approve'},
  // Prestart/inspection evidence raises a Workshop defect (critical → safety hold). Forms stay immutable.
  'form.defect':{modules:['ims','workshop'],capability:'workshop.defect.report'},
+ // A scheduled shift references shared project work-area ids (never copies geometry). Both modules must be writable; either one absent: shifts and work areas work on their own.
+ 'shift.workarea':{modules:['operations','projects'],capability:'schedule.edit'},
 } as const satisfies Record<string,{modules:readonly ModuleKey[];capability:Capability}>;
 export type SeamKey=keyof typeof MODULE_SEAMS;

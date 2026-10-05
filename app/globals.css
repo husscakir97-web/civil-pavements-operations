@@ -124,7 +124,7 @@ textarea {
 .app-shell .sidebar-item[aria-current="page"] { box-shadow: inset 3px 0 0 var(--primary); }
 .quick-action { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 9px 14px; border: 1px solid var(--border); border-radius: 9px; background: white; font-size: 13px; font-weight: 500; transition: background-color 120ms, border-color 120ms; }
 .quick-action:hover { background: #f8fafc; border-color: #b9c3cd; }
-.quick-action-primary { color: white; background: #172633; border-color: #172633; }
+.quick-action-primary { color: white; background: #2d2f31; border-color: #2d2f31; }
 .quick-action-primary:hover { background: #263c4c; border-color: #263c4c; }
 .metric-card { border-top: 3px solid #dce3e9; box-shadow: 0 1px 2px rgba(15,23,42,.025); }
 .metric-card-accent { border-top-color: var(--primary); }
@@ -277,4 +277,232 @@ main section, main article, main form, main .grid > * { min-width: 0; }
 }
 @media (max-width: 1023px) {
   .mobile-quick-nav { margin-bottom: env(safe-area-inset-bottom); }
+}
+
+/* Planning visual direction: warm neutral surfaces, teal accent, fewer heavy borders. Scoped to .plan-ui so the rest of the app keeps its theme. */
+.plan-ui {
+  --primary: #14604f; --ring: #14604f; --accent: #e4efe9; --accent-foreground: #0f4a3d;
+  --plan-bg: #f7f6f1; --plan-card: #fffefb; --plan-soft: #eceee6; --plan-line: #e2e1d6; --plan-accent: #14604f; --plan-warn: #f3ecdc;
+  --color-primary: #14604f; --color-ring: #14604f;
+}
+.plan-ui .plan-eyebrow { display: flex; align-items: center; gap: .5rem; font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: #5d6a62; }
+.plan-ui .plan-chip { border-radius: 6px; background: #dfeee6; padding: 1px 6px; font-size: 10px; letter-spacing: .02em; text-transform: none; color: #14604f; }
+.plan-ui .plan-card { border: 1px solid var(--plan-line); border-radius: 18px; background: var(--plan-card); box-shadow: 0 1px 2px rgba(40,40,20,.04); }
+.plan-ui .plan-actionbar { border: 1px solid var(--plan-line); background: rgba(255,254,251,.94); backdrop-filter: blur(6px); box-shadow: 0 1px 2px rgba(40,40,20,.05); }
+.plan-ui .plan-kpis { background: var(--plan-line); border: 1px solid var(--plan-line); }
+.plan-ui .plan-kpi { background: var(--plan-card); padding: 1rem 1.25rem; }
+.plan-ui .plan-figure { margin-top: .35rem; font-size: 2rem; font-weight: 600; letter-spacing: -.03em; line-height: 1.15; color: var(--plan-accent); }
+.plan-ui .plan-figure-sm { font-size: 1.25rem; color: #1b2a24; }
+.plan-ui .plan-hint { margin-top: .25rem; font-size: 12px; color: #5d6a62; }
+.plan-ui .workspace-page-header h1 { letter-spacing: -.04em; }
+.plan-ui .workspace-tabs { margin: 0; border: 0; background: var(--plan-soft); box-shadow: none; }
+.plan-ui .workspace-tabs button[aria-current="page"] { background: #fff !important; color: #14302a !important; box-shadow: 0 1px 2px rgba(40,40,20,.1); }
+.plan-ui .plan-canvas-frame { border: 1px solid var(--plan-line); background-color: var(--plan-bg); background-image: radial-gradient(#d9d8cb 1px, transparent 1px); background-size: 22px 22px; }
+.plan-ui .plan-node { border: 1px solid var(--plan-line); border-radius: 14px; background: var(--plan-card); box-shadow: 0 1px 2px rgba(40,40,20,.06); }
+.plan-ui .plan-node:focus-visible { outline: 2px solid var(--plan-accent); outline-offset: 2px; }
+.plan-ui .plan-node-on { border: 2px solid var(--plan-accent); background: #f6faf7; box-shadow: 0 4px 14px rgba(20,96,79,.14); }
+.plan-ui .plan-node-milestone { background: var(--plan-warn); border-color: #d7c79b; }
+.plan-ui .plan-index { display: inline-flex; height: 1.5rem; min-width: 1.5rem; align-items: center; justify-content: center; border: 1px solid var(--plan-line); border-radius: 999px; padding: 0 .35rem; font-size: 11px; color: #4e5a53; background: #fff; }
+.plan-ui .plan-index-on { background: var(--plan-accent); border-color: var(--plan-accent); color: #fff; }
+.plan-ui .plan-minibtn { display: inline-flex; min-height: 1.75rem; align-items: center; gap: .25rem; border: 1px solid var(--plan-line); border-radius: 8px; background: #fff; padding: 0 .55rem; font-size: 12px; font-weight: 600; color: #26332d; }
+.plan-ui .plan-minibtn:hover { background: var(--plan-soft); }
+.plan-ui .plan-listcard { border: 1px solid var(--plan-line); border-radius: 14px; background: var(--plan-card); padding: .85rem; }
+.plan-ui .plan-listcard .plan-minibtn { min-height: 2.75rem; padding: 0 1rem; font-size: 14px; }
+.plan-ui .plan-listcard-on { border-color: var(--plan-accent); border-left-width: 4px; background: #eaf3ed; }
+.plan-ui .plan-inspector { border: 1px solid var(--plan-line); background: var(--plan-card); box-shadow: 0 -8px 30px rgba(30,40,30,.14); }
+@media (min-width: 1024px) { .plan-ui .plan-inspector { box-shadow: 0 1px 2px rgba(40,40,20,.05); } }
+.plan-ui .plan-roundbtn { display: inline-flex; height: 2.75rem; width: 2.75rem; flex-shrink: 0; align-items: center; justify-content: center; border: 1px solid var(--plan-line); border-radius: 999px; background: #fff; color: #3d4a43; }
+.plan-ui .plan-primarybtn { background: var(--plan-accent); color: #fff; }
+.plan-ui .plan-primarybtn:hover { filter: brightness(1.08); }
+.plan-ui .plan-drawer { background: var(--plan-bg); }
+.plan-ui .plan-drawer-foot { border-top: 1px solid var(--plan-line); background: var(--plan-card); }
+.plan-ui .plan-group { display: grid; gap: .75rem; border: 0; border-radius: 16px; background: var(--plan-soft); padding: .9rem 1rem 1rem; }
+.plan-ui .plan-legend { padding: 0 .25rem; font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: #4e5a53; }
+
+/* ======================================================================================================================================
+   GRAPHITE STUDIO — design tokens and shared surfaces (reference: docs/design/graphite-studio-reference.png)
+   Warm ivory surfaces, graphite text and linework, precise small-caps labels, thin dividers, flat crisp controls. Colour is reserved for
+   meaning (warning, error, success); selection is shown by a graphite outline plus a mark, never colour alone. No blur, texture overlay or
+   animation is used. Everything below overrides earlier rules by order; the shadcn variables and the Tailwind slate/orange/white scales are
+   remapped here so existing screens inherit the palette. Screens not listed in docs/DESIGN-GRAPHITE-STUDIO.md inherit colour and control
+   styling only; their layouts were not redesigned.
+   ====================================================================================================================================== */
+:root {
+  --gs-ivory: #f5f3ee;       /* page */
+  --gs-paper: #faf9f5;       /* panels */
+  --gs-sheet: #fdfcf9;       /* inputs, popovers */
+  --gs-fog: #ebe8e0;         /* hover, quiet fills */
+  --gs-line: #dad6cc;        /* hairline dividers */
+  --gs-line-strong: #b4afa3; /* control borders */
+  --gs-ink: #242424;         /* text */
+  --gs-graphite: #2d2f31;    /* primary actions, drawn work */
+  --gs-graphite-2: #4a4d50;
+  --gs-muted: #66635b;       /* secondary text (AA on ivory) */
+  --gs-faint: #8a877e;       /* tertiary, non-essential */
+  --gs-select: #e3dfd4;      /* selected row */
+  --gs-warn: #7a4a00;  --gs-warn-bg: #f6ecd7;  --gs-warn-line: #d9c48f;
+  --gs-error: #9c2c1c; --gs-error-bg: #f8e6e1; --gs-error-line: #dfb5ad;
+  --gs-ok: #25583f;    --gs-ok-bg: #e5eee8;    --gs-ok-line: #b5cdbf;
+  --background: var(--gs-ivory); --foreground: var(--gs-ink);
+  --card: var(--gs-sheet); --card-foreground: var(--gs-ink);
+  --popover: var(--gs-sheet); --popover-foreground: var(--gs-ink);
+  --primary: var(--gs-graphite); --primary-foreground: #f7f5ef;
+  --secondary: var(--gs-fog); --secondary-foreground: var(--gs-ink);
+  --muted: var(--gs-fog); --muted-foreground: var(--gs-muted);
+  --accent: var(--gs-fog); --accent-foreground: var(--gs-ink);
+  --destructive: var(--gs-error);
+  --border: var(--gs-line); --input: var(--gs-line-strong); --ring: var(--gs-graphite);
+  --chart-1: #2d2f31; --chart-2: #5c7a6a; --chart-3: #6b7f94; --chart-4: #a98a45; --chart-5: #8a877e;
+  --radius: 0.25rem;
+  --sidebar: var(--gs-ivory); --sidebar-foreground: var(--gs-ink);
+  --sidebar-primary: var(--gs-graphite); --sidebar-primary-foreground: #f7f5ef;
+  --sidebar-accent: var(--gs-fog); --sidebar-accent-foreground: var(--gs-ink);
+  --sidebar-border: var(--gs-line); --sidebar-ring: var(--gs-graphite);
+}
+@theme inline {
+  --font-sans: "Helvetica Neue", "Aptos", "Inter", "Segoe UI", Arial, sans-serif;
+  --color-white: #fdfcf9;
+  --color-slate-50: #f9f8f4; --color-slate-100: #f1efe8; --color-slate-200: #e4e1d8; --color-slate-300: #cfcbc0; --color-slate-400: #9a968b;
+  --color-slate-500: #66635b; --color-slate-600: #55524b; --color-slate-700: #3e3c37; --color-slate-800: #2b2a27; --color-slate-900: #1f1e1c; --color-slate-950: #151413;
+  --color-orange-50: #f4f2ec; --color-orange-100: #eae7df; --color-orange-200: #d9d5ca; --color-orange-300: #bcb7aa; --color-orange-400: #8d897e;
+  --color-orange-500: #4a4d50; --color-orange-600: #3a3c3f; --color-orange-700: #2d2f31; --color-orange-800: #242628; --color-orange-900: #1b1c1e;
+}
+body { font-family: "Helvetica Neue", "Aptos", "Inter", "Segoe UI", Arial, sans-serif; background: var(--gs-ivory); color: var(--gs-ink); font-feature-settings: "tnum" 1, "cv11" 1; }
+::selection { background: rgba(45, 47, 49, .16); }
+
+/* type roles */
+.gs-eyebrow { font-size: 11px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; color: var(--gs-muted); }
+.gs-title { font-size: clamp(1.7rem, 1.2rem + 1.6vw, 2.6rem); font-weight: 500; letter-spacing: -.035em; line-height: 1.08; color: var(--gs-ink); }
+.gs-label { font-size: 13px; color: var(--gs-muted); }
+.gs-value { font-size: 14px; color: var(--gs-ink); }
+.gs-mono { font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.gs-rule { border-top: 1px solid var(--gs-line); }
+.gs-rows > div { display: grid; grid-template-columns: minmax(5.5rem, 42%) minmax(0, 1fr); gap: .75rem; align-items: baseline; padding: .85rem 0; border-bottom: 1px solid var(--gs-line); }
+.gs-rows > div:first-child { border-top: 1px solid var(--gs-line); }
+.gs-rows dt { font-size: 14px; color: var(--gs-ink); }
+.gs-rows dd { font-size: 14px; color: var(--gs-ink); text-align: right; overflow-wrap: anywhere; }
+
+/* shared surfaces: flat, hairline, no shadow */
+.surface { border: 1px solid var(--gs-line); border-radius: 2px; background: var(--gs-paper); box-shadow: none; }
+.surface-header { border-bottom: 1px solid var(--gs-line); background: transparent; }
+.app-shell .surface > :last-child { border-bottom-left-radius: 2px; border-bottom-right-radius: 2px; }
+.app-shell main { background-image: none; }
+.workspace-topbar { box-shadow: none; }
+.app-shell h1, .app-shell h2 { letter-spacing: -0.025em; }
+.app-shell h1 { color: var(--gs-ink); font-weight: 500; }
+.app-shell :where(button,a,summary,input,select,textarea,[tabindex]):focus-visible { outline: 2px solid var(--gs-graphite); outline-offset: 2px; }
+.app-shell input, .app-shell select, .app-shell textarea { border-color: var(--gs-line-strong); border-radius: 2px; box-shadow: none; background-color: var(--gs-sheet); }
+.app-shell input:focus, .app-shell select:focus, .app-shell textarea:focus { border-color: var(--gs-graphite); box-shadow: none; }
+.app-shell table { border-collapse: collapse; }
+.app-shell thead, .app-shell [data-slot="table-head"] { background: transparent; }
+.app-shell th, .app-shell [data-slot="table-head"] { color: var(--gs-muted); font-size: 11px; font-weight: 500; letter-spacing: .14em; border-bottom: 1px solid var(--gs-line-strong); }
+.app-shell tbody tr { border-bottom: 1px solid var(--gs-line); transition: none; }
+.app-shell tbody tr:hover { background: var(--gs-fog); }
+.quick-action { border-radius: 2px; background: var(--gs-sheet); border-color: var(--gs-line-strong); }
+.quick-action:hover { background: var(--gs-fog); border-color: var(--gs-graphite); }
+.quick-action-primary { background: var(--gs-graphite); border-color: var(--gs-graphite); color: #f7f5ef; }
+.quick-action-primary:hover { background: #3f4245; border-color: #3f4245; }
+.metric-card { border-top: 1px solid var(--gs-line); box-shadow: none; border-radius: 2px; }
+.metric-card-accent { border-top-color: var(--gs-graphite); }
+.next-action { box-shadow: none; }
+
+/* shell: compact rail, quiet top bar, flat bottom navigation */
+.gs-rail { width: 76px; }
+.gs-rail-btn { position: relative; display: flex; width: 100%; flex-direction: column; align-items: center; gap: 4px; padding: 11px 4px 10px; color: var(--gs-muted); font-size: 10.5px; line-height: 1.15; text-align: center; background: transparent; }
+.gs-rail-btn:hover { background: var(--gs-fog); color: var(--gs-ink); }
+.gs-rail-btn[aria-current="page"] { color: var(--gs-ink); font-weight: 600; background: transparent; }
+.gs-rail-btn[aria-current="page"]::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px; background: var(--gs-graphite); }
+.gs-wordmark { font-size: 13px; font-weight: 600; letter-spacing: .34em; color: var(--gs-ink); }
+.gs-crumb { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--gs-muted); }
+.gs-tabs { display: flex; gap: 1.5rem; border-bottom: 1px solid var(--gs-line); overflow-x: auto; scrollbar-width: none; }
+.gs-tabs::-webkit-scrollbar { display: none; }
+.gs-tab { position: relative; flex-shrink: 0; padding: .7rem 0 .75rem; font-size: 14px; color: var(--gs-muted); background: transparent; border: 0; white-space: nowrap; }
+.gs-tab:hover { color: var(--gs-ink); }
+.gs-tab[aria-current="page"], .gs-tab[aria-selected="true"] { color: var(--gs-ink); font-weight: 600; }
+.gs-tab[aria-current="page"]::after, .gs-tab[aria-selected="true"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--gs-graphite); }
+.workspace-tabs { border: 0; background: transparent; box-shadow: none; padding: 0; }
+.mobile-quick-nav { border-radius: 0 !important; box-shadow: none !important; backdrop-filter: none !important; background: var(--gs-ivory) !important; border: 0 !important; border-top: 1px solid var(--gs-line-strong) !important; left: 0 !important; right: 0 !important; bottom: 0 !important; }
+
+/* tags, notes and feedback: shape + icon + text, restrained colour */
+.gs-note { display: flex; gap: .6rem; align-items: flex-start; padding: .65rem .85rem; border: 1px solid var(--gs-line); border-left: 3px solid var(--gs-graphite); background: var(--gs-paper); font-size: 13px; color: var(--gs-ink); }
+.gs-note-warn { border-left-color: var(--gs-warn); background: var(--gs-warn-bg); border-color: var(--gs-warn-line); color: var(--gs-warn); }
+.gs-note-error { border-left-color: var(--gs-error); background: var(--gs-error-bg); border-color: var(--gs-error-line); color: var(--gs-error); }
+.gs-note-ok { border-left-color: var(--gs-ok); background: var(--gs-ok-bg); border-color: var(--gs-ok-line); color: var(--gs-ok); }
+
+@media (max-width: 639px) {
+  .gs-tab { padding: .85rem 0 .9rem; font-size: 15px; }
+  .gs-rows dd { text-align: left; }
+  .gs-rows > div { grid-template-columns: 1fr; gap: .15rem; }
+}
+
+/* ---- Planning in Graphite Studio: same structure and behaviour, graphite/ivory palette, hairlines instead of cards ---- */
+.plan-ui {
+  --primary: #2d2f31; --ring: #2d2f31; --accent: #ebe8e0; --accent-foreground: #242424;
+  --plan-bg: #f5f3ee; --plan-card: #faf9f5; --plan-soft: #ebe8e0; --plan-line: #dad6cc; --plan-accent: #2d2f31; --plan-warn: #f6ecd7;
+  --color-primary: #2d2f31; --color-ring: #2d2f31;
+}
+.plan-ui .plan-eyebrow { gap: .5rem; font-size: 11px; font-weight: 500; letter-spacing: .16em; color: var(--gs-muted); }
+.plan-ui .plan-chip { border: 1px solid var(--gs-line); border-radius: 2px; background: var(--gs-fog); color: var(--gs-ink); font-size: 10px; letter-spacing: .04em; }
+.plan-ui .plan-card { border: 1px solid var(--gs-line); border-radius: 2px; background: var(--plan-card); box-shadow: none; }
+.plan-ui .plan-actionbar { border: 0; border-top: 1px solid var(--gs-line); border-bottom: 1px solid var(--gs-line); border-radius: 0; background: var(--gs-ivory); backdrop-filter: none; box-shadow: none; }
+.plan-ui .plan-kpis { gap: 0; border: 0; border-top: 1px solid var(--gs-line); border-bottom: 1px solid var(--gs-line); border-radius: 0; background: transparent; }
+.plan-ui .plan-kpi { background: transparent; padding: 1.15rem 1.25rem 1.15rem 0; }
+@media (min-width: 640px) { .plan-ui .plan-kpi + .plan-kpi { border-left: 1px solid var(--gs-line); padding-left: 1.5rem; } }
+@media (max-width: 639px) { .plan-ui .plan-kpi + .plan-kpi { border-top: 1px solid var(--gs-line); } }
+.plan-ui .plan-figure { font-size: 2rem; font-weight: 500; letter-spacing: -.035em; color: var(--gs-ink); }
+.plan-ui .plan-figure-sm { font-size: 1.2rem; color: var(--gs-ink); }
+.plan-ui .plan-hint { color: var(--gs-muted); }
+.plan-ui .workspace-page-header h1 { letter-spacing: -.035em; }
+.plan-ui .workspace-tabs { background: transparent; box-shadow: none; }
+.plan-ui .plan-canvas-frame { border: 1px solid var(--gs-line-strong); border-radius: 0; background-color: #f7f5f0; background-image: linear-gradient(#e7e3d9 1px, transparent 1px), linear-gradient(90deg, #e7e3d9 1px, transparent 1px); background-size: 28px 28px; }
+.plan-ui .plan-node { border: 1px solid var(--gs-line-strong); border-radius: 2px; background: var(--gs-sheet); box-shadow: none; }
+.plan-ui .plan-node:focus-visible { outline: 2px solid var(--gs-graphite); outline-offset: 2px; }
+.plan-ui .plan-node-on { border: 2px solid var(--gs-ink); background: var(--gs-sheet); box-shadow: none; }
+.plan-ui .plan-node-milestone { background: var(--gs-fog); border: 1px dashed var(--gs-graphite-2); }
+.plan-ui .plan-index { border: 1px solid var(--gs-line-strong); border-radius: 999px; background: var(--gs-sheet); color: var(--gs-graphite-2); }
+.plan-ui .plan-index-on { background: var(--gs-ink); border-color: var(--gs-ink); color: #f7f5ef; }
+.plan-ui .plan-minibtn { border: 1px solid var(--gs-line-strong); border-radius: 2px; background: transparent; color: var(--gs-ink); }
+.plan-ui .plan-minibtn:hover { background: var(--gs-fog); border-color: var(--gs-graphite); }
+.plan-ui .plan-listcard { border: 1px solid var(--gs-line); border-radius: 2px; background: var(--plan-card); }
+.plan-ui .plan-listcard-on { border-color: var(--gs-ink); border-left-width: 3px; background: var(--gs-select); }
+.plan-ui .plan-inspector { border: 0; border-top: 1px solid var(--gs-line-strong); border-radius: 0 !important; background: var(--gs-ivory); box-shadow: none; }
+@media (min-width: 1024px) { .plan-ui .plan-inspector { border: 0; border-left: 1px solid var(--gs-line); background: transparent; padding-left: 1.5rem; } }
+.plan-ui .plan-roundbtn { border: 1px solid var(--gs-line-strong); background: transparent; color: var(--gs-ink); }
+.plan-ui .plan-primarybtn { border-radius: 2px; background: var(--gs-graphite); color: #f7f5ef; }
+.plan-ui .plan-primarybtn:hover { filter: none; background: var(--gs-graphite-2); }
+.plan-ui .plan-drawer { background: var(--gs-ivory); }
+.plan-ui .plan-drawer-foot { border-top: 1px solid var(--gs-line); background: var(--gs-ivory); }
+.plan-ui .plan-group { border: 1px solid var(--gs-line); border-radius: 2px; background: transparent; }
+.plan-ui .plan-legend { font-size: 11px; font-weight: 500; letter-spacing: .14em; color: var(--gs-muted); }
+.plan-ui [class*="rounded-xl"], .plan-ui [class*="rounded-lg"], .plan-ui [class*="rounded-2xl"] { border-radius: 2px; }
+
+/* Canvas-first: compact page header, details disclosure, tighter plan summary */
+.gs-compact .gs-title{font-size:1.5rem;line-height:1.2}
+@media(min-width:640px){.gs-compact .gs-title{font-size:1.75rem}}
+.gs-details>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:.5rem;min-height:2.75rem;font-size:.75rem;letter-spacing:.14em;text-transform:uppercase;color:var(--gs-muted)}
+.gs-details>summary::-webkit-details-marker{display:none}
+.gs-details>summary::before{content:"+";display:inline-grid;place-items:center;width:1.1rem;height:1.1rem;border:1px solid var(--gs-line-strong);font-size:.85rem;letter-spacing:0}
+.gs-details[open]>summary::before{content:"\2212"}
+.plan-ui .plan-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media(max-width:639px){.plan-ui .plan-hint{display:none}.plan-ui .plan-kpi{padding:.6rem .7rem}.plan-ui .plan-figure{font-size:1.1rem}}
+
+@media(max-width:639px){
+ .gs-compact .gs-crumb,.gs-compact nav[aria-label="Breadcrumb"]{display:none}
+ .gs-compact .gs-title{font-size:1.2rem}
+ .workspace-page-header.gs-compact{margin-bottom:.25rem}
+}
+.gs-compact{margin-bottom:.5rem}
+
+.plan-ui .plan-kpi{padding:.7rem 1rem}
+.plan-ui .plan-figure{font-size:1.5rem;line-height:1.2}
+@media(max-width:639px){
+ .gs-note{font-size:.75rem;line-height:1.25rem;padding:.5rem .65rem}
+ .gs-compact .gs-title{font-size:1.1rem}
+}
+@media(max-width:639px){
+ .plan-ui .plan-kpis{grid-template-columns:1fr}
+ .plan-ui .plan-kpi{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.25rem .75rem;padding:.5rem .75rem}
+ .plan-ui .plan-kpi .plan-chip{display:none}
+ .plan-ui .plan-figure,.plan-ui .plan-figure-sm{font-size:1.05rem;margin:0}
+ .plan-ui select[aria-label="Scenario"]{max-width:100%;width:100%!important}
 }

@@ -4,6 +4,8 @@
 // competencies, competencyExpiry, rego, complianceExpiry...) are mirrored on every
 // save so the legacy scheduler keeps working unchanged.
 import {z} from 'zod';
+import {normaliseEmploymentType,knownEmploymentType,workerEmployment} from '@/lib/v1/employment';
+export {EMPLOYMENT_TYPES} from '@/lib/v1/employment';
 import {actorContext} from '@/lib/platform/context';
 import {can} from '@/lib/platform/permissions';
 import {audit} from '@/lib/platform/audit';
@@ -18,12 +20,12 @@ const rate=z.preprocess(v=>v===''||v==null?null:v,z.coerce.number().min(0).max(1
 
 export const WORKER_STATUSES=['Active','Leave','Inactive'] as const;
 export const PLANT_STATUSES=['Available','Allocated','Maintenance','Out of service','Unavailable','Inactive'] as const;
-export const EMPLOYMENT_TYPES=['employee','casual','contractor','labour hire'] as const;
+
 
 export const workerInput=z.object({
  firstName:z.string().trim().min(1,'First name is required.').max(120),
  lastName:text(120),employeeNumber:text(60),email:z.preprocess(v=>v===''?null:v,z.string().trim().email('Use a valid email.').max(254).nullable().optional()),
- phone:text(60),roleTitle:text(120),employmentType:z.preprocess(v=>v===''?null:v,z.enum(EMPLOYMENT_TYPES).nullable().optional()),
+ phone:text(60),roleTitle:text(120),employmentType:text(30),
  userId:text(191),hourlyRate:rate,location:text(255),status:z.enum(WORKER_STATUSES),
 });
 export const plantInput=z.object({
@@ -80,9 +82,10 @@ export async function saveWorker(id:string|null,revision:number|null,raw:unknown
  return tx(async conn=>{
   if(input.userId&&!await one('SELECT id FROM users WHERE organisation_id=? AND id=?',[a.organisationId,input.userId],conn))fail(400,'Linked user: choose a member of your organisation.');
   const name=[input.firstName,input.lastName].filter(Boolean).join(' ');
-  const cols={employee_number:input.employeeNumber??null,first_name:input.firstName,last_name:input.lastName??null,email:input.email??null,phone:input.phone??null,role_title:input.roleTitle??null,employment_type:input.employmentType??null,user_id:input.userId??null,location:input.location??null,active:inactive(input.status)?0:1,...('hourlyRate' in input?{hourly_rate:input.hourlyRate??null}:{})};
-  const mirror={trade:input.roleTitle||'',phone:input.phone||'',location:input.location||'',email:input.email||'',userId:input.userId||'',employeeNumber:input.employeeNumber||'',...('hourlyRate' in input?{rate:input.hourlyRate??''}:{})};
+  const cols={employee_number:input.employeeNumber??null,first_name:input.firstName,last_name:input.lastName??null,email:input.email??null,phone:input.phone??null,role_title:input.roleTitle??null,employment_type:normaliseEmploymentType(input.employmentType),user_id:input.userId??null,location:input.location??null,active:inactive(input.status)?0:1,...('hourlyRate' in input?{hourly_rate:input.hourlyRate??null}:{})};
+  const mirror={employmentType:cols.employment_type,trade:input.roleTitle||'',phone:input.phone||'',location:input.location||'',email:input.email||'',userId:input.userId||'',employeeNumber:input.employeeNumber||'',...('hourlyRate' in input?{rate:input.hourlyRate??''}:{})};
   if(!id){
+   if(cols.employment_type&&!knownEmploymentType(cols.employment_type))fail(400,'Choose a recognised employment type.');
    id=uuid();
    const row:Row={id,organisation_id:a.organisationId,name,status:input.status,metadata:JSON.stringify(mirror),created_at:now,...cols,revision:1,created_by:a.userId,updated_at:now,legacy_synced_at:now};
    await exec(`INSERT INTO workers (${Object.keys(row).join(',')}) VALUES (${Object.keys(row).map(()=>'?').join(',')})`,Object.values(row),conn);
@@ -90,6 +93,11 @@ export async function saveWorker(id:string|null,revision:number|null,raw:unknown
   }else{
    const current=await one('SELECT * FROM workers WHERE organisation_id=? AND id=? FOR UPDATE',[a.organisationId,id],conn);
    if(!current)fail(404,'Worker not found.');
+   // Omitted/blank fields preserve classification; retained unknown legacy values remain reviewable.
+   const previousType=workerEmployment(current!,parseMeta(current!.metadata));
+   cols.employment_type=cols.employment_type||previousType;
+   if(cols.employment_type&&!knownEmploymentType(cols.employment_type)&&cols.employment_type!==previousType)fail(400,'Choose a recognised employment type.');
+   mirror.employmentType=cols.employment_type;
    if(revision!=null&&Number(current!.revision)!==Number(revision))fail(409,'This worker was changed by someone else. Refresh to see the latest version.');
    const meta={...parseMeta(current!.metadata),...mirror};
    await exec(`UPDATE workers SET name=?,status=?,metadata=?,${Object.keys(cols).map(c=>`${c}=?`).join(',')},revision=revision+1,updated_at=?,legacy_synced_at=? WHERE organisation_id=? AND id=?`,[name,input.status,JSON.stringify(meta),...Object.values(cols),now,now,a.organisationId,id],conn);

@@ -49,3 +49,23 @@ jobs:
           npm run test:backfill
           npm run test:mysql
           npm run test:v1
+      - name: Demonstration importer suite (isolated disposable databases)
+        env:
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: integration-only
+        run: |
+          mysql -h 127.0.0.1 -uroot -pintegration-only -e "CREATE DATABASE import_check_test CHARACTER SET utf8mb4; CREATE DATABASE import_review_test CHARACTER SET utf8mb4;"
+          MYSQL_DATABASE=import_check_test npm run test:import-demo
+          MYSQL_DATABASE=import_review_test npm run test:import-review
+      - name: Hosted-import path suites (existing tenant + staging, incl. maintenance freeze and SIGKILL interruption/resume; disposable databases)
+        env:
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: integration-only
+        run: |
+          mysql -h 127.0.0.1 -uroot -pintegration-only -e "CREATE DATABASE existing_tenant_check_test CHARACTER SET utf8mb4; CREATE DATABASE staging_path_check_test CHARACTER SET utf8mb4;"
+          MYSQL_DATABASE=existing_tenant_check_test npm run test:existing-tenant
+          MYSQL_DATABASE=staging_path_check_test npm run test:staging-path

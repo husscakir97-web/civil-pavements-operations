@@ -1,3 +1,4 @@
+import {assertNotMaintenance} from './maintenance';
 // ABN format + official checksum (ATO algorithm). The checksum proves the number
 // is well-formed, not that it is registered. Registry confirmation uses the official
 // ABR (Australian Business Register) JSON web service, and only when ABR_GUID is
@@ -46,6 +47,7 @@ export function abrAdapter(env:Record<string,string|undefined>=process.env,fetch
   if(!guid)return {status:'not-configured',message:'Registry lookup is not configured. Set ABR_GUID (issued free by the Australian Business Register) to confirm ABNs against the register.'};
   const base=(env.ABR_BASE_URL||ABR_DEFAULT_URL).replace(/\/?$/,'/');
   const url=`${base}AbnDetails.aspx?abn=${abn}&callback=callback&guid=${encodeURIComponent(guid)}`;
+  assertNotMaintenance('the ABN lookup');
   const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),8000);
   try{
    const r=await fetcher(url,{signal:abort.signal,cache:'no-store'});

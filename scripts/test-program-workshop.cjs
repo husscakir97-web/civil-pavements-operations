@@ -14,3 +14,5 @@ const copy=copyShift(source,'2026-10-03',true);assert.equal(copy.id,'');assert.e
 
 require('./test-activity-preview.cjs');
 require('./test-program-costing.cjs');
+require('./test-programme-portfolio.cjs');
+require('./test-programme-portfolio-boundaries.cjs');

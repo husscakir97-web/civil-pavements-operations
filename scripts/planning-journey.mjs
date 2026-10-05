@@ -124,7 +124,7 @@ try{
  const page=await ctx.newPage();const pageErrors=[];page.on('pageerror',e=>pageErrors.push(String(e)));
  const shot=name=>page.screenshot({path:`${OUT}/${name}.png`});
  const overflow=()=>page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth);
- const goPlanning=async()=>{await page.goto(base+'/');await page.waitForTimeout(2500);await page.locator('aside').getByText('Pipeline',{exact:true}).first().click();await page.waitForTimeout(800);await page.locator('aside').getByText('Planning',{exact:true}).first().click();await page.waitForTimeout(1500);};
+ const goPlanning=async()=>{await page.goto(base+'/');await page.waitForTimeout(2500);await page.locator('aside').getByText('Pipeline',{exact:true}).first().click();await page.waitForTimeout(800);await page.getByRole('navigation',{name:/ sections$/}).getByText('Planning',{exact:true}).first().click();await page.waitForTimeout(1500);};
  await goPlanning();
  const side=await page.locator('aside').innerText();
  check('Standalone: the estimator reaches Planning with only Estimating enabled (no Projects, Commercial, Schedule or Resources in the menu)',!/Commercial|Schedule|Resources|IMS/.test(side)&&await page.getByRole('heading',{name:'Planning'}).isVisible(),side.replace(/\n+/g,' | ').slice(0,200));
@@ -245,7 +245,7 @@ try{
  check('The server recomputes the same totals as the browser preview',server1.result.cost.total===9010&&server1.result.duration.days===3,`server total ${server1.result.cost.total}, duration ${server1.result.duration.days}`);
 
  // Scenarios
- await page.getByLabel('Save a copy as a new scenario').fill('Night shift option');await page.getByRole('button',{name:'New scenario'}).click();
+ await page.locator('summary',{hasText:'New scenario'}).click();await page.getByLabel('Save a copy as a new scenario').fill('Night shift option');await page.getByRole('button',{name:'New scenario'}).click();
  await page.getByText('Scenario: Night shift option').waitFor();
  await openNode('Paving');await dlg().getByTestId('requirement').nth(0).getByLabel('Resource rate').fill('2000');await closeDrawer();
  await page.getByRole('button',{name:'Save',exact:true}).click();await page.getByRole('status').filter({hasText:'Saved.'}).waitFor();

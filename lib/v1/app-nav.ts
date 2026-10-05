@@ -64,7 +64,7 @@ export function navFor(a:NavAccess):NavArea[]{
 }
 export const canOpen=(a:NavAccess,area:string,sub?:string)=>{const x=navFor(a).find(n=>n.key===area);return Boolean(x&&(!sub||!x.subs||x.subs.some(s=>s.key===sub)));};
 
-export type Route={area:string;sub?:string;id?:string;tab?:string};
+export type Route={area:string;sub?:string;id?:string;tab?:string;focus?:string};
 const ENGINE_MAP:Record<string,Record<string,[string,string?]>>={
  'Win Work':{Clients:['CRM','Clients'],Opportunities:['Pipeline','Opportunities'],Tenders:['Pipeline','Tenders'],Estimates:['Pipeline','Estimates'],'':['Pipeline']},
  'Prepare Work':{Projects:['Projects','Projects'],Programme:['Projects','Programme'],'IMS & HSEQ':['IMS & HSEQ'],'Company Library':['Documents','Company Library'],'':['Projects','Projects']},

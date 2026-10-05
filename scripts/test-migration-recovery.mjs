@@ -91,4 +91,6 @@ try{
 
 await import('./test-program-costing-migration.mjs');
 await import('./test-planning-migration.mjs');
+await import('./test-work-areas-migration.mjs');
+await import('./test-work-point-migration.mjs');
 await import('./test-programme-costing-containment.mjs');

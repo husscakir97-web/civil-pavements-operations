@@ -128,4 +128,4 @@ The server key (if used) is restricted by server IP and the same API list. It is
 
 Points are WGS84 decimal degrees with 7 dp. `owner_type` / `location_type` let later tranches add
 polygons or chainages (e.g. a `geometry` column or a sibling table) without changing owners. Road
-intelligence, TMP and routing are out of scope here.
+intelligence, TMP and routing are out of scope here. Project work-area polygons are a separate model (`project_work_areas`, see `docs/WORK-MAP.md`); they never touch the address pin.

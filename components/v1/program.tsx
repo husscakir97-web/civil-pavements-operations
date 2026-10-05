@@ -7,6 +7,7 @@ import {ArrowDown,ArrowLeft,ArrowRight,ArrowUp,CalendarDays,Copy,GripVertical,Me
 import {api,useApi,useAction,useSession,PageHeader,Section,ErrorState,Btn,Pill,Field,field as fieldClass} from './kit';
 import {useNav} from './nav';
 import {ActivityPreview} from './activity-preview';
+import {ProgrammePortfolioView} from './programme-portfolio';
 import {previewNumber} from '@/lib/seams/activity-preview';
 import type {EstimateItemReference} from '@/lib/v1/program-costing';
 import {addDays,moveActivity,moveActivityTo,responsibleToken,type Activity} from '@/lib/v1/program';
@@ -33,6 +34,12 @@ const dateLabel=(d:string,weekday=false)=>new Date(d+'T12:00:00Z').toLocaleDateS
 const monday=(d:string)=>{const x=new Date(d+'T12:00:00Z'),n=(x.getUTCDay()+6)%7;return addDays(d,-n);};
 
 export function Program(){
+ const [mode,setMode]=useState<'company'|'project'>('company'),[projectOpened,setProjectOpened]=useState(false);
+ // Switching scope is a view change: keep the selected project and unsaved editor state.
+ // Mount the editor on first use, then hide it rather than discarding its state.
+ return <div className="space-y-5"><PageHeader title="Planning & programme" subtitle="Company lookahead and project programmes."/><div role="group" aria-label="Programme scope" className="flex flex-wrap gap-2">{(['company','project'] as const).map(m=><button key={m} type="button" aria-pressed={mode===m} className={`min-h-10 rounded-lg border px-4 ${mode===m?'bg-slate-900 text-white':'bg-white'}`} onClick={()=>{setMode(m);if(m==='project')setProjectOpened(true);}}>{m==='company'?'Company programme':'Project programme'}</button>)}</div>{mode==='company'&&<ProgrammePortfolioView/>}{projectOpened&&<div hidden={mode!=='project'}><ProjectProgramme/></div>}</div>;
+}
+function ProjectProgramme(){
  const [projectId,setProjectId]=useState('');
  const list=useApi<{projects:{id:string;name:string}[]}>('/api/projects/program');
  return <div className="space-y-5"><PageHeader title="Planning & programme" subtitle="Collaborative activities, dependencies and lookahead. Operational shifts stay in Schedule."/><ErrorState error={list.error}/>
@@ -62,7 +69,7 @@ export function ProgrammePanel({projectId}:{projectId:string}){
  return <div className="space-y-4">
   <ErrorState error={data.error||action.error} onRetry={data.error?data.refresh:undefined}/>
   <div className="flex flex-wrap items-center gap-2">
-   <div role="group" aria-label="Programme view" className="flex flex-wrap gap-2">{(['Board','List','Timeline','Lookahead','Calendar'] as const).map(v=><button key={v} type="button" aria-pressed={view===v} onClick={()=>setView(v)} className={`min-h-9 rounded-full border px-3 text-sm ${view===v?'border-[#172633] bg-[#172633] text-white':'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{v}</button>)}</div>
+   <div role="group" aria-label="Programme view" className="flex flex-wrap gap-2">{(['Board','List','Timeline','Lookahead','Calendar'] as const).map(v=><button key={v} type="button" aria-pressed={view===v} onClick={()=>setView(v)} className={`min-h-9 rounded-full border px-3 text-sm ${view===v?'border-[#2d2f31] bg-[#2d2f31] text-white':'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{v}</button>)}</div>
    {session.can('schedule.view')&&<Btn variant="secondary" className="ml-auto" onClick={()=>navigate('Operations','Schedule',projectId)}><CalendarDays aria-hidden className="size-4"/>{session.can('schedule.edit')?'Plan shifts':'View schedule'}</Btn>}
   </div>
   {writable&&<QuickAdd projectId={projectId} defaultStart={nextStart} members={members} onAdded={done}/>}

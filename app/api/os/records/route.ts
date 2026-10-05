@@ -1,3 +1,4 @@
+import {normaliseEmploymentType,workerEmployment} from '@/lib/v1/employment';
 import {withActor} from '@/lib/platform/route';
 import { cleanText, jsonError, nowIso, requireEstimateDb, safeJson } from "@/lib/estimates-db";
 import { mergeJob } from '@/lib/planning';
@@ -58,7 +59,7 @@ function serialiseRow(row: Record<string, unknown>) {
     id: String(row.id ?? ""),
     name: String(row.name ?? ""),
     status: String(row.status ?? "active"),
-    metadata: parseMetadata(row.metadata),
+    metadata: {...parseMetadata(row.metadata),...('employment_type' in row?{employmentType:workerEmployment(row,parseMetadata(row.metadata))}:{})},
     createdAt: String(row.createdAt ?? row.created_at ?? ""),
   };
 }
@@ -73,7 +74,7 @@ async function handleGET(request: Request) {
     if (!table) return jsonError("This workspace is not configured yet.", 400);
     if (!can(actor.role, VIEW[table])) return jsonError('You are not authorised to view these records.', 403);
     const result = await db
-      .prepare(`SELECT id, name, status, metadata, created_at AS createdAt FROM ${table} WHERE organisation_id = ? ORDER BY created_at DESC LIMIT 200`)
+      .prepare(`SELECT id, name, status, metadata, created_at AS createdAt${table==='workers'?',employment_type,legacy_synced_at':''} FROM ${table} WHERE organisation_id = ? ORDER BY created_at DESC LIMIT 200`)
       .bind(actor.organisationId)
       .all<Record<string, unknown>>();
     return Response.json({ module: moduleKey, resourceType, records: result.results.map(serialiseRow) });
@@ -130,12 +131,19 @@ async function handlePUT(request: Request) {
     const name = cleanText(body.name, 180);
     const status = cleanText(body.status, 50) || "active";
     if (table === 'shifts' || (table === 'jobs' && /ready|in progress/i.test(status))) return jsonError('Use the delivery workspace for readiness transitions.', 409);
-    const existing = await db.prepare(`SELECT metadata${table === 'jobs' ? ',stage' : ''} FROM ${table} WHERE organisation_id = ? AND id = ?`).bind(actor.organisationId,id).first<{metadata:string;stage?:string|null}>();
+    const existing = await db.prepare(`SELECT metadata${table === 'workers' ? ',employment_type,legacy_synced_at' : ''}${table === 'jobs' ? ',stage' : ''} FROM ${table} WHERE organisation_id = ? AND id = ?`).bind(actor.organisationId,id).first<{metadata:string;stage?:string|null;employment_type?:string|null;legacy_synced_at?:string|null}>();
     if (!existing) return jsonError('Record not found.',404);
     if (existing.stage === 'closed') return jsonError('This project is closed. Reopen it from the project workspace before changing it.', 409);
     const previous = parseMetadata(existing.metadata);
     const patch = body.metadata && typeof body.metadata === 'object' ? body.metadata as Record<string,unknown> : {};
     const metadata = table === 'jobs' ? mergeJob(previous,patch) : {...previous,...patch};
+    if(table==='workers'){
+      const proposed=normaliseEmploymentType(patch.employmentType);
+      // Legacy forms resend whole metadata objects without a worker revision. Once typed,
+      // classification is edited through People, whose save checks the worker revision.
+      metadata.employmentType=existing.legacy_synced_at||existing.employment_type!=null||!proposed
+        ?workerEmployment(existing,previous):proposed;
+    }
     const sync = await resourceSync(db, actor.organisationId, table, { id, name, status, metadata });
     const [result] = await db.batch([
       db.prepare(`UPDATE ${table} SET name = ?, status = ?, metadata = ? WHERE organisation_id = ? AND id = ?`).bind(name, status, JSON.stringify(metadata), actor.organisationId, id),

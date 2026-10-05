@@ -28,7 +28,7 @@ export function ResourcesArea({initial='workers',other,initialQuery,only}:{initi
  if(only)return <div className="mx-auto max-w-7xl">{initial==='plant'?<PlantList initialQuery={initialQuery}/>:initial==='other'?other:<><Workers initialQuery={initialQuery}/>{open>0&&<Section title="Migration issues"><Issues state={issues}/></Section>}</>}</div>;
  return <div className="mx-auto max-w-7xl p-4 sm:p-6">
   <PageHeader title="Resources" subtitle="Workers, competencies and plant used by the scheduler's conflict checks."/>
-  <Tabs label="Resource registers" active={tab} onChange={next=>{if(confirmLeave())setTab(next);}} tabs={[{key:'workers',label:'Workers'},{key:'plant',label:'Plant & equipment'},{key:'other',label:'Crews, suppliers & subcontractors',hidden:!other},{key:'issues',label:'Migration issues',badge:open?<Pill tone="warning">{open}</Pill>:undefined}]}/>
+  <Tabs label="Resource registers" active={tab} onChange={next=>{if(next!==tab&&confirmLeave())setTab(next);}} tabs={[{key:'workers',label:'Workers'},{key:'plant',label:'Plant & equipment'},{key:'other',label:'Crews, suppliers & subcontractors',hidden:!other},{key:'issues',label:'Migration issues',badge:open?<Pill tone="warning">{open}</Pill>:undefined}]}/>
   {tab==='workers'&&<Workers initialQuery={initial==='workers'?initialQuery:undefined}/>}
   {tab==='plant'&&<PlantList initialQuery={initial==='plant'?initialQuery:undefined}/>}
   {tab==='other'&&other}
@@ -82,7 +82,7 @@ function Workers({initialQuery}:{initialQuery?:string}){
  if(loading&&!data)return <Loading/>;
  if(error&&!data)return <ErrorState error={error} onRetry={refresh}/>;
  const list=filterLookup(data?.workers||[],filter,w=>[w.name,w.role_title,w.employee_number,w.email,w.phone,w.location,w.employment_type,employmentLabel(w.employment_type),...w.competencies.map(c=>c.competency_type)],w=>[w.employee_number],w=>w.name);
- return <Section title="Workers" description="Required competencies on a shift are checked against these records before it can be planned." actions={canEdit&&<div className="flex flex-wrap gap-2"><ResourceImporter kind="workers" onImported={refresh}/><Btn onClick={()=>{if(confirmLeave())setEditing('new');}}>Add worker</Btn></div>}>
+ return <Section title="Workers" description="Required competencies on a shift are checked against these records before it can be planned." actions={canEdit&&<div className="flex flex-wrap gap-2"><ResourceImporter kind="workers" onImported={refresh}/><Btn onClick={()=>{if(editing!=='new'&&confirmLeave())setEditing('new');}}>Add worker</Btn></div>}>
   {editing&&<WorkerForm key={editing==='new'?'new':editing.id} worker={editing==='new'?null:editing} rates={rates} onClose={()=>setEditing(null)} onSaved={()=>{setEditing(null);refresh();}}/>}
   <label className="mb-3 block max-w-sm text-sm"><span className="sr-only">Filter workers</span><input type="search" className={field} placeholder="Filter by name, employee no., role or competency" value={filter} onChange={e=>setFilter(e.target.value)}/></label>
   {!list.length?<EmptyState title={filter?'No workers match this filter':'No workers yet'} detail={filter?undefined:'Add the people you schedule so competencies and double-booking can be checked.'}/>:
@@ -92,7 +92,7 @@ function Workers({initialQuery}:{initialQuery?:string}){
     <div className="mt-2 flex flex-wrap gap-1.5">{w.competencies.length?w.competencies.map(c=><Pill key={c.id} tone={expiryTone(c.state)}>{c.competency_type}: {expiryLabel(c.state,c.expiry_date)}</Pill>):<Pill tone="warning">No competencies recorded</Pill>}</div>
     <CompetencyEditor worker={w} canEdit={canEdit} onChanged={refresh}/>
    </div>
-   <div className="flex items-start gap-2"><Pill tone={!w.active?'danger':w.status==='Leave'?'warning':'success'}>{w.status}</Pill>{canEdit&&<Btn variant="secondary" onClick={()=>{if(confirmLeave())setEditing(w);}} aria-label={`Edit ${w.name}`}>Edit</Btn>}</div>
+   <div className="flex items-start gap-2"><Pill tone={!w.active?'danger':w.status==='Leave'?'warning':'success'}>{w.status}</Pill>{canEdit&&<Btn variant="secondary" onClick={()=>{if(editing!=='new'&&editing?.id===w.id)return;if(confirmLeave())setEditing(w);}} aria-label={`Edit ${w.name}`}>Edit</Btn>}</div>
   </li>)}</ul>}
  </Section>;
 }

@@ -175,7 +175,9 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
   const [jobs, setJobs] = useState<Lookup[]>([]);
   const [loading, setLoading] = useState(true);
   const [savedForm, setSavedForm] = useState(() => JSON.stringify(form));
-  useNavGuard(!loading && JSON.stringify(form)!==savedForm ? 'You have unsaved estimate changes. Leave without saving?' : null);
+  const dirty=!loading && JSON.stringify(form)!==savedForm;
+  const leaveMessage='You have unsaved estimate changes. Leave without saving?';
+  useNavGuard(dirty ? leaveMessage : null);
   const [busy, setBusy] = useState(false);
   const [showRates, setShowRates] = useState(false);
   const [rateSaving, setRateSaving] = useState(false);
@@ -230,6 +232,13 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
     setForm(estimate.data);
     setSavedForm(JSON.stringify(estimate.data));
     setRevisions(payload.revisions ?? []);
+  }
+
+  async function selectEstimate(id: string) {
+    if(id===selectedId)return;
+    // Keep the existing guard until replacement succeeds; a failed request retains the draft.
+    if(dirty&&!window.confirm(leaveMessage))return;
+    try{await openEstimate(id);}catch(error){toast.error(error instanceof Error?error.message:'Could not load estimate.');}
   }
 
   useEffect(() => {
@@ -461,7 +470,7 @@ export function EstimatesQuotes({opportunityId,opportunityName,initialEstimateId
             <Input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search estimates…" className="mb-2 h-9" />
             <div className="max-h-[480px] space-y-1 overflow-y-auto">
               {filteredEstimates.length === 0 && <p className="px-2 py-6 text-center text-sm text-slate-500">No saved estimates yet.</p>}
-              {filteredEstimates.map((estimate) => <button key={estimate.id} onClick={() => {if(confirmLeave())void openEstimate(estimate.id);}} className={`w-full rounded-lg border px-3 py-3 text-left transition ${selectedId === estimate.id ? "border-primary bg-orange-50/60" : "border-transparent hover:border-slate-200 hover:bg-slate-50"}`}><div className="flex items-start justify-between gap-2"><span className="min-w-0 truncate text-sm font-semibold text-slate-900">{estimate.name}</span><ChevronRight className="mt-0.5 size-4 shrink-0 text-slate-400" /></div><p className="mt-1 truncate text-xs text-slate-500">{estimate.data.clientName || "No client"} · {estimate.data.projectName || "No project"}</p><div className="mt-2 flex items-center justify-between gap-2"><StatusBadge status={estimate.status} /><span className="text-xs text-slate-500">Rev {estimate.revisionNumber}</span></div></button>)}
+              {filteredEstimates.map((estimate) => <button key={estimate.id} onClick={() => {void selectEstimate(estimate.id);}} className={`w-full rounded-lg border px-3 py-3 text-left transition ${selectedId === estimate.id ? "border-primary bg-orange-50/60" : "border-transparent hover:border-slate-200 hover:bg-slate-50"}`}><div className="flex items-start justify-between gap-2"><span className="min-w-0 truncate text-sm font-semibold text-slate-900">{estimate.name}</span><ChevronRight className="mt-0.5 size-4 shrink-0 text-slate-400" /></div><p className="mt-1 truncate text-xs text-slate-500">{estimate.data.clientName || "No client"} · {estimate.data.projectName || "No project"}</p><div className="mt-2 flex items-center justify-between gap-2"><StatusBadge status={estimate.status} /><span className="text-xs text-slate-500">Rev {estimate.revisionNumber}</span></div></button>)}
             </div>
           </div>
           {selectedId && <div className="rounded-xl border bg-white p-4 shadow-sm"><div className="flex items-center gap-2"><History className="size-4 text-primary" /><h3 className="text-sm font-semibold">Version history</h3></div><div className="mt-3 space-y-2">{revisions.length === 0 && <p className="text-xs text-slate-500">No revisions returned.</p>}{revisions.map((revision) => <div key={revision.id} className="rounded-lg bg-slate-50 p-2.5"><div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold text-slate-700">Rev {revision.metadata.revisionNumber ?? "—"}</span><StatusBadge status={revision.status} /></div><p className="mt-1 text-xs text-slate-500">{revision.metadata.reason || "Saved revision"}</p><p className="mt-1 text-[11px] text-slate-400">{new Date(revision.createdAt).toLocaleString("en-AU")}</p></div>)}</div></div>}

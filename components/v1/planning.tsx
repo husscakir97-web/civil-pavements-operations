@@ -2,7 +2,7 @@
 // Planning v0.1 (docs/PLANNING-V0-1-DECISION.md): an undated methodology canvas with live costing, saved scenarios and a
 // relative timeline. One calculation (lib/v1/planning.ts) drives the preview here and the authoritative server result.
 import {useEffect,useMemo,useRef,useState,type PointerEvent as ReactPointerEvent} from 'react';
-import {Download,GitBranch,Link2,Milestone,Plus,Trash2,X,ChevronRight} from 'lucide-react';
+import {Download,GitBranch,Link2,Milestone,Plus,Trash2,X,ChevronRight,ArrowLeft} from 'lucide-react';
 import {api,useApi,useAction,useSession,PageHeader,Section,ErrorState,EmptyState,Btn,Pill,Tabs,Field,field as fieldClass,money} from './kit';
 import {FIELDS,KNOWN_UNITS,blankActivity,calculatePlan,findCycle,fits,newId,validatePlan,type FieldSpec,type PlanActivity,type PlanDocument,type PlanResult,type Positions,type Requirement} from '@/lib/v1/planning';
 
@@ -140,10 +140,11 @@ function Editor({scenarioId,onBack}:{scenarioId:string;onBack:()=>void}){
  const unknownCount=total?.unknownCount??0,durationUnknown=!result.duration.complete;
  const leave=()=>{if(dirty&&!window.confirm('You have unsaved changes to this plan. Leave without saving?'))return;onBack();};
  return <div className={`plan-ui space-y-5 lg:pb-0 ${selectedAct&&view!=='Costs'&&!drawer?(sheetOpen?'pb-[62vh]':'pb-32'):'pb-24'}`}>
-  <PageHeader crumbs={[{label:'Planning',onClick:leave},{label:data.plan.name}]} title={data.plan.name} subtitle="Undated methodology plan. The timeline is relative: working days from the start of the plan, with no availability claims."
+  <PageHeader compact crumbs={[{label:'Planning',onClick:leave},{label:data.plan.name}]} title={data.plan.name} subtitle="Undated methodology plan. The timeline is relative: working days from the start of the plan, with no availability claims."
    badges={<><Pill tone="info">Scenario: {data.scenario.name}</Pill>{dirty&&<Pill tone="warning">Unsaved changes</Pill>}</>}/>
   <div data-testid="plan-actionbar" className="plan-actionbar sticky top-0 z-30 -mx-1 flex flex-wrap items-center justify-between gap-2 rounded-xl px-3 py-2">
-   <p className="text-sm text-slate-600" aria-live="off">{!editable?'View only':dirty?<span className="font-medium text-amber-800">Edits not saved yet</span>:'No pending edits'}</p>
+   <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1"><Btn variant="ghost" className="sm:hidden !min-h-11 !px-2" data-testid="plan-back" onClick={leave}><ArrowLeft aria-hidden className="size-4"/>Back to plans</Btn>
+   <p className="text-sm text-slate-600" aria-live="off">{!editable?'View only':dirty?<span className="font-medium text-amber-800">Edits not saved yet</span>:'No pending edits'}</p></div>
    <div className="flex flex-wrap items-center gap-2">
     {editable&&dirty&&<Btn variant="ghost" onClick={discard}>Discard changes</Btn>}
     <a className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50" href={`/api/planning?scenarioId=${data.scenario.id}&export=csv`}><Download aria-hidden className="size-4"/>Export CSV</a>
@@ -160,12 +161,12 @@ function Editor({scenarioId,onBack}:{scenarioId:string;onBack:()=>void}){
   <div className="plan-card min-w-0 overflow-hidden">
    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--plan-line)] px-3 py-2.5 sm:px-4">
     <Tabs label="Planning views" active={view} onChange={setView} tabs={[{key:'Flowchart',label:'Flowchart'},{key:'Timeline',label:'Relative timeline'},{key:'Costs',label:'Costs'}]}/>
-    <div className="flex flex-wrap items-center gap-2">
-     <select aria-label="Scenario" className={`${fieldClass} !min-h-10 !w-auto max-w-[14rem]`} value={data.scenario.id} disabled={dirty} onChange={e=>setCurrent(e.target.value)}>{data.plan.scenarios.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>
+    <div className="flex min-w-0 flex-wrap items-center gap-2 max-sm:w-full">
+     <select aria-label="Scenario" className={`${fieldClass} !min-h-10 !w-auto max-w-[14rem] max-sm:!max-w-full`} value={data.scenario.id} disabled={dirty} onChange={e=>setCurrent(e.target.value)}>{data.plan.scenarios.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>
      {dirty&&<p className="text-xs text-slate-500">Save or discard changes before switching.</p>}
     </div>
    </div>
-   {editable&&!dirty&&<form className="flex flex-wrap items-end gap-2 border-b border-[var(--plan-line)] px-3 py-2.5 sm:px-4" onSubmit={e=>{e.preventDefault();if(newName.trim())void newScenario();}}><Field label="Save a copy as a new scenario"><input className={fieldClass} value={newName} maxLength={180} onChange={e=>setNewName(e.target.value)} placeholder="e.g. Night shift option"/></Field><Btn type="submit" variant="secondary" disabled={!newName.trim()} busy={save.busy}><GitBranch aria-hidden className="size-4"/>New scenario</Btn></form>}
+   {editable&&!dirty&&<details className="gs-details border-b border-[var(--plan-line)] px-3 sm:px-4"><summary>New scenario</summary><form className="flex flex-wrap items-end gap-2 pb-3" onSubmit={e=>{e.preventDefault();if(newName.trim())void newScenario();}}><Field label="Save a copy as a new scenario"><input className={fieldClass} value={newName} maxLength={180} onChange={e=>setNewName(e.target.value)} placeholder="e.g. Night shift option"/></Field><Btn type="submit" variant="secondary" disabled={!newName.trim()} busy={save.busy}><GitBranch aria-hidden className="size-4"/>New scenario</Btn></form></details>}
    <div className="p-3 sm:p-4">
     {view==='Flowchart'&&<div className="md:hidden"><div className="mb-3 inline-flex rounded-lg bg-[var(--plan-soft)] p-1 text-sm" role="group" aria-label="Flowchart layout"><button aria-pressed={!mobileCanvas} className={`rounded-md px-3 py-1.5 ${!mobileCanvas?'bg-white font-semibold shadow-sm':'text-slate-600'}`} onClick={()=>setMobileCanvas(false)}>List</button><button aria-pressed={mobileCanvas} className={`rounded-md px-3 py-1.5 ${mobileCanvas?'bg-white font-semibold shadow-sm':'text-slate-600'}`} onClick={()=>setMobileCanvas(true)}>Canvas</button></div></div>}
     {view==='Flowchart'&&<>
@@ -226,8 +227,8 @@ function Canvas({doc,result,rates,pos,linkFrom,editable,selectedId,onSelect,onMo
  const key=(e:React.KeyboardEvent<HTMLDivElement>,id:string)=>{const step=e.shiftKey?40:10,p=pos(id);const d={ArrowLeft:[-step,0],ArrowRight:[step,0],ArrowUp:[0,-step],ArrowDown:[0,step]}[e.key];if(d&&editable){e.preventDefault();onMove(id,{x:Math.max(0,p.x+d[0]),y:Math.max(0,p.y+d[1])});}else if(e.key==='Enter')onOpen(id);};
  if(!doc.activities.length)return <EmptyState title="Start with a block" detail="Add activities such as milling, preparation and paving, then connect their sequence."/>;
  return <div className="plan-canvas-frame overflow-auto rounded-xl" style={{maxHeight:'70vh'}}><div data-testid="plan-canvas" className="relative" style={{width,height}}>
-  <svg aria-hidden className="pointer-events-none absolute inset-0" width={width} height={height}><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6f8f86"/></marker></defs>
-   {doc.dependencies.map(d=>{const a=pos(d.from),b=pos(d.to),x1=a.x+NODE_W,y1=a.y+heightOf(d.from)/2,x2=b.x,y2=b.y+heightOf(d.to)/2,mx=(x1+x2)/2;return <path key={`${d.from}>${d.to}`} data-testid="plan-edge" data-from={d.from} data-to={d.to} d={`M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`} fill="none" stroke="#6f8f86" strokeWidth="1.6" markerEnd="url(#arrow)"/>;})}
+  <svg aria-hidden className="pointer-events-none absolute inset-0" width={width} height={height}><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6b6e70"/></marker></defs>
+   {doc.dependencies.map(d=>{const a=pos(d.from),b=pos(d.to),x1=a.x+NODE_W,y1=a.y+heightOf(d.from)/2,x2=b.x,y2=b.y+heightOf(d.to)/2,mx=(x1+x2)/2;return <path key={`${d.from}>${d.to}`} data-testid="plan-edge" data-from={d.from} data-to={d.to} d={`M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`} fill="none" stroke="#6b6e70" strokeWidth="1.6" markerEnd="url(#arrow)"/>;})}
   </svg>
   {editable&&doc.dependencies.map(d=>{const a=pos(d.from),b=pos(d.to);const names=new Map(doc.activities.map(x=>[x.id,x.name]));return <button key={`x${d.from}>${d.to}`} aria-label={`Remove link from ${names.get(d.from)} to ${names.get(d.to)}`} className="absolute z-10 flex size-6 items-center justify-center rounded-full border bg-white text-slate-500 shadow-sm hover:text-red-700" style={{left:(a.x+NODE_W+b.x)/2-12,top:(a.y+heightOf(d.from)/2+b.y+heightOf(d.to)/2)/2-12}} onClick={()=>onUnlink(d.from,d.to)}><X aria-hidden className="size-3"/></button>;})}
   {doc.activities.map((a,i)=>{const p=pos(a.id),r=result.activities[a.id],on=selectedId===a.id,h=heightOf(a.id),tight=h<NODE_H-16;return <div key={a.id} role="group" tabIndex={0} aria-label={`${a.name}, ${a.kind}`} data-testid="plan-node" data-activity-id={a.id} data-x={p.x} data-y={p.y} data-selected={on?'true':undefined} onKeyDown={e=>key(e,a.id)}

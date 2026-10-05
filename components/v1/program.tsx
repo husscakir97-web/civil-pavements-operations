@@ -62,7 +62,7 @@ export function ProgrammePanel({projectId}:{projectId:string}){
  return <div className="space-y-4">
   <ErrorState error={data.error||action.error} onRetry={data.error?data.refresh:undefined}/>
   <div className="flex flex-wrap items-center gap-2">
-   <div role="group" aria-label="Programme view" className="flex flex-wrap gap-2">{(['Board','List','Timeline','Lookahead','Calendar'] as const).map(v=><button key={v} type="button" aria-pressed={view===v} onClick={()=>setView(v)} className={`min-h-9 rounded-full border px-3 text-sm ${view===v?'border-[#172633] bg-[#172633] text-white':'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{v}</button>)}</div>
+   <div role="group" aria-label="Programme view" className="flex flex-wrap gap-2">{(['Board','List','Timeline','Lookahead','Calendar'] as const).map(v=><button key={v} type="button" aria-pressed={view===v} onClick={()=>setView(v)} className={`min-h-9 rounded-full border px-3 text-sm ${view===v?'border-[#2d2f31] bg-[#2d2f31] text-white':'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{v}</button>)}</div>
    {session.can('schedule.view')&&<Btn variant="secondary" className="ml-auto" onClick={()=>navigate('Operations','Schedule',projectId)}><CalendarDays aria-hidden className="size-4"/>{session.can('schedule.edit')?'Plan shifts':'View schedule'}</Btn>}
   </div>
   {writable&&<QuickAdd projectId={projectId} defaultStart={nextStart} members={members} onAdded={done}/>}

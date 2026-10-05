@@ -140,7 +140,7 @@ function Editor({scenarioId,onBack}:{scenarioId:string;onBack:()=>void}){
  const unknownCount=total?.unknownCount??0,durationUnknown=!result.duration.complete;
  const leave=()=>{if(dirty&&!window.confirm('You have unsaved changes to this plan. Leave without saving?'))return;onBack();};
  return <div className={`plan-ui space-y-5 lg:pb-0 ${selectedAct&&view!=='Costs'&&!drawer?(sheetOpen?'pb-[62vh]':'pb-32'):'pb-24'}`}>
-  <PageHeader crumbs={[{label:'Planning',onClick:leave},{label:data.plan.name}]} title={data.plan.name} subtitle="Undated methodology plan. The timeline is relative: working days from the start of the plan, with no availability claims."
+  <PageHeader compact crumbs={[{label:'Planning',onClick:leave},{label:data.plan.name}]} title={data.plan.name} subtitle="Undated methodology plan. The timeline is relative: working days from the start of the plan, with no availability claims."
    badges={<><Pill tone="info">Scenario: {data.scenario.name}</Pill>{dirty&&<Pill tone="warning">Unsaved changes</Pill>}</>}/>
   <div data-testid="plan-actionbar" className="plan-actionbar sticky top-0 z-30 -mx-1 flex flex-wrap items-center justify-between gap-2 rounded-xl px-3 py-2">
    <p className="text-sm text-slate-600" aria-live="off">{!editable?'View only':dirty?<span className="font-medium text-amber-800">Edits not saved yet</span>:'No pending edits'}</p>
@@ -160,12 +160,12 @@ function Editor({scenarioId,onBack}:{scenarioId:string;onBack:()=>void}){
   <div className="plan-card min-w-0 overflow-hidden">
    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--plan-line)] px-3 py-2.5 sm:px-4">
     <Tabs label="Planning views" active={view} onChange={setView} tabs={[{key:'Flowchart',label:'Flowchart'},{key:'Timeline',label:'Relative timeline'},{key:'Costs',label:'Costs'}]}/>
-    <div className="flex flex-wrap items-center gap-2">
-     <select aria-label="Scenario" className={`${fieldClass} !min-h-10 !w-auto max-w-[14rem]`} value={data.scenario.id} disabled={dirty} onChange={e=>setCurrent(e.target.value)}>{data.plan.scenarios.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>
+    <div className="flex min-w-0 flex-wrap items-center gap-2 max-sm:w-full">
+     <select aria-label="Scenario" className={`${fieldClass} !min-h-10 !w-auto max-w-[14rem] max-sm:!max-w-full`} value={data.scenario.id} disabled={dirty} onChange={e=>setCurrent(e.target.value)}>{data.plan.scenarios.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>
      {dirty&&<p className="text-xs text-slate-500">Save or discard changes before switching.</p>}
     </div>
    </div>
-   {editable&&!dirty&&<form className="flex flex-wrap items-end gap-2 border-b border-[var(--plan-line)] px-3 py-2.5 sm:px-4" onSubmit={e=>{e.preventDefault();if(newName.trim())void newScenario();}}><Field label="Save a copy as a new scenario"><input className={fieldClass} value={newName} maxLength={180} onChange={e=>setNewName(e.target.value)} placeholder="e.g. Night shift option"/></Field><Btn type="submit" variant="secondary" disabled={!newName.trim()} busy={save.busy}><GitBranch aria-hidden className="size-4"/>New scenario</Btn></form>}
+   {editable&&!dirty&&<details className="gs-details border-b border-[var(--plan-line)] px-3 sm:px-4"><summary>New scenario</summary><form className="flex flex-wrap items-end gap-2 pb-3" onSubmit={e=>{e.preventDefault();if(newName.trim())void newScenario();}}><Field label="Save a copy as a new scenario"><input className={fieldClass} value={newName} maxLength={180} onChange={e=>setNewName(e.target.value)} placeholder="e.g. Night shift option"/></Field><Btn type="submit" variant="secondary" disabled={!newName.trim()} busy={save.busy}><GitBranch aria-hidden className="size-4"/>New scenario</Btn></form></details>}
    <div className="p-3 sm:p-4">
     {view==='Flowchart'&&<div className="md:hidden"><div className="mb-3 inline-flex rounded-lg bg-[var(--plan-soft)] p-1 text-sm" role="group" aria-label="Flowchart layout"><button aria-pressed={!mobileCanvas} className={`rounded-md px-3 py-1.5 ${!mobileCanvas?'bg-white font-semibold shadow-sm':'text-slate-600'}`} onClick={()=>setMobileCanvas(false)}>List</button><button aria-pressed={mobileCanvas} className={`rounded-md px-3 py-1.5 ${mobileCanvas?'bg-white font-semibold shadow-sm':'text-slate-600'}`} onClick={()=>setMobileCanvas(true)}>Canvas</button></div></div>}
     {view==='Flowchart'&&<>

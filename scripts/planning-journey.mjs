@@ -245,7 +245,7 @@ try{
  check('The server recomputes the same totals as the browser preview',server1.result.cost.total===9010&&server1.result.duration.days===3,`server total ${server1.result.cost.total}, duration ${server1.result.duration.days}`);
 
  // Scenarios
- await page.getByLabel('Save a copy as a new scenario').fill('Night shift option');await page.getByRole('button',{name:'New scenario'}).click();
+ await page.locator('summary',{hasText:'New scenario'}).click();await page.getByLabel('Save a copy as a new scenario').fill('Night shift option');await page.getByRole('button',{name:'New scenario'}).click();
  await page.getByText('Scenario: Night shift option').waitFor();
  await openNode('Paving');await dlg().getByTestId('requirement').nth(0).getByLabel('Resource rate').fill('2000');await closeDrawer();
  await page.getByRole('button',{name:'Save',exact:true}).click();await page.getByRole('status').filter({hasText:'Saved.'}).waitFor();

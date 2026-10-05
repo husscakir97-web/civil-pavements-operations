@@ -119,7 +119,7 @@ try{
  // ================= C. Business saved, layout failed (390px) =================
  {const {ctx,page,errors}=await session(M);await goPlan(page,M);await track(page);
   await page.getByRole('button',{name:'Canvas',exact:true}).click();
-  const node=page.getByRole('group',{name:/^Paving,/});const b=await node.boundingBox();
+  const node=page.getByRole('group',{name:/^Paving,/});await node.scrollIntoViewIfNeeded();const b=await node.boundingBox();
   await page.mouse.move(b.x+60,b.y+20);await page.mouse.down();await page.mouse.move(b.x+90,b.y+60,{steps:5});await page.mouse.up();
   await node.getByRole('button',{name:/^(Edit|View)$/}).click();await dlg(page).waitFor();await dlg(page).getByLabel('Activity name').fill('Paving moved');
   const positionsBefore=JSON.stringify((await db.query('SELECT * FROM planning_canvas_positions WHERE scenario_id=?',[sid]).catch(()=>[[]]))[0]);
@@ -143,7 +143,7 @@ try{
  // ================= C2. Partial failure, then another content edit (390px) =================
  {const {ctx,page,errors}=await session(M);await goPlan(page,M);await track(page);
   await page.getByRole('button',{name:'Canvas',exact:true}).click();
-  const node=page.getByRole('group',{name:/^Paving,/});const b=await node.boundingBox();
+  const node=page.getByRole('group',{name:/^Paving,/});await node.scrollIntoViewIfNeeded();const b=await node.boundingBox();
   await page.mouse.move(b.x+60,b.y+20);await page.mouse.down();await page.mouse.move(b.x+90,b.y+60,{steps:5});await page.mouse.up();
   await node.getByRole('button',{name:/^(Edit|View)$/}).click();await dlg(page).waitFor();await dlg(page).getByLabel('Activity name').fill('Paving first');
   let failLayout=true;

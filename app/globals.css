@@ -475,3 +475,34 @@ body { font-family: "Helvetica Neue", "Aptos", "Inter", "Segoe UI", Arial, sans-
 .plan-ui .plan-group { border: 1px solid var(--gs-line); border-radius: 2px; background: transparent; }
 .plan-ui .plan-legend { font-size: 11px; font-weight: 500; letter-spacing: .14em; color: var(--gs-muted); }
 .plan-ui [class*="rounded-xl"], .plan-ui [class*="rounded-lg"], .plan-ui [class*="rounded-2xl"] { border-radius: 2px; }
+
+/* Canvas-first: compact page header, details disclosure, tighter plan summary */
+.gs-compact .gs-title{font-size:1.5rem;line-height:1.2}
+@media(min-width:640px){.gs-compact .gs-title{font-size:1.75rem}}
+.gs-details>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:.5rem;min-height:2.75rem;font-size:.75rem;letter-spacing:.14em;text-transform:uppercase;color:var(--gs-muted)}
+.gs-details>summary::-webkit-details-marker{display:none}
+.gs-details>summary::before{content:"+";display:inline-grid;place-items:center;width:1.1rem;height:1.1rem;border:1px solid var(--gs-line-strong);font-size:.85rem;letter-spacing:0}
+.gs-details[open]>summary::before{content:"\2212"}
+.plan-ui .plan-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media(max-width:639px){.plan-ui .plan-hint{display:none}.plan-ui .plan-kpi{padding:.6rem .7rem}.plan-ui .plan-figure{font-size:1.1rem}}
+
+@media(max-width:639px){
+ .gs-compact .gs-crumb,.gs-compact nav[aria-label="Breadcrumb"]{display:none}
+ .gs-compact .gs-title{font-size:1.2rem}
+ .workspace-page-header.gs-compact{margin-bottom:.25rem}
+}
+.gs-compact{margin-bottom:.5rem}
+
+.plan-ui .plan-kpi{padding:.7rem 1rem}
+.plan-ui .plan-figure{font-size:1.5rem;line-height:1.2}
+@media(max-width:639px){
+ .gs-note{font-size:.75rem;line-height:1.25rem;padding:.5rem .65rem}
+ .gs-compact .gs-title{font-size:1.1rem}
+}
+@media(max-width:639px){
+ .plan-ui .plan-kpis{grid-template-columns:1fr}
+ .plan-ui .plan-kpi{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.25rem .75rem;padding:.5rem .75rem}
+ .plan-ui .plan-kpi .plan-chip{display:none}
+ .plan-ui .plan-figure,.plan-ui .plan-figure-sm{font-size:1.05rem;margin:0}
+ .plan-ui select[aria-label="Scenario"]{max-width:100%;width:100%!important}
+}

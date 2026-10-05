@@ -26,8 +26,8 @@ async function run(label,viewport,mobile){
  await page.evaluate(()=>window.scrollTo(0,0));await shot('2b-workmap-top');
  await go(`#Projects//${B3}/workmap`);await page.getByTestId('work-map').waitFor();await shot('3-workmap-moved');
  await go('#Pipeline/Planning');await page.waitForTimeout(800);await shot('4-planning-list');
- const open=page.getByRole('button',{name:/^Open/}).first();if(await open.count()){await open.click();await page.getByTestId('plan-canvas').waitFor().catch(()=>{});await page.waitForTimeout(800);await shot('5-planning-editor');
-  const node=page.locator('[data-testid="plan-canvas"]').getByText('Pave and compact asphalt').first();if(await node.count()){await node.click();await page.waitForTimeout(500);await shot('6-planning-selected');}}
+ const open=page.getByRole('button',{name:'Open',exact:true}).first();if(await open.count()){await open.click();await page.getByTestId('plan-canvas').waitFor().catch(()=>{});await page.waitForTimeout(800);await shot('5-planning-editor');
+  const node=page.locator('[data-testid="plan-canvas"]').getByText('Pave and compact asphalt').first();if(await node.isVisible()){await node.click();await page.waitForTimeout(500);await shot('6-planning-selected');}}
  await go('#Schedule');await shot('7-schedule');
  await ctx.close();
 }

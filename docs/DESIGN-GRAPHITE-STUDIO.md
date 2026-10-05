@@ -13,6 +13,12 @@ ivory `#f5f3ee` · paper `#faf9f5` · sheet `#fdfcf9` · fog `#ebe8e0` · line `
 ## Covered
 App shell (icon rail, quiet top bar, section tabs in the page header, flat mobile nav), Work map (canvas, label chip, contextual detail panel, compact list, edit form), work-point strip, Planning (list, editor, canvas, inspector), shift work-area picker swatches. Behaviour, permissions, redaction, geometry and save/retry states are unchanged; map shows no imagery.
 
+## Canvas-first layout (second commit)
+- Project pages: compact header (title, status, primary action); client/PM/contract metadata and the next action sit in an expandable "Details and next action" (open on Overview/Setup, closed on Work map and Programme). The duplicate crumb row and section label are hidden on phones.
+- Work map: the site-location strip is one row (title, status, Change location); coordinates and confirmation detail are under "Location details". The safety banner, moved/unconfirmed work-point warnings and every control stay visible.
+- Planning: compact header, KPI strip is a tight row (stacked rows on phones), "New scenario" is a disclosure; the undated-plan statement stays visible.
+- Canvas now starts about 510 px from the top on a 1440x900 desktop (was about 640) and inside the first screen on a 390x844 phone for Work map.
+
 ## Not redesigned (inherit tokens/controls only, layouts unchanged)
 Home, CRM, Pipeline/tendering, Estimating, Schedule, Resources, Commercial, IMS & HSEQ, Documents, Reports, Admin, Field/dockets, login/onboarding, remaining Projects tabs.
 

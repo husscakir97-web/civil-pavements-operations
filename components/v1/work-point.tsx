@@ -18,18 +18,19 @@ export function WorkPointPanel({data,onChanged}:{data:WorkMapView;onChanged:()=>
  const drawn=Boolean(draft?.pin&&validPoint(draft.pin));
  const patch=(body:Record<string,unknown>,done:string)=>void act.run(()=>api('/api/projects/workspace',{method:'PATCH',body:{id:data.projectId,revision:data.projectRevision,...body}}),()=>{setEditing(false);setDraft(null);setNote(done);onChanged();});
  const confirm=()=>void act.run(()=>api('/api/projects/work-point',{method:'POST',body:{projectId:data.projectId}}),()=>{setNote('Work point confirmed.');onChanged();});
- return <section aria-label="Site location and work point" className="border-y border-[var(--gs-line)] py-4">
+ return <section aria-label="Site location and work point" className="border-y border-[var(--gs-line)] py-2">
   <div className="grid gap-x-8 gap-y-3 lg:grid-cols-[minmax(0,1fr)_auto]" data-testid="work-point" data-status={wp.status}>
    <div className="grid min-w-0 gap-3">
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1"><h2 className="gs-eyebrow">Site location and work point</h2><Pill tone={TONE[wp.status]}>{LABEL[wp.status]}</Pill></div>
+    <details className="gs-details"><summary className="!min-h-9 !normal-case !tracking-normal"><span className="flex flex-wrap items-center gap-x-3 gap-y-1"><span className="gs-eyebrow">Site location and work point</span><Pill tone={TONE[wp.status]}>{LABEL[wp.status]}</Pill></span></summary><div className="grid gap-3 pb-2">
     {wp.current?<LocationSummary label={wp.source==='project'?'Project location (set for this project; the client site is unchanged)':wp.source==='site'?'Client site location':'Location'} location={{...EMPTY_PARTS,pin:wp.current,formattedAddress:wp.label}}/>:<p className="text-sm text-slate-600">No location is saved for this project yet. Search the site address or enter coordinates, then confirm the work point.</p>}
+    {wp.confirmed&&<p className="text-xs text-slate-500" data-testid="work-point-confirmed">Confirmed {wp.confirmed.confirmedAt.slice(0,10)}{wp.confirmed.confirmedBy?` by ${wp.confirmed.confirmedBy}`:''} at {wp.confirmed.point.lat.toFixed(6)}, {wp.confirmed.point.lng.toFixed(6)} ({wp.confirmed.source} location).</p>}
+    </div></details>
     {wp.status==='moved'&&<p role="alert" className="gs-note gs-note-error" data-testid="work-point-moved"><AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0"/><span><strong>The project location moved {wp.distanceM?.toLocaleString('en-AU')} m</strong> from the confirmed work point. Saved work areas have <strong>not</strong> moved: they stay where they were drawn. Review them against the new location, then confirm the new work point.</span></p>}
     {wp.status==='unconfirmed'&&hasAreas&&<p role="status" className="gs-note gs-note-warn" data-testid="work-point-unconfirmed"><AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0"/><span>The work point has not been confirmed. Check the pin and confirm it so later address changes can be flagged.</span></p>}
-    {wp.confirmed&&<p className="text-xs text-slate-500" data-testid="work-point-confirmed">Confirmed {wp.confirmed.confirmedAt.slice(0,10)}{wp.confirmed.confirmedBy?` by ${wp.confirmed.confirmedBy}`:''} at {wp.confirmed.point.lat.toFixed(6)}, {wp.confirmed.point.lng.toFixed(6)} ({wp.confirmed.source} location).</p>}
     {note&&<p role="status" className="gs-note gs-note-ok"><CheckCircle2 aria-hidden className="mt-0.5 size-4 shrink-0"/><span>{note}</span></p>}
     {act.error&&<p role="alert" className="gs-note gs-note-error" data-testid="work-point-error"><AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0"/><span>{act.error}</span></p>}
    </div>
-   {data.canEdit&&!editing&&<div className="flex flex-wrap content-start gap-2 lg:max-w-[22rem] lg:justify-end">
+   {data.canEdit&&!editing&&<div className="flex flex-wrap content-start gap-2 lg:max-w-[22rem] lg:justify-end [&_button]:max-sm:min-h-10 [&_button]:max-sm:text-sm">
     {wp.current&&wp.status!=='confirmed'&&<Btn onClick={confirm} busy={act.busy} data-testid="confirm-work-point"><MapPin aria-hidden className="size-4"/>Confirm this work point</Btn>}
     <Btn variant="secondary" onClick={()=>{setEditing(true);setNote('');act.setError('');}} data-testid="change-location">{wp.current?'Change project location':'Set project location'}</Btn>
     {wp.source==='project'&&<Btn variant="secondary" onClick={()=>patch({useSiteLocation:true},'Using the client site location again. Work areas did not move.')} busy={act.busy} data-testid="use-site-location">Use the client site location</Btn>}

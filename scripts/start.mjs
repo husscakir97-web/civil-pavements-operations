@@ -6,6 +6,11 @@ if(String(process.env.STAGING_DEMO_MODE||'').toLowerCase()==='true'&&process.env
  const {spawn}=await import('node:child_process');
  spawn(process.execPath,[new URL('./staging-load.mjs',import.meta.url).pathname],{env:process.env,stdio:'inherit',detached:false}).on('error',e=>console.log('[staging-load] could not start:',e.message));
 }
+// Existing-tenant demonstration loading (docs/EXISTING-TENANT-DEMO-IMPORT.md): inert unless EXISTING_TENANT_LOAD is set; never together with staging mode.
+if(process.env.EXISTING_TENANT_LOAD){
+ const {spawn}=await import('node:child_process');
+ spawn(process.execPath,[new URL('./existing-tenant-load.mjs',import.meta.url).pathname],{env:process.env,stdio:'inherit',detached:false}).on('error',e=>console.log('[existing-tenant-load] could not start:',e.message));
+}
 // Keep Next in this process so hosting shutdown signals reach it directly.
 process.argv=[process.execPath,'next','start','--hostname','0.0.0.0',...process.argv.slice(2)];
 await import('next/dist/bin/next');

@@ -30,7 +30,12 @@ export async function stagingLoad(env=process.env){
  const base=['--organisation-id',org,'--staging-allowlist',allow];
  const childEnv={...env,DEMO_SEED_EMAIL:env.STAGING_DEMO_ADMIN_EMAIL,STAGING_DEMO_CONFIRM_SHA256:env.STAGING_DEMO_CONFIRM_SHA256};
  let script,args;
- if(mode==='plan'){script='scripts/import-demo-tenant.mjs';args=base;}
+ if(mode==='plan'){
+  script='scripts/import-demo-tenant.mjs';args=base;
+  // after an interruption the plan must see the saved baseline, otherwise it cannot tell the import's own records from anyone else's
+  const baseline=join(env.STAGING_DEMO_STATE_DIR||join(homedir(),'.staging-demo-state'),'baseline.json');
+  if(existsSync(baseline))args=[...base,'--baseline',baseline,'--baseline-sha256',createHash('sha256').update(readFileSync(baseline)).digest('hex')];
+ }
  else if(mode==='verify'){script='scripts/staging-verify.mjs';args=base;}
  else{
   if(!/^[0-9a-f]{64}$/.test(env.STAGING_DEMO_PLAN_HASH||'')){log('apply needs STAGING_DEMO_PLAN_HASH (the hash printed by the plan run); nothing was done.');return 2;}

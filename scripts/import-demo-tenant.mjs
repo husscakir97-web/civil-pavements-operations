@@ -24,6 +24,8 @@ import {buildPlan} from './demo/import-plan.mjs';
 import {snapshot,compare,writeBaseline,loadBaseline,schemaShape,makeProvenance,verifyBinding} from './demo/import-guards.mjs';
 import {startIsolatedApp} from './demo/import-app.mjs';
 import {evaluateAllowlist,assertOnlyNamedOrganisation} from './demo/staging-allowlist.mjs';
+import {evaluateExistingTenantAllowlist,evaluateBackupEvidence,databaseFingerprint,writeSidecar,hasSidecar} from './demo/existing-tenant.mjs';
+import {createHash} from 'node:crypto';
 import {applyImport} from './demo/import-apply.mjs';
 import {verifyImport} from './demo/import-verify.mjs';
 
@@ -41,7 +43,12 @@ if(out&&existsSync(out)){console.error('Refusing to overwrite an existing file: 
 // The importer starts its own isolated app (scripts/demo/import-app.mjs) so the writer is bound to the verified database and a safe
 // configuration by construction. An already-running app cannot be used: nothing outside this process can prove what it is bound to.
 if(process.argv.includes('--base-url')){console.error('Refusing: --base-url is not accepted. The importer starts its own isolated app on the verified database and configuration (run npm run build first).');process.exit(2);}
-let stagingEntry=null;
+let stagingEntry=null,existingEntry=null;
+const existingFile=arg('--existing-tenant-allowlist'),evidenceFile=arg('--backup-evidence');
+if(existingFile&&arg('--staging-allowlist')){console.error('Refusing: --staging-allowlist and --existing-tenant-allowlist are mutually exclusive.');process.exit(2);}
+if(evidenceFile&&!existingFile){console.error('Refusing: --backup-evidence is only meaningful with --existing-tenant-allowlist.');process.exit(2);}
+// EXISTING TENANT (hosted, additive): the live target is named exactly in a reviewed, hash-confirmed allow-list. Evaluated BEFORE any connection, dry run included.
+if(existingFile){const ev=evaluateExistingTenantAllowlist(existingFile,process.env);if(ev.problems.length){console.error('Refusing (existing-tenant allow-list):\n - '+ev.problems.join('\n - '));process.exit(2);}existingEntry=ev.entry;if(existingEntry.organisationId!==org){console.error('Refusing: --organisation-id is not the allow-listed organisation.');process.exit(2);}}
 const allowFile=arg('--staging-allowlist');
 const stagingEval=allowFile?evaluateAllowlist(allowFile,process.env):null;
 // A dry run against an allow-listed database is held to the same allow-list BEFORE any connection is opened.
@@ -50,14 +57,16 @@ if(apply){
  const REFUSE=[];const need=(ok,why)=>{if(!ok)REFUSE.push(why);};
  // Default: a local *_test database. The only other way in is --staging-allowlist (scripts/demo/staging-allowlist.mjs): an exact, reviewed,
  // hash-confirmed allow-list that REPLACES just these two checks; every other guard below still applies and nothing is bypassed.
- if(allowFile){for(const x of stagingEval.problems)REFUSE.push('staging allow-list: '+x);stagingEntry=stagingEval.entry;}
+ if(existingEntry){/* named exactly and hash-confirmed above; the _test/local rules do not apply to this explicit path */}
+ else if(allowFile){for(const x of stagingEval.problems)REFUSE.push('staging allow-list: '+x);stagingEntry=stagingEval.entry;}
  else{
  need(/_test$/.test(process.env.MYSQL_DATABASE||''),'MYSQL_DATABASE must end in _test');
  need(['127.0.0.1','localhost','::1'].includes(process.env.MYSQL_HOST||''),'MYSQL_HOST must be this machine; remote databases are refused');
  }
  // A managed host runs every app with NODE_ENV=production, so the allow-list path (which carries far stronger checks of its own) is the only place it is accepted.
- need(Boolean(allowFile)||process.env.NODE_ENV!=='production','NODE_ENV=production is refused');
+ need(Boolean(allowFile)||Boolean(existingEntry)||process.env.NODE_ENV!=='production','NODE_ENV=production is refused');
  need(Boolean(arg('--plan-hash')),'--plan-hash from a fresh dry run is required');
+ need(!existingEntry||Boolean(arg('--baseline-sha256'))||!existsSync(arg('--baseline')||'/nonexistent'),'resuming needs --baseline-sha256');
  need(Boolean(arg('--baseline')),'--baseline <file> is required (it is written before the first change and reused when an interrupted import is resumed)');
  for(const name of ['SMTP_HOST','SMTP_USER','BILLING_PROVIDER','BILLING_WEBHOOK_SECRET','ABR_GUID','AI_API_KEY','OPENAI_API_KEY','TWILIO_AUTH_TOKEN','SMS_PROVIDER'])need(!process.env[name],`${name} is set: external integrations must be unconfigured`);
  for(const name of ['EMAIL_ENABLED','AI_ENABLED'])need(String(process.env[name]||'false').toLowerCase()!=='true',`${name}=true is refused`);
@@ -88,6 +97,12 @@ const render=plan=>{
 
 let app;
 try{
+ if(apply){ // one apply per database at a time (an orphaned earlier run keeps the lock until it dies)
+  const lockName='demo_import_'+createHash('sha256').update(String(process.env.MYSQL_DATABASE)+'|'+org).digest('hex').slice(0,40);
+  const [[l]]=await raw.query('SELECT GET_LOCK(?,0) AS a',[lockName]);
+  if(!Number(l.a)){console.error('Refusing to apply: another import for this database is running. Nothing was changed.');process.exit(3);}
+ }
+ if(existingEntry){const [[o]]=await raw.query('SELECT COUNT(*) n FROM organisations WHERE id=?',[org]);if(!Number(o.n)){console.error('Refusing: the allow-listed organisation does not exist in this database. Nothing was changed.');process.exit(3);}}
  if(stagingEntry){const bad=await assertOnlyNamedOrganisation(raw,org,stagingEntry);if(bad.length){console.error('Refusing (staging database):\n - '+bad.join('\n - ')+'\nNothing was changed.');process.exit(3);}}
  // Provenance: with a verified baseline the plan can tell records this import created from records that were already there.
  const baselineFile=arg('--baseline');let loaded=null;
@@ -103,6 +118,17 @@ try{
   if(refused){console.error('Refusing to apply: the plan has conflicts or blockers. Nothing was changed.');process.exit(3);}
   if(arg('--plan-hash')!==plan.planHash){console.error('Refusing to apply: --plan-hash does not match a fresh plan (the tenant changed since the plan was reviewed, or an earlier run was interrupted). Run the dry run again and review it. Nothing was changed.');process.exit(3);}
 
+  // EXISTING TENANT: backup evidence (first apply) or a baseline created under it (resume), before anything is written.
+  let evidenceSha=null;
+  if(existingEntry){
+   if(existsSync(baselineFile||'')){if(!hasSidecar(baselineFile)){console.error('Refusing to apply: this baseline was not created under verified backup evidence. Nothing was changed.');process.exit(3);}}
+   else{
+    if(!evidenceFile){console.error('Refusing to apply: --backup-evidence is required for the first apply to an existing tenant. Nothing was changed.');process.exit(3);}
+    const ev=evaluateBackupEvidence(evidenceFile,existingEntry,await databaseFingerprint(raw));
+    if(ev.problems.length){console.error('Refusing to apply (backup evidence):\n - '+ev.problems.join('\n - ')+'\nNothing was changed.');process.exit(3);}
+    evidenceSha=ev.sha;console.log('Backup evidence accepted: it names this database and organisation, is recent, carries the restore attestation, and matches the current state (no writes since the backup).');
+   }
+  }
   // the owner of THIS organisation, from the inspected database
   const email=process.env.DEMO_SEED_EMAIL,password=process.env.DEMO_SEED_PASSWORD;
   const [owner]=(await raw.query('SELECT id,organisation_id,role FROM users WHERE email=?',[email]))[0];
@@ -122,7 +148,7 @@ try{
   // the operator was shown when it was created, be owner-only, name this organisation and schema, and be internally consistent.
   let before=loaded;
   if(before)console.log('Resuming: comparing against the verified pre-import baseline.');
-  else{before=await snapshot(raw);const sha=writeBaseline(baselineFile,org,before);console.log(`Pre-import baseline saved (digests only). Baseline sha256: ${sha}\nKeep this value: resuming an interrupted import requires --baseline-sha256 ${sha}`);}
+  else{before=await snapshot(raw);const sha=writeBaseline(baselineFile,org,before);if(existingEntry)writeSidecar(baselineFile,evidenceSha);console.log(`Pre-import baseline saved (digests only). Baseline sha256: ${sha}\nKeep this value: resuming an interrupted import requires --baseline-sha256 ${sha}`);}
   const stages=(arg('--stages')||'').split(',').filter(Boolean),stopAfter=arg('--stop-after');
   const {created}=await applyImport({raw,org,seedDate:SEED_DATE,rawCall,rawForm,baseline:before,stages,stopAfter,crash:arg('--crash-after-call')});
   console.log('\nCreated in this run:',JSON.stringify(created));

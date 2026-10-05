@@ -4,7 +4,7 @@
 //   npm run build   then   MYSQL_DATABASE=staging_path_test node scripts/test-staging-path.mjs
 import {createRequire} from 'node:module';
 import {spawn,spawnSync} from 'node:child_process';
-import {mkdtempSync,writeFileSync,chmodSync,readFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,writeFileSync,chmodSync,readFileSync,rmSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -229,6 +229,33 @@ try{
   await stop(h);
   {const noMode=run('scripts/import-demo-tenant.mjs',{...process.env,NODE_ENV:'production',...mysqlEnv(Y),DEMO_SEED_EMAIL:ADMIN,DEMO_SEED_PASSWORD:password},['--organisation-id',adm.organisation_id,'--apply','--plan-hash','x','--baseline',join(dir,'nb.json')],30000);
    check('the default importer path still refuses NODE_ENV=production (only the allow-list path accepts it)',noMode.status===2&&/NODE_ENV=production is refused/.test(out(noMode)));}
+ }
+
+ // ---- interruption and restart on the managed path: the host kills the whole app (process group) mid-load, then restarts it
+ {const Z=dbName+'_z',P3=PORT+3,o3=`http://127.0.0.1:${P3}`;await makeDb(Z);
+  const grp=(env)=>{const c=spawn(process.execPath,['scripts/start.mjs'],{env:{...env,PORT:String(P3)},stdio:['ignore','pipe','pipe'],detached:true});let log='';c.stdout.on('data',b=>log+=b);c.stderr.on('data',b=>log+=b);return {c,get log(){return log;}};};
+  const wf=async(fn,ms=300000)=>{for(let i=0;i<ms/400;i++){if(await fn())return true;await new Promise(r=>setTimeout(r,400));}return false;};
+  const killG=async x=>{try{process.kill(-x.c.pid,'SIGKILL');}catch{/* gone */}await new Promise(r=>setTimeout(r,2500));};
+  const baseEnv=stagingEnv(P3,{},Z);
+  let x=grp(baseEnv);await wf(async()=>{try{return (await fetch(o3+'/login')).ok;}catch{return false;}},120000);
+  const rr=await signup(o3,ADMIN);const [[adm]]=await db.query('SELECT organisation_id FROM `'+Z+'`.users WHERE email=?',[ADMIN]);
+  await db.query('INSERT INTO `'+Z+'`.organisation_profiles (organisation_id,created_at,updated_at,onboarding_completed_at) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE onboarding_completed_at=VALUES(onboarding_completed_at)',[adm.organisation_id,new Date().toISOString(),new Date().toISOString(),new Date().toISOString()]);
+  await killG(x);
+  const allowJson=JSON.stringify({environment:'staging-demo',host:process.env.MYSQL_HOST,port:Number(process.env.MYSQL_PORT||3306),database:Z,user:process.env.MYSQL_USER,appUrl:o3,adminEmail:ADMIN});
+  const le=over=>({...baseEnv,STAGING_DEMO_ALLOWLIST_JSON:allowJson,STAGING_DEMO_CONFIRM_SHA256:createHash('sha256').update(allowJson).digest('hex'),STAGING_DEMO_STATE_DIR:join(dir,'state-z'),...over});
+  x=grp(le({STAGING_DEMO_LOAD:'plan'}));await wf(()=>/plan finished/.test(x.log),120000);const ph1=/planHash: ([0-9a-f]{64})/.exec(x.log)?.[1];await killG(x);
+  x=grp(le({STAGING_DEMO_LOAD:'apply',STAGING_DEMO_PLAN_HASH:ph1,DEMO_SEED_PASSWORD:password}));
+  const under=await wf(async()=>(await count('shifts',Z))>0);await killG(x);
+  const part=await count('project_work_areas',Z);
+  check('staging managed path: killing the whole app mid-apply leaves a partial import and a saved baseline',under&&part<20&&existsSync(join(dir,'state-z','baseline.json')),String(part));
+  x=grp(le({STAGING_DEMO_LOAD:'apply',STAGING_DEMO_PLAN_HASH:ph1,DEMO_SEED_PASSWORD:password}));await wf(()=>/apply finished/.test(x.log),300000);
+  check('staging managed path: the host restarting with the same apply settings is refused safely and changes nothing',!/exit code 0/.test(x.log)&&(await count('project_work_areas',Z))===part,x.log.slice(-120));await killG(x);
+  x=grp(le({STAGING_DEMO_LOAD:'plan'}));await wf(()=>/plan finished/.test(x.log),120000);const ph3=/planHash: ([0-9a-f]{64})/.exec(x.log)?.[1];await killG(x);
+  x=grp(le({STAGING_DEMO_LOAD:'apply',STAGING_DEMO_PLAN_HASH:ph3,DEMO_SEED_PASSWORD:password}));await wf(()=>/apply finished/.test(x.log),600000);
+  const fz={areas:await count('project_work_areas',Z),links:await count('shift_work_areas',Z),shifts:await count('shifts',Z),users:await count('users',Z),logins:await count('auth_user',Z)};
+  check('staging managed path: a fresh reviewed plan resumes and completes the import (20 areas, 27 links, 17 shifts, six users, one login)',/exit code 0/.test(x.log)&&fz.areas===20&&fz.links===27&&fz.shifts===17&&fz.users===6&&fz.logins===1,JSON.stringify(fz));await killG(x);
+  x=grp(le({STAGING_DEMO_LOAD:'verify'}));await wf(()=>/verify finished/.test(x.log),120000);
+  check('staging managed path: verification passes after the resumed import (the members and the one login are accepted)',/verify finished with exit code 0/.test(x.log),x.log.slice(-100));await killG(x);
  }
 }catch(e){fail++;console.log('FAIL    aborted — '+(e?.stack||e));}
 finally{for(const s of servers)s.kill();for(const f of fixtures)await db.query('DROP DATABASE IF EXISTS `'+f+'`').catch(()=>{});await db.query('DROP DATABASE IF EXISTS `'+dbName+'_x`').catch(()=>{});await db.end();rmSync(dir,{recursive:true,force:true});}

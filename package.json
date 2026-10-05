@@ -38,6 +38,7 @@
     "knowledge:import-platform": "node --env-file-if-exists=.env scripts/import-platform-knowledge.mjs",
     "test:work-map": "node --env-file-if-exists=.env scripts/work-map-journey.mjs",
     "staging:verify": "node scripts/staging-verify.mjs",
+    "test:existing-tenant": "node --env-file-if-exists=.env scripts/test-existing-tenant-path.mjs",
     "test:staging-path": "node --env-file-if-exists=.env scripts/test-staging-path.mjs",
     "test:connected-workmap": "node --env-file-if-exists=.env scripts/connected-workmap-journey.mjs",
     "seed:work-map-demo": "node --env-file-if-exists=.env scripts/seed-work-map-demo.mjs"

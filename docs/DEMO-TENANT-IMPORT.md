@@ -100,7 +100,10 @@ and the API guard has no team, invitation, auth or admin route. They are active 
 - Running against a hosted tenant is **not enabled** and needs separate approved work (below). The read-only dry run and
   `scripts/live-tenant-inventory.mjs` are the safe first steps.
 
-## Remaining work before any hosted apply (not implemented, not enabled)
+## Hosted apply: what is now implemented (not enabled) and what is still human
+The numbered list below is the original gap list. Status for the existing darkgray tenant (`docs/EXISTING-TENANT-DEMO-IMPORT.md`, `scripts/demo/existing-tenant.mjs`, `scripts/existing-tenant-load.mjs`, `npm run test:existing-tenant`): **1** allow-list — implemented (exact target, SHA-256 confirmation, mutually exclusive with staging); **2** write freeze — enforced by the backup-evidence fingerprint (operator must still stop using the site); **3** backup evidence — consistency checked, restorability is a human attestation; **4** owner credential — supplied only for the run through the environment and removed afterwards; **5** side-effect proof — by construction (the importer's own app, integrations stripped), not by inspecting the hosted app; **6** dry run reviewed — unchanged; **7** rollback — restore of the backup, unchanged; **8** re-run on the exact build — required before any hosted apply (CI/regression on the deployed commit).
+
+## Remaining work before any hosted apply (original list)
 
 1. **A hosted execution path with its own guard.** Apply currently refuses everything but a local, `_test` database and a local app. A
    hosted run needs a separate, explicitly approved mode: an allow-list naming the one database and app URL, a verified-integrations-off

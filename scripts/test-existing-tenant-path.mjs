@@ -4,6 +4,8 @@
 // preserved. The hosted flow is exercised through scripts/start.mjs (no shell, no npm), including SIGKILL interruptions and restarts.
 //   npm run build   then   MYSQL_DATABASE=existing_tenant_path_test node scripts/test-existing-tenant-path.mjs
 import {spawn,spawnSync} from 'node:child_process';
+import {createServer as netServer} from 'node:net';
+import {createServer as httpServer} from 'node:http';
 import {mkdtempSync,writeFileSync,chmodSync,readFileSync,rmSync,existsSync,mkdirSync,copyFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -52,7 +54,7 @@ async function populated(name,tag){
  const wa=await b('/api/projects/work-areas','POST',{projectId:pb.body.projectId,name:'Other tenant area',kind:'work_area',discipline:'asphalt',delivery:'own',contractorLabel:null,sequence:null,notes:null,ring});
  app.kill();procs.splice(procs.indexOf(app),1);await new Promise(r=>setTimeout(r,1500));
  if(![200,201].includes(cl.status)||![200,201].includes(pa.status)||![200,201].includes(pb.status)||wa.status!==201)throw new Error('fixture setup failed '+[cl.status,pa.status,pb.status,wa.status]);
- return {name,env,org:ua.organisation_id,orgB:ub.organisation_id,emailA,ownerUser:ua.id,otherUser:ub.id};
+ return {name,env,org:ua.organisation_id,orgB:ub.organisation_id,emailA,ownerUser:ua.id,otherUser:ub.id,cookieA:ca};
 }
 const preserved=async f=>({
  owner:await rowsDigest(f.name,'SELECT * FROM {db}.clients WHERE organisation_id=? AND client_code=? ORDER BY id',[f.org,'OWN-1'])+await rowsDigest(f.name,'SELECT id,name,status,revision FROM {db}.jobs WHERE organisation_id=? AND name LIKE ? ORDER BY id',[f.org,'Owner Own%']),
@@ -69,9 +71,16 @@ const lockName=(name,org)=>'demo_import_'+createHash('sha256').update(name+'|'+o
 const startCmd=(env,port=P1)=>{const c=spawn(process.execPath,['scripts/start.mjs'],{env:{...env,PORT:String(port)},stdio:['ignore','pipe','pipe'],detached:true});let log='';c.stdout.on('data',b=>log+=b);c.stderr.on('data',b=>log+=b);procs.push(c);return {c,get log(){return log;}};};
 const killGroup=async h=>{try{process.kill(-h.c.pid,'SIGKILL');}catch{/* gone */}const i=procs.indexOf(h.c);if(i>=0)procs.splice(i,1);await new Promise(r=>setTimeout(r,2500));};
 const waitFor=async(fn,ms=300000)=>{for(let i=0;i<ms/400;i++){if(await fn())return true;await new Promise(r=>setTimeout(r,400));}return false;};
-const hostedEnv=(f,a,over={})=>({...f.env,NODE_ENV:'production',BETTER_AUTH_SECRET:'existing-tenant-secret-with-at-least-32-chars!',BETTER_AUTH_URL:'https://existing.example.invalid',EMAIL_ENABLED:'false',LOCATION_PROVIDER:'fake',
- // everything an operator's real app would carry; the loader must NOT pass any of it on
- SMTP_HOST:'smtp.example.invalid',SMTP_USER:'u',SMTP_PASSWORD:'p',MAIL_FROM:'m@example.invalid',AI_API_KEY:'k',BILLING_PROVIDER:'b',ABR_GUID:'g',GOOGLE_MAPS_BROWSER_KEY:'k',R2_ENDPOINT:'http://127.0.0.1:9',R2_ACCESS_KEY_ID:'x',R2_SECRET_ACCESS_KEY:'x',R2_BUCKET_NAME:'x',
+// capture servers: the hosted app is given REAL-LOOKING integration settings that point here; any email or object-storage traffic would be counted
+const captured={smtp:0,s3:0};
+const smtpCap=netServer(sock=>{captured.smtp++;sock.on('error',()=>{});sock.end('421 not accepting mail\r\n');});await new Promise(r=>smtpCap.listen(0,'127.0.0.1',r));
+const s3Cap=httpServer((req,res)=>{captured.s3++;res.statusCode=503;res.end('no');});await new Promise(r=>s3Cap.listen(0,'127.0.0.1',r));
+const soon=ms=>new Date(Date.now()+ms).toISOString();
+const hostedEnv=(f,a,over={})=>({...f.env,NODE_ENV:'production',BETTER_AUTH_SECRET:'existing-tenant-secret-with-at-least-32-chars!',BETTER_AUTH_URL:'https://existing.example.invalid',LOCATION_PROVIDER:'fake',
+ // the freeze: this very app refuses every request while the loader fingerprints, plans and applies
+ MAINTENANCE_UNTIL:soon(2*3600e3),
+ // everything an operator's real app would carry, LIVE (email enabled): the loader must not pass any of it on, and the maintenance gate must keep the app from using it
+ EMAIL_ENABLED:'true',SMTP_HOST:'127.0.0.1',SMTP_PORT:String(smtpCap.address().port),SMTP_SECURE:'false',SMTP_USER:'u',SMTP_PASSWORD:'p',MAIL_FROM:'m@example.invalid',AI_API_KEY:'k',BILLING_PROVIDER:'b',ABR_GUID:'g',GOOGLE_MAPS_BROWSER_KEY:'k',R2_ENDPOINT:'http://127.0.0.1:'+s3Cap.address().port,R2_ACCESS_KEY_ID:'x',R2_SECRET_ACCESS_KEY:'x',R2_BUCKET_NAME:'x',
  EXISTING_TENANT_ALLOWLIST_JSON:a.txt,EXISTING_TENANT_CONFIRM_SHA256:sha(a.txt),EXISTING_TENANT_STATE_DIR:join(dir,'state-'+f.name),...over});
 const finished=(h,mode,ms)=>waitFor(()=>new RegExp(`${mode} finished with exit code`).test(h.log),ms);
 const exitOk=(h,mode)=>new RegExp(`${mode} finished with exit code 0`).test(h.log);
@@ -117,12 +126,50 @@ try{
   check('refused before any write: the database was written to after the backup was fingerprinted (the freeze is enforced)',x.status===3&&/changed since the backup/.test(out(x))&&(await world(f.name))===w1,`${x.status}`);
   await db.query('UPDATE `'+f.name+'`.jobs SET name=? WHERE organisation_id=? AND name=?',['Other Tenant Project',f.orgB,'Other Tenant Project (edited after backup)']);}
 
+
+ // ------------------------------------------------------------------ the freeze and the integrations of the HOSTED app (not only the importer's temporary app)
+ {const c=await populated('etr_ctrl_test','d'),aC=mkAllow(c);const origin=`http://127.0.0.1:${P1}`,api1=call(c.cookieA,origin);
+  const ctrlEnv=over=>hostedEnv(c,aC,{BETTER_AUTH_URL:origin,MAINTENANCE_UNTIL:'',...over});
+  const up=async()=>{try{return (await fetch(origin+'/login')).ok;}catch{return false;}};
+  // control: WITHOUT maintenance the same app writes and talks to its integrations (proves the checks below can fail)
+  let x=startCmd(ctrlEnv({}));await waitFor(up,120000);
+  const before=await count('jobs',c.name,c.org);const created=await api1('/api/projects','POST',{name:'Control project'});
+  const smtp0=captured.smtp;await fetch(origin+'/api/auth/request-password-reset',{method:'POST',headers:{origin,'Content-Type':'application/json'},body:JSON.stringify({email:c.emailA,redirectTo:origin+'/reset'})}).catch(()=>{});
+  await new Promise(r=>setTimeout(r,1500));const s30=captured.s3;
+  const up1=new FormData();up1.set('file',new Blob(['x'],{type:'text/plain'}),'control.txt');await fetch(origin+'/api/delivery/documents',{method:'POST',headers:{origin,cookie:c.cookieA},body:up1}).catch(()=>{});await new Promise(r=>setTimeout(r,1500));
+  check('control (no maintenance): the app accepts an authenticated write, tries to send email and tries to use object storage — so the checks below can fail',[200,201].includes(created.status)&&(await count('jobs',c.name,c.org))===before+1&&captured.smtp>smtp0&&captured.s3>s30,`write=${created.status} smtp+${captured.smtp-smtp0} s3+${captured.s3-s30}`);
+  await killGroup(x);
+  // maintenance on: the SAME app refuses everything and touches nothing
+  const w1=await world(c.name),smtp1=captured.smtp,s31=captured.s3;
+  x=startCmd(ctrlEnv({MAINTENANCE_UNTIL:soon(2*3600e3)}));await waitFor(()=>fetch(origin+'/api/health').then(r=>r.ok,()=>false),120000);
+  const hit=async(path,init={})=>fetch(origin+path,{redirect:'manual',...init,headers:{origin,cookie:c.cookieA,'Content-Type':'application/json',...(init.headers||{})}}).then(r=>r.status,()=>0);
+  const fd=new FormData();fd.set('file',new Blob(['x'],{type:'text/plain'}),'m.txt');
+  const results=[await hit('/'),await hit('/login'),await hit('/api/auth/get-session'),await hit('/api/auth/sign-in/email',{method:'POST',body:JSON.stringify({email:c.emailA,password})}),await hit('/api/auth/request-password-reset',{method:'POST',body:JSON.stringify({email:c.emailA,redirectTo:origin+'/reset'})}),await hit('/api/projects',{method:'POST',body:JSON.stringify({name:'Blocked project'})}),await hit('/api/projects/work-areas?projectId=x'),await hit('/api/billing',{method:'POST',body:'{}'}),await fetch(origin+'/api/delivery/documents',{method:'POST',headers:{origin,cookie:c.cookieA},body:fd}).then(r=>r.status,()=>0),await hit('/api/anything-else',{method:'PUT',body:'{}'}),await hit('/api/anything-else',{method:'DELETE'})];
+  const health=await fetch(origin+'/api/health').then(r=>r.json());const page=await fetch(origin+'/').then(async r=>({s:r.status,ra:r.headers.get('retry-after'),t:await r.text()}));
+  check('maintenance: every page, auth, API, webhook-style and upload request (reads and writes) gets a 503; only GET /api/health answers',results.every(v=>v===503)&&health.ok===true&&health.maintenance.active===true,results.join(','));
+  check('maintenance: the 503 page names the end time, sends Retry-After and tells the administrator how to end it early',page.s===503&&Number(page.ra)>=30&&/MAINTENANCE_UNTIL/.test(page.t)&&new RegExp(health.maintenance.until.slice(0,16)).test(page.t));
+  check('maintenance: the app wrote nothing, sent no email and used no object storage while blocked (data identical, SMTP and storage capture servers saw nothing new)',(await world(c.name))===w1&&captured.smtp===smtp1&&captured.s3===s31,`smtp+${captured.smtp-smtp1} s3+${captured.s3-s31}`);
+  await killGroup(x);
+  // it ends by itself, and a stale/invalid value never locks the site
+  x=startCmd(ctrlEnv({MAINTENANCE_UNTIL:soon(-60e3)}));await waitFor(up,120000);
+  check('maintenance ends by itself: with MAINTENANCE_UNTIL already past the app serves normally again',await hit('/api/auth/get-session')!==503);await killGroup(x);
+  x=startCmd(ctrlEnv({MAINTENANCE_UNTIL:'next tuesday'}));await waitFor(up,120000);
+  check('an invalid MAINTENANCE_UNTIL does not lock the site (recovery by correcting or removing the variable)',await hit('/api/auth/get-session')!==503);await killGroup(x);
+  // the loader refuses to fingerprint, plan or apply unless the freeze is in force and long enough
+  const w2=await world(c.name);
+  for(const [label,over,re] of [['no maintenance window',{MAINTENANCE_UNTIL:''},/not set/],['an expired window',{MAINTENANCE_UNTIL:soon(-60e3)},/ended/],['an invalid window',{MAINTENANCE_UNTIL:'soon'},/valid/],['a window with under 5 minutes left',{MAINTENANCE_UNTIL:soon(120e3)},/less than 5 minutes/],['an unbounded window (13 hours)',{MAINTENANCE_UNTIL:soon(13*3600e3)},/more than 12 hours/]])
+   for(const mode of ['fingerprint','plan','apply']){x=startCmd(hostedEnv(c,aC,{...over,EXISTING_TENANT_LOAD:mode,EXISTING_TENANT_PLAN_HASH:'a'.repeat(64),DEMO_SEED_PASSWORD:password,EXISTING_TENANT_BACKUP_EVIDENCE_JSON:'{}'}));await waitFor(()=>/refused|finished|nothing was done/.test(x.log),60000);
+    check(`the loader refuses ${mode} with ${label}: the freeze is not in force, nothing is connected or written`,/write freeze is not in force/.test(x.log)&&re.test(x.log)&&!/finished with exit code 0/.test(x.log),x.log.replace(/\s+/g,' ').slice(-120));await killGroup(x);}
+  check('after all those refusals the control database is unchanged',(await world(c.name))===w2);
+ }
+ const capBase={...captured};
+
  // ------------------------------------------------------------------ scenario 1b: the hosted flow through scripts/start.mjs (no shell, no npm)
  const stateOf=x=>join(dir,'state-'+x);
  let h=startCmd(hostedEnv(f,allow,{EXISTING_TENANT_LOAD:'fingerprint'}));
  await waitFor(()=>/fingerprint: [0-9a-f]{64}/.test(h.log),90000);
  const fp=/fingerprint: ([0-9a-f]{64})/.exec(h.log)?.[1];
- check('hosted flow: the fingerprint step (read-only) prints the value for the backup evidence, equal to the database\'s fingerprint, while the app serves',fp===await databaseFingerprint(await connectTo(f.name))&&(await fetch(`http://127.0.0.1:${P1}/login`).then(r=>r.ok,()=>false)),fp);
+ check('hosted flow: the fingerprint step (read-only) prints the value for the backup evidence, equal to the database\'s fingerprint, while the app is in maintenance (only /api/health answers)',fp===await databaseFingerprint(await connectTo(f.name))&&(await fetch(`http://127.0.0.1:${P1}/api/health`).then(r=>r.ok,()=>false))&&(await fetch(`http://127.0.0.1:${P1}/login`).then(r=>r.status,()=>0))===503,fp);
  await killGroup(h);
  const ownerBefore=await count('clients',f.name,f.org),ownerJobsBefore=await count('jobs',f.name,f.org),otherAreasBefore=await count('project_work_areas',f.name,f.orgB);
  h=startCmd(hostedEnv(f,allow,{EXISTING_TENANT_LOAD:'plan'}));await finished(h,'plan',120000);const ph=planHash(h);
@@ -197,7 +244,8 @@ try{
   x=startCmd(hostedEnv(g,aG,{EXISTING_TENANT_LOAD:'plan'}));await finished(x,'plan',120000);const phL=planHash(x);const planRefused=!exitOk(x,'plan');await killGroup(x);
   x=startCmd(it.applyEnv({EXISTING_TENANT_PLAN_HASH:phL||'0'.repeat(64)}));await finished(x,'apply',300000);
   check('a LOST baseline after an interruption is never guessed around: the resume is refused (conflicts or changed-since-backup) and nothing is duplicated or modified; recovery is the restore of the backup',!exitOk(x,'apply')&&JSON.stringify(await expectFull(g))===JSON.stringify(keep)&&JSON.stringify(await preserved(g))===JSON.stringify(baseG),`plan refused=${planRefused} `+x.log.replace(/\s+/g,' ').slice(-170));await killGroup(x);}
+ check('throughout every fingerprint, plan, apply, interruption, restart, resume and verify the HOSTED app (live-looking SMTP and storage settings, email enabled) contacted no integration',captured.smtp===capBase.smtp&&captured.s3===capBase.s3,`smtp+${captured.smtp-capBase.smtp} s3+${captured.s3-capBase.s3}`);
 }catch(e){fail++;console.log('FAIL    aborted — '+(e?.stack||e));}
-finally{for(const p of procs)try{process.kill(-p.pid,'SIGKILL');}catch{try{p.kill();}catch{/* gone */}}for(const c of conns)await c.end().catch(()=>{});for(const n of fixtures)await db.query('DROP DATABASE IF EXISTS `'+n+'`').catch(()=>{});await db.end();rmSync(dir,{recursive:true,force:true});}
+finally{smtpCap.close();s3Cap.close();for(const p of procs)try{process.kill(-p.pid,'SIGKILL');}catch{try{p.kill();}catch{/* gone */}}for(const c of conns)await c.end().catch(()=>{});for(const n of fixtures)await db.query('DROP DATABASE IF EXISTS `'+n+'`').catch(()=>{});await db.end();rmSync(dir,{recursive:true,force:true});}
 console.log(`\n${fail?'FAILED':'OK'}: ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

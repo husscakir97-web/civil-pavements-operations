@@ -1,3 +1,4 @@
+import {assertNotMaintenance} from './maintenance';
 // The single AI orchestration service. Every AI call in the product goes through run().
 //
 // AI runs only when ALL of these hold (checked on every call, reported by availability()):
@@ -55,6 +56,7 @@ export type AiProvider=(req:{system:string;prompt:string;maxTokens:number})=>Pro
 export function providerFromEnv(env:Record<string,string|undefined>=process.env,fetcher:typeof fetch=fetch):AiProvider{
  const key=env.AI_API_KEY!,model=env.AI_MODEL!;
  const call=async(url:string,init:RequestInit)=>{
+  assertNotMaintenance('the AI provider');
   const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),60_000);
   try{const r=await fetcher(url,{...init,signal:abort.signal});const body=await r.json().catch(()=>({}));if(!r.ok)throw new Error(`Provider returned ${r.status}`);return body as Row;}
   finally{clearTimeout(timer);}

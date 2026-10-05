@@ -4,6 +4,7 @@
 // environment variables to private temp files and runs the same importer/verifier an operator would. The child process receives ONLY
 // the database settings and the values below: no email, SMS, billing, AI, ABR, map or storage settings, so nothing external can be reached
 // (the importer's own temporary app is additionally built from a fixed whitelist). Modes:
+//   (fingerprint, plan and apply refuse unless MAINTENANCE_UNTIL puts this app into bounded maintenance: every request is refused with a 503)
 //   fingerprint   read-only: prints the database fingerprint to put in the backup evidence (take it right after the backup, with writes frozen)
 //   plan          read-only: prints the plan, its conflicts and its hash
 //   apply         the reviewed import; needs EXISTING_TENANT_PLAN_HASH, EXISTING_TENANT_BACKUP_EVIDENCE_JSON (first apply), DEMO_SEED_PASSWORD
@@ -15,6 +16,7 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {connect} from './mysql-config.mjs';
 import {evaluateExistingTenantAllowlist,databaseFingerprint} from './demo/existing-tenant.mjs';
+import {maintenanceWindowProblems} from '../lib/platform/maintenance-policy.mjs';
 
 const log=(...a)=>console.log('[existing-tenant-load]',...a);
 export const CHILD_ENV_KEYS=['PATH','HOME','TZ','NODE_ENV','MYSQL_HOST','MYSQL_PORT','MYSQL_DATABASE','MYSQL_USER','MYSQL_PASSWORD','MYSQL_SSL_CA','DEMO_SEED_PASSWORD','EXISTING_TENANT_CONFIRM_SHA256'];
@@ -33,6 +35,9 @@ export async function existingTenantLoad(env=process.env){
   // exact target first, before any connection (the importer repeats it)
   const pre=evaluateExistingTenantAllowlist(allow,{...childEnv,STAGING_DEMO_MODE:env.STAGING_DEMO_MODE});
   if(pre.problems.length){log('refused (nothing was connected or changed):\n - '+pre.problems.join('\n - '));return 2;}
+  // THE FREEZE: fingerprint, plan and apply only run while this very app (same environment) is refusing every request, so no user, webhook or
+  // device can write between the backup and the import. Without it the fingerprint would only detect a change after the fact.
+  if(['fingerprint','plan','apply'].includes(mode)){const mp=maintenanceWindowProblems(env);if(mp.length){log('refused (nothing was connected or changed): the write freeze is not in force:\n - '+mp.join('\n - '));return 2;}}
   const base=['--organisation-id',entry.organisationId,'--existing-tenant-allowlist',allow];
   let script,args;
   if(mode==='fingerprint'){

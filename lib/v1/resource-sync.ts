@@ -32,8 +32,11 @@ export function competencyStatements(org:string,workerId:string,wanted:Competenc
 
 export function workerStatements(org:string,row:LegacyRow,existingCompetencies:Existing[],now:string,newId:()=>string){
  const m=mapWorker(row);
+ // Legacy forms have no worker revision. Initialise classification once, then
+ // leave the typed value to the revision-checked People writer, including NULL.
+ const columns=set(m.columns).replace('employment_type=?','employment_type=CASE WHEN legacy_synced_at IS NULL AND employment_type IS NULL THEN ? ELSE employment_type END');
  const statements:Stmt[]=[
-  {sql:`UPDATE workers SET ${set(m.columns)},legacy_synced_at=?,updated_at=? WHERE organisation_id=? AND id=?`,params:[...Object.values(m.columns),now,now,org,row.id]},
+  {sql:`UPDATE workers SET ${columns},legacy_synced_at=?,updated_at=? WHERE organisation_id=? AND id=?`,params:[...Object.values(m.columns),now,now,org,row.id]},
   ...competencyStatements(org,row.id,m.competencies,existingCompetencies,now,newId),
   resolveIssues(org,'worker',row.id,m.issues,now),
  ];

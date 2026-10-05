@@ -1,3 +1,4 @@
+import {workerEmployment} from '@/lib/v1/employment';
 import {coverage,requirementsInput} from '@/lib/v1/shift-requirements';
 import {assignments} from '@/lib/planning';
 import {fieldDelivery,withoutMoney} from '@/lib/field-access';
@@ -24,7 +25,7 @@ async function load(db: Database, table: string): Promise<DeliveryRecord[]> {
   const typed=(row:Record<string,unknown>)=>Object.fromEntries(Object.entries({plantNumber:row.plant_number,rego:row.registration,category:row.category,make:row.make,model:row.model,employeeNumber:row.employee_number,roleTitle:row.role_title}).filter(([,v])=>v!=null&&v!==''));
   // Core client/site/contact links on jobs are the typed columns: they win over any older metadata copy.
   const links=(row:Record<string,unknown>)=>table==='jobs'||table==='shifts'?Object.fromEntries(Object.entries(table==='jobs'?{clientId:row.client_id,siteId:row.site_id,contactId:row.contact_id,locationId:row.location_id}:{locationId:row.location_id}).filter(([,v])=>v!=null&&v!=='')):{};
-  return r.results.map(r => ({id:String(r.id), name:String(r.name), status:String(r.status), metadata:{...typed(r),...safeJson<Meta>(r.metadata,{}),...links(r)}, createdAt:String(r.created_at)}));
+  return r.results.map(r => ({id:String(r.id), name:String(r.name), status:String(r.status), metadata:{...typed(r),...safeJson<Meta>(r.metadata,{}),...links(r),...(table==='workers'?{employmentType:workerEmployment(r,safeJson<Meta>(r.metadata,{}))}:{})}, createdAt:String(r.created_at)}));
 }
 // Effective location for the schedule: a shift's own work point, else its project's location
 // (project override, else the client site's). Read through the organisation-scoped wrapper.

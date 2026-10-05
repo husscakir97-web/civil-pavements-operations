@@ -4,6 +4,7 @@ import {query,one,exec,uuid,nowIso,type Conn} from '@/lib/platform/sql';
 import {fail} from '@/lib/platform/http';
 import {can} from '@/lib/platform/permissions';
 import {getEntitlements,usable} from '@/lib/platform/entitlements';
+import {employmentLabel} from '@/lib/v1/employment';
 import {filterLookup} from '@/lib/v1/lookup';
 import type {Actor} from '@/lib/authz';
 import {calculatePlan,redactRates,validatePlan,newId,type PlanActivity,type PlanDocument,type Positions,type CostItem,type Requirement} from '@/lib/v1/planning';
@@ -73,11 +74,11 @@ export type ResourceChoice={type:'worker'|'plant';id:string;label:string;detail:
 export async function canLinkResources(org:string,actor:Pick<Actor,'role'>){return can(actor.role,'schedule.view')&&usable(await getEntitlements(org),'operations');}
 
 const clip=(s:string,n=120)=>s.length>n?s.slice(0,n-1)+'…':s;
-type WorkerRow={id:string;name:string|null;employee_number:string|null;role_title:string|null;status:string|null};
+type WorkerRow={id:string;name:string|null;employee_number:string|null;role_title:string|null;employment_type:string|null;status:string|null};
 type PlantRow={id:string;name:string|null;plant_number:string|null;category:string|null;description:string|null;status:string|null};
 const archived=(status:string|null)=>String(status??'').toLowerCase()==='archived';
 // Only identifying, non-financial fields ever leave here: no pay or hire rates, contact details or registration.
-const workerChoice=(r:WorkerRow):ResourceChoice=>({type:'worker',id:r.id,label:(r.name||'').trim()||'Unnamed worker',detail:clip([r.role_title,r.employee_number].filter(Boolean).join(' · ')),...(archived(r.status)?{archived:true}:{})});
+const workerChoice=(r:WorkerRow):ResourceChoice=>({type:'worker',id:r.id,label:(r.name||'').trim()||'Unnamed worker',detail:clip([employmentLabel(r.employment_type),r.role_title,r.employee_number].filter(Boolean).join(' · ')),...(archived(r.status)?{archived:true}:{})});
 const plantChoice=(r:PlantRow):ResourceChoice=>{
  const name=(r.name||'').trim(),no=(r.plant_number||'').trim();
  return {type:'plant',id:r.id,label:no&&!name.toLowerCase().startsWith(no.toLowerCase())?`${no} · ${name||'Unnamed plant'}`:name||no||'Unnamed plant',detail:clip([r.category,r.description].filter(Boolean).join(' · ')),...(archived(r.status)?{archived:true}:{})};
@@ -86,8 +87,8 @@ const plantChoice=(r:PlantRow):ResourceChoice=>{
 /** Searchable choices for the picker: this organisation's non-archived workers or plant, best matches first. */
 export async function searchResources(org:string,type:'worker'|'plant',q:string,limit:number):Promise<ResourceChoice[]>{
  if(type==='worker'){
-  const rows=await query<WorkerRow>("SELECT id,name,employee_number,role_title,status FROM workers WHERE organisation_id=? AND LOWER(COALESCE(status,''))<>'archived' ORDER BY name LIMIT 2000",[org]);
-  return filterLookup(rows,q,r=>[r.name,r.employee_number,r.role_title],r=>[r.employee_number],r=>r.name||'').slice(0,limit).map(workerChoice);
+  const rows=await query<WorkerRow>("SELECT id,name,employee_number,role_title,employment_type,status FROM workers WHERE organisation_id=? AND LOWER(COALESCE(status,''))<>'archived' ORDER BY name LIMIT 2000",[org]);
+  return filterLookup(rows,q,r=>[r.name,r.employee_number,r.role_title,employmentLabel(r.employment_type)],r=>[r.employee_number],r=>r.name||'').slice(0,limit).map(workerChoice);
  }
  const rows=await query<PlantRow>("SELECT id,name,plant_number,category,description,status FROM plant WHERE organisation_id=? AND LOWER(COALESCE(status,''))<>'archived' ORDER BY name LIMIT 2000",[org]);
  return filterLookup(rows,q,r=>[r.name,r.plant_number,r.category,r.description],r=>[r.plant_number],r=>r.name||'').slice(0,limit).map(plantChoice);
@@ -98,7 +99,7 @@ export async function resourceLabels(org:string,doc:PlanDocument,conn?:Conn):Pro
  const refs=doc.activities.flatMap(a=>a.requirements.map(r=>r.resourceRef)).filter((r):r is NonNullable<typeof r>=>Boolean(r));
  const out:Record<string,ResourceChoice>={};
  const workers=[...new Set(refs.filter(r=>r.type==='worker').map(r=>r.id))],plants=[...new Set(refs.filter(r=>r.type==='plant').map(r=>r.id))];
- if(workers.length)for(const r of await query<WorkerRow>('SELECT id,name,employee_number,role_title,status FROM workers WHERE organisation_id=? AND id IN (?)',[org,workers],conn))out['worker:'+r.id]=workerChoice(r);
+ if(workers.length)for(const r of await query<WorkerRow>('SELECT id,name,employee_number,role_title,employment_type,status FROM workers WHERE organisation_id=? AND id IN (?)',[org,workers],conn))out['worker:'+r.id]=workerChoice(r);
  if(plants.length)for(const r of await query<PlantRow>('SELECT id,name,plant_number,category,description,status FROM plant WHERE organisation_id=? AND id IN (?)',[org,plants],conn))out['plant:'+r.id]=plantChoice(r);
  return out;
 }

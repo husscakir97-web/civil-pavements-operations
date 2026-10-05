@@ -9,6 +9,8 @@ const initial:Session={brand:defaultBrand,canEdit:false,userEmail:'',userId:'',u
 const SESSION_KEY='infrastruct.session';
 const Context=createContext<Session&{refresh:()=>Promise<void>}>({...initial,refresh:async()=>{}});
 export const useWorkspaceBrand=()=>useContext(Context);
+// Graphite Studio: the former default accent (#c2410c) is shown as graphite; a company's own custom accent colour is still respected.
+const LEGACY_DEFAULT_ACCENT='#c2410c',GRAPHITE='#2d2f31';
 export function WorkspaceBrandProvider({children}:{children:ReactNode}){
  const [data,setData]=useState<Session>(initial);
  async function refresh(){const r=await fetch('/api/workspace',{cache:'no-store'});if(r.ok)setData(await r.json());}
@@ -16,7 +18,7 @@ export function WorkspaceBrandProvider({children}:{children:ReactNode}){
  // It only drives the interface; every request is still authorised by the server.
  useEffect(()=>{let active=true;fetch('/api/workspace',{cache:'no-store'}).then(async r=>{if(r.ok&&active){const d=await r.json();setData(d);try{localStorage.setItem(SESSION_KEY,JSON.stringify(d));}catch{/* storage blocked */}}else if(active&&[401,403].includes(r.status)){try{localStorage.removeItem(SESSION_KEY);}catch{/* storage blocked */}location.assign('/account');}}).catch(()=>{if(!active)return;try{const cached=localStorage.getItem(SESSION_KEY);if(cached)setData(JSON.parse(cached));}catch{/* no cached session */}});return()=>{active=false;};},[]);
  useEffect(()=>{document.title=data.brand.productName;},[data.brand.productName]);
- return <Context.Provider value={{...data,refresh}}><div style={{'--primary':data.brand.accentColor} as CSSProperties}>{children}</div></Context.Provider>;
+ return <Context.Provider value={{...data,refresh}}><div style={{'--primary':data.brand.accentColor.toLowerCase()===LEGACY_DEFAULT_ACCENT?GRAPHITE:data.brand.accentColor} as CSSProperties}>{children}</div></Context.Provider>;
 }
 export function WorkspaceBrandSettings(){
  const {brand,canEdit,refresh}=useWorkspaceBrand(),[edits,setDraft]=useState<WorkspaceBrand|null>(null),[busy,setBusy]=useState(false),[message,setMessage]=useState('');

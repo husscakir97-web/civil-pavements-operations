@@ -57,7 +57,9 @@ try{
  const form=new FormData();form.set('file',new File(['new evidence'],'evidence.txt',{type:'text/plain'}));r=await call('/api/delivery/documents','POST',form,a.cookie);assert.equal(r.status,201,await r.clone().text());
  console.log('PASS real signup, email verification, MySQL sessions, safe organisation claim, all module reads, tenant isolation, spoof rejection, CSRF, R2 read/write, disabled legacy actions remain blocked');
  // Exercise multi-statement MySQL business workflows and frozen pricing.
- const compiled=ts.transpileModule(await readFile('lib/estimate-calculations.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.ES2022,target:ts.ScriptTarget.ES2022}}).outputText;
+ const employment=ts.transpileModule(await readFile('lib/v1/employment.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.ES2022,target:ts.ScriptTarget.ES2022}}).outputText;
+ const employmentUrl='data:text/javascript;base64,'+Buffer.from(employment).toString('base64');
+ const compiled=ts.transpileModule(await readFile('lib/estimate-calculations.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.ES2022,target:ts.ScriptTarget.ES2022}}).outputText.replace(/from ['"]\.\/v1\/employment['"]/g,`from '${employmentUrl}'`);
  const {makeDefaultEstimate}=await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'));
  r=await call('/api/estimates','POST',{data:{...makeDefaultEstimate(),clientName:'Integration client',projectName:'Integration job',site:'Test site'},status:'Draft'},a.cookie);assert.equal(r.status,201,await r.clone().text());const estimate=(await r.json()).estimate;
  r=await call('/api/estimates/award','POST',{estimateId:estimate.id},a.cookie);assert.equal(r.status,422,'Award requires an approved revision');for(const action of ['submit','approve']){r=await call('/api/estimates/approval','POST',{estimateId:estimate.id,action},a.cookie);assert.equal(r.status,200,await r.clone().text());}

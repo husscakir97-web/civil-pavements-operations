@@ -1,3 +1,5 @@
+import {employeeAssumption,type EmployeeClassification} from './v1/employment';
+
 export type EstimateStatus =
   | "Draft"
   | "Internal Review"
@@ -18,6 +20,8 @@ export const ESTIMATE_STATUSES: EstimateStatus[] = [
 ];
 
 export type LabourLine = {
+  /** Estimate assumption only; never changes the entered rate or calculated cost. */
+  employmentTypeAssumption?: EmployeeClassification;
   id: string;
   name: string;
   headcount: number;
@@ -244,6 +248,7 @@ function normaliseLabour(value: unknown): LabourLine[] {
     return {
       id: textValue(raw.id, lineId("labour", index)),
       name: textValue(raw.name, "Labour"),
+      ...(employeeAssumption(raw.employmentTypeAssumption)?{employmentTypeAssumption:employeeAssumption(raw.employmentTypeAssumption)}:{}),
       headcount: Math.max(0, numberValue(raw.headcount)),
       hoursPerShift: Math.max(0, numberValue(raw.hoursPerShift)),
       hourlyRate: Math.max(0, numberValue(raw.hourlyRate)),

@@ -5,6 +5,8 @@
 // A value that cannot be mapped is never guessed: it is left NULL and reported
 // as an issue (data_migration_issues). Legacy metadata is never modified here.
 
+import {normaliseEmploymentType,knownEmploymentType} from './employment';
+
 export type LegacyRow={id:string;name:string;status:string;metadata:string|Record<string,unknown>|null};
 export type MappingIssue={field:string;issue:string;legacyValue:string|null};
 export type CompetencyRow={competencyType:string;expiryDate:string|null};
@@ -81,12 +83,13 @@ export function mapWorker(row:LegacyRow){
   email,
   phone:m.text('phone',meta.phone,60),
   role_title:m.text('trade',meta.trade??meta.role,120),
-  employment_type:m.text('employmentType',meta.employmentType,30),
+  employment_type:normaliseEmploymentType(m.text('employmentType',meta.employmentType,30)),
   user_id:m.text('userId',meta.userId,191),
   hourly_rate:m.money('rate',meta.rate),
   location:m.text('location',meta.location,255),
   active:isActiveStatus(row.status)?1:0,
  };
+ if(columns.employment_type&&!knownEmploymentType(columns.employment_type))m.issues.push({field:'employmentType',issue:'Unrecognised employment type; preserved for review.',legacyValue:raw(meta.employmentType)});
  const expiry=m.date('competencyExpiry',meta.competencyExpiry);
  const names=splitCompetencies(meta.competencies);
  const competencies:CompetencyRow[]=names.map(competencyType=>({competencyType,expiryDate:expiry}));

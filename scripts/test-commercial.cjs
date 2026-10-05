@@ -10,3 +10,4 @@ console.log('PASS commercial baseline, committed/actual, claimed/invoiced, cost 
 
 // Keep the approved client-output journey in the standard npm test gate.
 require('./test-commercial-output.cjs');
+require('./test-project-control.cjs');

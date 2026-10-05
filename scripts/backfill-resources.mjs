@@ -11,7 +11,8 @@ import ts from 'typescript';
 async function loadSync(){
  const compile=async file=>ts.transpileModule(await readFile(new URL(`../lib/v1/${file}.ts`,import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
  const url=code=>'data:text/javascript;base64,'+Buffer.from(code).toString('base64');
- const mappingUrl=url(await compile('resource-mapping'));
+ const employmentUrl=url(await compile('employment'));
+ const mappingUrl=url((await compile('resource-mapping')).replace(/from ['"]\.\/employment['"]/g,`from '${employmentUrl}'`));
  const mapping=await import(mappingUrl);
  const sync=await import(url((await compile('resource-sync')).replace(/from ['"]\.\/resource-mapping['"]/g,`from '${mappingUrl}'`)));
  return {...mapping,...sync};

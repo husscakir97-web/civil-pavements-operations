@@ -5,6 +5,8 @@ import {useState,type FormEvent,type ReactNode} from 'react';
 import {AlertTriangle,CheckCircle2,Download,FileSpreadsheet,Upload} from 'lucide-react';
 import {Sheet,SheetContent,SheetDescription,SheetTitle} from '@/components/ui/sheet';
 import {api,useApi,useAction,useSession,PageHeader,Section,EmptyState,ErrorState,Loading,Pill,Tabs,Field,Btn,field,money,dateText,ReasonDialog} from './kit';
+import {EMPLOYMENT_TYPES,employmentLabel,normaliseEmploymentType,knownEmploymentType} from '@/lib/v1/employment';
+import {useNavGuard,confirmLeave} from './nav';
 import {usePeople} from './register-view';
 import {filterLookup} from '@/lib/v1/lookup';
 
@@ -14,7 +16,7 @@ type Plant={id:string;name:string;status:string;plant_number:string|null;registr
 type Issue={id:string;entity_type:string;entity_id:string;entity_name:string|null;field:string;issue:string;legacy_value:string|null;created_at:string};
 export type ResourceTab='workers'|'plant'|'issues'|'other';
 
-const WORKER_STATUSES=['Active','Leave','Inactive'],PLANT_STATUSES=['Available','Allocated','Maintenance','Out of service','Unavailable','Inactive'],EMPLOYMENT=['employee','casual','contractor','labour hire'];
+const WORKER_STATUSES=['Active','Leave','Inactive'],PLANT_STATUSES=['Available','Allocated','Maintenance','Out of service','Unavailable','Inactive'];
 const expiryTone=(s:string)=>s==='expired'?'danger':s==='expiring'?'warning':s==='current'?'success':'neutral';
 const expiryLabel=(s:string,d:string|null)=>s==='expired'?`Expired ${dateText(d)}`:s==='expiring'?`Expires ${dateText(d)}`:s==='current'?`Valid to ${dateText(d)}`:'No expiry recorded';
 
@@ -26,7 +28,7 @@ export function ResourcesArea({initial='workers',other,initialQuery,only}:{initi
  if(only)return <div className="mx-auto max-w-7xl">{initial==='plant'?<PlantList initialQuery={initialQuery}/>:initial==='other'?other:<><Workers initialQuery={initialQuery}/>{open>0&&<Section title="Migration issues"><Issues state={issues}/></Section>}</>}</div>;
  return <div className="mx-auto max-w-7xl p-4 sm:p-6">
   <PageHeader title="Resources" subtitle="Workers, competencies and plant used by the scheduler's conflict checks."/>
-  <Tabs label="Resource registers" active={tab} onChange={setTab} tabs={[{key:'workers',label:'Workers'},{key:'plant',label:'Plant & equipment'},{key:'other',label:'Crews, suppliers & subcontractors',hidden:!other},{key:'issues',label:'Migration issues',badge:open?<Pill tone="warning">{open}</Pill>:undefined}]}/>
+  <Tabs label="Resource registers" active={tab} onChange={next=>{if(next!==tab&&confirmLeave())setTab(next);}} tabs={[{key:'workers',label:'Workers'},{key:'plant',label:'Plant & equipment'},{key:'other',label:'Crews, suppliers & subcontractors',hidden:!other},{key:'issues',label:'Migration issues',badge:open?<Pill tone="warning">{open}</Pill>:undefined}]}/>
   {tab==='workers'&&<Workers initialQuery={initial==='workers'?initialQuery:undefined}/>}
   {tab==='plant'&&<PlantList initialQuery={initial==='plant'?initialQuery:undefined}/>}
   {tab==='other'&&other}
@@ -35,7 +37,7 @@ export function ResourcesArea({initial='workers',other,initialQuery,only}:{initi
 }
 
 type ImportKind='workers'|'plant';
-type ImportPreview={fileName:string;availableFields:Array<{key:string;label:string}>;unmappedHeaders:string[];summary:{total:number;create:number;update:number;skip:number;error:number};rows:Array<{rowNumber:number;label:string;action:'create'|'update'|'skip'|'error';matchLabel:string|null;errors:string[];warnings:string[]}>};
+type ImportPreview={fileName:string;availableFields:Array<{key:string;label:string}>;unmappedHeaders:string[];summary:{total:number;create:number;update:number;skip:number;error:number};rows:Array<{rowNumber:number;label:string;action:'create'|'update'|'skip'|'error';matchLabel:string|null;errors:string[];warnings:string[];values:Record<string,string|number|null>}>};
 type ImportResult={summary:{total:number;created:number;updated:number;skipped:number;failed:number};results:Array<{rowNumber:number;label:string;status:string;error?:string}>};
 
 function ResourceImporter({kind,onImported}:{kind:ImportKind;onImported:()=>void}){
@@ -62,7 +64,7 @@ function ResourceImporter({kind,onImported}:{kind:ImportKind;onImported:()=>void
      {preview&&<div className="grid gap-4">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">{[['Rows',preview.summary.total,'neutral'],['Create',preview.summary.create,'success'],['Update',preview.summary.update,'info'],['Skip',preview.summary.skip,'neutral'],['Errors',preview.summary.error,preview.summary.error?'danger':'success']].map(([l,v,t])=><div key={String(l)} className="rounded-xl border bg-white p-3 shadow-sm"><p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{l}</p><p className={`mt-1 text-xl font-semibold ${t==='danger'?'text-red-700':t==='success'?'text-emerald-700':t==='info'?'text-sky-700':'text-slate-900'}`}>{v}</p></div>)}</div>
       {preview.unmappedHeaders.length>0&&<div className="grid gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"><div className="flex gap-2"><AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0"/><div><p className="font-semibold">Map columns we did not recognise</p><p className="mt-0.5 text-xs text-amber-800">Choose where each column belongs, or leave it ignored. Re-preview before importing.</p></div></div><div className="grid gap-2 sm:grid-cols-2">{preview.unmappedHeaders.map(source=><label key={source} className="grid gap-1"><span className="text-xs font-medium">{source}</span><select className={field} value={mapping[source]||''} onChange={e=>{setMapping(m=>({...m,[source]:e.target.value}));setMappingDirty(true);}}><option value="">Ignore this column</option>{preview.availableFields.map(x=><option key={x.key} value={x.key}>{x.label}</option>)}</select></label>)}</div>{mappingDirty&&<div><Btn variant="secondary" onClick={check}>Re-preview with mappings</Btn></div>}</div>}
-      <div className="max-h-[45dvh] overflow-auto rounded-xl border bg-white"><table className="w-full min-w-[560px] text-left text-xs"><thead className="sticky top-0 bg-slate-50"><tr><th className="p-2">Row</th><th className="p-2">Record</th><th className="p-2">Action</th><th className="p-2">Checks</th></tr></thead><tbody className="divide-y">{preview.rows.slice(0,100).map(r=><tr key={r.rowNumber}><td className="p-2 text-slate-500">{r.rowNumber}</td><td className="p-2 font-medium">{r.label||'Unnamed'}{r.matchLabel&&<span className="block text-[10px] font-normal text-slate-500">Matches {r.matchLabel}</span>}</td><td className="p-2"><Pill tone={r.action==='error'?'danger':r.action==='create'?'success':r.action==='update'?'info':'neutral'}>{r.action}</Pill></td><td className="p-2">{r.errors.length?<span className="text-red-700">{r.errors.join(' ')}</span>:r.warnings.length?<span className="text-amber-800">{r.warnings.join(' ')}</span>:<span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 className="size-3.5"/>Ready</span>}</td></tr>)}</tbody></table></div>
+      <div className="max-h-[45dvh] overflow-auto rounded-xl border bg-white"><table className="w-full min-w-[560px] text-left text-xs"><thead className="sticky top-0 bg-slate-50"><tr><th className="p-2">Row</th><th className="p-2">Record</th><th className="p-2">Action</th><th className="p-2">Checks</th></tr></thead><tbody className="divide-y">{preview.rows.slice(0,100).map(r=><tr key={r.rowNumber}><td className="p-2 text-slate-500">{r.rowNumber}</td><td className="p-2 font-medium">{r.label||'Unnamed'}{kind==='workers'&&<span className="block text-xs font-normal text-slate-600">{employmentLabel(r.values.employmentType)}</span>}{r.matchLabel&&<span className="block text-[10px] font-normal text-slate-500">Matches {r.matchLabel}</span>}</td><td className="p-2"><Pill tone={r.action==='error'?'danger':r.action==='create'?'success':r.action==='update'?'info':'neutral'}>{r.action}</Pill></td><td className="p-2">{r.errors.length?<span className="text-red-700">{r.errors.join(' ')}</span>:r.warnings.length?<span className="text-amber-800">{r.warnings.join(' ')}</span>:<span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 className="size-3.5"/>Ready</span>}</td></tr>)}</tbody></table></div>
       {preview.rows.length>100&&<p className="text-xs text-slate-500">Showing the first 100 of {preview.rows.length} rows.</p>}
       <div className="sticky bottom-0 flex flex-wrap items-center gap-2 border-t bg-white py-3"><Btn busy={busy} disabled={mappingDirty||preview.summary.create+preview.summary.update===0} onClick={apply}>{mappingDirty?'Re-preview mappings before import':`Import ${preview.summary.create+preview.summary.update} valid rows`}</Btn>{preview.summary.error>0&&<span className="text-xs text-slate-500">{preview.summary.error} invalid row{preview.summary.error===1?'':'s'} will be skipped.</span>}</div>
      </div>}
@@ -79,25 +81,28 @@ function Workers({initialQuery}:{initialQuery?:string}){
  const canEdit=s.can('resources.edit'),rates=s.can('commercial.view');
  if(loading&&!data)return <Loading/>;
  if(error&&!data)return <ErrorState error={error} onRetry={refresh}/>;
- const list=filterLookup(data?.workers||[],filter,w=>[w.name,w.role_title,w.employee_number,w.email,w.phone,w.location,w.employment_type,...w.competencies.map(c=>c.competency_type)],w=>[w.employee_number],w=>w.name);
- return <Section title="Workers" description="Required competencies on a shift are checked against these records before it can be planned." actions={canEdit&&<div className="flex flex-wrap gap-2"><ResourceImporter kind="workers" onImported={refresh}/><Btn onClick={()=>setEditing('new')}>Add worker</Btn></div>}>
-  {editing&&<WorkerForm worker={editing==='new'?null:editing} rates={rates} onClose={()=>setEditing(null)} onSaved={()=>{setEditing(null);refresh();}}/>}
+ const list=filterLookup(data?.workers||[],filter,w=>[w.name,w.role_title,w.employee_number,w.email,w.phone,w.location,w.employment_type,employmentLabel(w.employment_type),...w.competencies.map(c=>c.competency_type)],w=>[w.employee_number],w=>w.name);
+ return <Section title="Workers" description="Required competencies on a shift are checked against these records before it can be planned." actions={canEdit&&<div className="flex flex-wrap gap-2"><ResourceImporter kind="workers" onImported={refresh}/><Btn onClick={()=>{if(editing!=='new'&&confirmLeave())setEditing('new');}}>Add worker</Btn></div>}>
+  {editing&&<WorkerForm key={editing==='new'?'new':editing.id} worker={editing==='new'?null:editing} rates={rates} onClose={()=>setEditing(null)} onSaved={()=>{setEditing(null);refresh();}}/>}
   <label className="mb-3 block max-w-sm text-sm"><span className="sr-only">Filter workers</span><input type="search" className={field} placeholder="Filter by name, employee no., role or competency" value={filter} onChange={e=>setFilter(e.target.value)}/></label>
   {!list.length?<EmptyState title={filter?'No workers match this filter':'No workers yet'} detail={filter?undefined:'Add the people you schedule so competencies and double-booking can be checked.'}/>:
   <ul className="divide-y rounded-lg border">{list.map(w=><li key={w.id} className="grid gap-2 p-3 sm:grid-cols-[1fr_auto]">
    <div className="min-w-0"><p className="font-medium">{w.name} <span className="text-sm font-normal text-slate-500">{w.role_title||''}</span></p>
-    <p className="text-xs text-slate-500">{[w.employee_number,w.employment_type,w.location,w.phone].filter(Boolean).join(' · ')||'No details recorded'}{rates&&w.hourly_rate!=null?` · ${money(w.hourly_rate,true)}/h`:''}</p>
+    <p className="text-xs text-slate-500">{[w.employee_number,employmentLabel(w.employment_type),w.location,w.phone].filter(Boolean).join(' · ')||'No details recorded'}{rates&&w.hourly_rate!=null?` · ${money(w.hourly_rate,true)}/h`:''}</p>
     <div className="mt-2 flex flex-wrap gap-1.5">{w.competencies.length?w.competencies.map(c=><Pill key={c.id} tone={expiryTone(c.state)}>{c.competency_type}: {expiryLabel(c.state,c.expiry_date)}</Pill>):<Pill tone="warning">No competencies recorded</Pill>}</div>
     <CompetencyEditor worker={w} canEdit={canEdit} onChanged={refresh}/>
    </div>
-   <div className="flex items-start gap-2"><Pill tone={!w.active?'danger':w.status==='Leave'?'warning':'success'}>{w.status}</Pill>{canEdit&&<Btn variant="secondary" onClick={()=>setEditing(w)} aria-label={`Edit ${w.name}`}>Edit</Btn>}</div>
+   <div className="flex items-start gap-2"><Pill tone={!w.active?'danger':w.status==='Leave'?'warning':'success'}>{w.status}</Pill>{canEdit&&<Btn variant="secondary" onClick={()=>{if(editing!=='new'&&editing?.id===w.id)return;if(confirmLeave())setEditing(w);}} aria-label={`Edit ${w.name}`}>Edit</Btn>}</div>
   </li>)}</ul>}
  </Section>;
 }
 
 function WorkerForm({worker,rates,onClose,onSaved}:{worker:Worker|null;rates:boolean;onClose:()=>void;onSaved:()=>void}){
  const people=usePeople();
- const [f,setF]=useState<Record<string,string>>({userId:worker?.user_id||'',firstName:worker?.first_name||worker?.name||'',lastName:worker?.last_name||'',employeeNumber:worker?.employee_number||'',email:worker?.email||'',phone:worker?.phone||'',roleTitle:worker?.role_title||'',employmentType:worker?.employment_type||'',location:worker?.location||'',hourlyRate:worker?.hourly_rate==null?'':String(worker.hourly_rate),status:worker?.status&&WORKER_STATUSES.includes(worker.status)?worker.status:'Active'});
+ const [f,setF]=useState<Record<string,string>>({userId:worker?.user_id||'',firstName:worker?.first_name||worker?.name||'',lastName:worker?.last_name||'',employeeNumber:worker?.employee_number||'',email:worker?.email||'',phone:worker?.phone||'',roleTitle:worker?.role_title||'',employmentType:normaliseEmploymentType(worker?.employment_type)||'',location:worker?.location||'',hourlyRate:worker?.hourly_rate==null?'':String(worker.hourly_rate),status:worker?.status&&WORKER_STATUSES.includes(worker.status)?worker.status:'Active'});
+ const [initial]=useState(()=>JSON.stringify(f));
+ const dirty=JSON.stringify(f)!==initial;
+ useNavGuard(dirty?'You have unsaved worker changes. Leave without saving?':null);
  const {busy,error,run}=useAction(),set=(k:string)=>(e:{target:{value:string}})=>setF(v=>({...v,[k]:e.target.value}));
  const submit=(e:FormEvent)=>{e.preventDefault();const payload:Record<string,string>={...f};if(!rates)delete payload.hourlyRate;void run(()=>api('/api/operations/resources',{method:'POST',body:{action:'saveWorker',id:worker?.id||null,revision:worker?.revision??null,worker:payload}}),onSaved);};
  return <form onSubmit={submit} className="mb-4 grid gap-3 rounded-lg border bg-slate-50 p-4 sm:grid-cols-3" aria-label={worker?`Edit ${worker.name}`:'New worker'}>
@@ -105,7 +110,7 @@ function WorkerForm({worker,rates,onClose,onSaved}:{worker:Worker|null;rates:boo
   <Field label="Last name"><input className={field} value={f.lastName} onChange={set('lastName')}/></Field>
   <Field label="Employee number"><input className={field} value={f.employeeNumber} onChange={set('employeeNumber')}/></Field>
   <Field label="Role / trade"><input className={field} value={f.roleTitle} onChange={set('roleTitle')}/></Field>
-  <Field label="Employment type"><select className={field} value={f.employmentType} onChange={set('employmentType')}><option value="">Not set</option>{EMPLOYMENT.map(o=><option key={o}>{o}</option>)}</select></Field>
+  <Field label="Employment type" hint="Classification only; does not set pay or availability. Blank keeps the current type."><select aria-label="Employment type" className={field} value={f.employmentType} onChange={set('employmentType')}><option value="">{worker?'Keep current / not recorded':'Not recorded'}</option>{f.employmentType&&!knownEmploymentType(f.employmentType)&&<option value={f.employmentType}>{employmentLabel(f.employmentType)}</option>}{EMPLOYMENT_TYPES.map(o=><option key={o} value={o}>{employmentLabel(o)}</option>)}</select></Field>
   <Field label="Status"><select className={field} value={f.status} onChange={set('status')}>{WORKER_STATUSES.map(o=><option key={o}>{o}</option>)}</select></Field>
   <Field label="Email"><input className={field} type="email" value={f.email} onChange={set('email')}/></Field>
   <Field label="Phone"><input className={field} value={f.phone} onChange={set('phone')}/></Field>
@@ -113,7 +118,7 @@ function WorkerForm({worker,rates,onClose,onSaved}:{worker:Worker|null;rates:boo
   <Field label="App user" hint="Links the worker to a member so their shifts appear in Field Today."><select className={field} value={f.userId} onChange={set('userId')}><option value="">Not linked</option>{people.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
   {rates&&<Field label="Hourly rate (AUD)"><input className={field} type="number" min={0} step="0.01" value={f.hourlyRate} onChange={set('hourlyRate')}/></Field>}
   {error&&<p role="alert" className="text-sm text-red-700 sm:col-span-3">{error}</p>}
-  <div className="flex gap-2 sm:col-span-3"><Btn type="submit" busy={busy}>{worker?'Save worker':'Add worker'}</Btn><Btn type="button" variant="ghost" onClick={onClose}>Cancel</Btn></div>
+  <div className="flex gap-2 sm:col-span-3"><Btn type="submit" busy={busy}>{worker?'Save worker':'Add worker'}</Btn><Btn type="button" variant="ghost" onClick={()=>{if(!dirty||window.confirm('Discard unsaved worker changes?'))onClose();}}>Cancel</Btn></div>
  </form>;
 }
 

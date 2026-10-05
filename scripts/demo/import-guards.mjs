@@ -31,9 +31,15 @@ export function makeProvenance(baseline){
  return {isOriginal:id=>typeof id==='string'&&id.length>=4&&ids.has(mac(baseline.salt,'id:'+id))};
 }
 const stringsOf=(path,body)=>{const out=[];const walk=v=>{if(typeof v==='string')out.push(v);else if(Array.isArray(v))v.forEach(walk);else if(v&&typeof v==='object')Object.values(v).forEach(walk);};walk(body);for(const [,v] of new URLSearchParams(path.split('?')[1]||''))out.push(v);return out;};
+// Maintenance deadline: once it has passed, NOTHING mutates any more — neither an API write nor an SQL write — so an import can never keep
+// changing data after the freeze that protected it has (nearly) ended. Reads stay allowed. Resumable: the run stops, it does not undo.
+export const mutationGate={deadline:0};
+export class DeadlineError extends Error{constructor(){super('Stopped at the maintenance deadline: no further changes were made. Extend the maintenance window and resume.');this.code='DEADLINE';}}
+export const assertBeforeDeadline=(now=Date.now())=>{if(mutationGate.deadline&&now>=mutationGate.deadline)throw new DeadlineError();};
 export function guardedCall(call,provenance=null){
  return async(path,method='GET',body)=>{
   if(method!=='GET'){
+   assertBeforeDeadline();
    // Write boundary: a write may not carry the id of any record that existed before the import began, wherever it appears in the request.
    if(provenance)for(const v of stringsOf(path,body))if(provenance.isOriginal(v))throw new Error(`Refused by the import guard: ${method} ${path.split('?')[0]} refers to a record that existed before the import began (${v.slice(0,8)}…). The import never modifies or builds on original records. Nothing was changed by this request.`);
    const base=path.split('?')[0];
@@ -63,6 +69,7 @@ export function guardedDb(db,org,provenance=null){
   query:async(sql,params=[])=>{
    const text=String(sql).trim();
    if(/^(SELECT|SHOW)\b/i.test(text))return db.query(sql,params);
+   assertBeforeDeadline();
    if(USER_INSERT.test(text)){
     const [id,orgId,email,name,role]=params,who=DEMO_TEAM.get(email);
     if(orgId!==org||!who||name!==who.name||role!==who.role||!String(id).includes('-user-'+who.key))throw new Error('Refused by the import guard: this users write is not one of the demonstration team members.');

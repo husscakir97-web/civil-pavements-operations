@@ -13,6 +13,8 @@ import {createHash} from 'node:crypto';
 import {connect} from './mysql-config.mjs';
 import {SESSION_TABLES} from './demo/import-guards.mjs';
 import {databaseFingerprint,evaluateExistingTenantAllowlist,evaluateBackupEvidence} from './demo/existing-tenant.mjs';
+import {quiesce} from './demo/quiesce.mjs';
+import {importLockName} from '../lib/platform/maintenance-policy.mjs';
 import {CHILD_ENV_KEYS} from './existing-tenant-load.mjs';
 
 if(!process.env.MYSQL_DATABASE?.endsWith('_test'))throw new Error('MYSQL_DATABASE must name a disposable database ending in _test');
@@ -157,10 +159,33 @@ try{
   check('an invalid MAINTENANCE_UNTIL does not lock the site (recovery by correcting or removing the variable)',await hit('/api/auth/get-session')!==503);await killGroup(x);
   // the loader refuses to fingerprint, plan or apply unless the freeze is in force and long enough
   const w2=await world(c.name);
-  for(const [label,over,re] of [['no maintenance window',{MAINTENANCE_UNTIL:''},/not set/],['an expired window',{MAINTENANCE_UNTIL:soon(-60e3)},/ended/],['an invalid window',{MAINTENANCE_UNTIL:'soon'},/valid/],['a window with under 5 minutes left',{MAINTENANCE_UNTIL:soon(120e3)},/less than 5 minutes/],['an unbounded window (13 hours)',{MAINTENANCE_UNTIL:soon(13*3600e3)},/more than 12 hours/]])
+  for(const [label,over,re] of [['no maintenance window',{MAINTENANCE_UNTIL:''},/not set/],['an expired window',{MAINTENANCE_UNTIL:soon(-60e3)},/ended/],['an invalid window',{MAINTENANCE_UNTIL:'soon'},/valid/],['a window with under 5 minutes left',{MAINTENANCE_UNTIL:soon(120e3)},/less than \d+ minutes/],['an unbounded window (13 hours)',{MAINTENANCE_UNTIL:soon(13*3600e3)},/more than 12 hours/]])
    for(const mode of ['fingerprint','plan','apply']){x=startCmd(hostedEnv(c,aC,{...over,EXISTING_TENANT_LOAD:mode,EXISTING_TENANT_PLAN_HASH:'a'.repeat(64),DEMO_SEED_PASSWORD:password,EXISTING_TENANT_BACKUP_EVIDENCE_JSON:'{}'}));await waitFor(()=>/refused|finished|nothing was done/.test(x.log),60000);
     check(`the loader refuses ${mode} with ${label}: the freeze is not in force, nothing is connected or written`,/write freeze is not in force/.test(x.log)&&re.test(x.log)&&!/finished with exit code 0/.test(x.log),x.log.replace(/\s+/g,' ').slice(-120));await killGroup(x);}
   check('after all those refusals the control database is unchanged',(await world(c.name))===w2);
+
+  // ---- THE EXPIRY SAFETY CASE: MAINTENANCE_UNTIL passes while an apply can still mutate (its importer session holds the advisory lock).
+  // The window ending must NOT reopen the app for normal writes until that session is gone — including a delayed termination.
+  {const lock=importLockName(c.name,c.org),holder=await connectTo(c.name);
+   x=startCmd(hostedEnv(c,aC,{BETTER_AUTH_URL:origin,MAINTENANCE_UNTIL:soon(35e3),EXISTING_TENANT_LOAD:'apply',EXISTING_TENANT_PLAN_HASH:'a'.repeat(64),DEMO_SEED_PASSWORD:password}));   // the loader itself refuses (window < 15 min): nothing is imported
+   await waitFor(()=>fetch(origin+'/api/health').then(r=>r.ok,()=>false),120000);
+   const [[got]]=await holder.query('SELECT GET_LOCK(?,0) a',[lock]);                                    // an "importer" session that is alive and may still mutate
+   await new Promise(r=>setTimeout(r,1500));                                                              // the fence caches its answer for up to 1 s
+   const health0=await fetch(origin+'/api/health').then(r=>r.json());
+   check('expiry case (setup): the apply configuration is detected, the window is open-ended-closed (maintenance active) and the importer lock is held',Number(got.a)===1&&health0.maintenance.active===true&&health0.import.configured===true&&health0.import.inFlight===true,JSON.stringify(health0));
+   const wEx=await world(c.name);
+   const ended=await waitFor(async()=>(await fetch(origin+'/api/health').then(r=>r.json(),()=>null))?.maintenance?.active===false,90000);
+   const afterExpiry=[await hit('/'),await hit('/api/auth/get-session'),await hit('/api/projects',{method:'POST',body:JSON.stringify({name:'Written after expiry'})})];
+   const h1=await fetch(origin+'/api/health').then(r=>r.json()),pg=await fetch(origin+'/').then(async r=>({s:r.status,t:await r.text()}));
+   check('expiry case: MAINTENANCE_UNTIL has PASSED but the importer session is still alive: every request — including an authenticated write — is still refused with 503, and the page says an import is finishing',ended&&afterExpiry.every(v=>v===503)&&h1.maintenance.active===false&&h1.import.inFlight===true&&/import that started during the maintenance window/.test(pg.t),`${ended} ${afterExpiry.join(',')}`);
+   await new Promise(r=>setTimeout(r,7000));                                                              // delayed termination: the importer lingers well past the window
+   const late=[await hit('/api/auth/get-session'),await hit('/api/projects',{method:'POST',body:JSON.stringify({name:'Written during delayed termination'})})];
+   check('expiry case: during a DELAYED termination (7 s past the window) normal writes still do not resume and no row changed',late.every(v=>v===503)&&(await world(c.name))===wEx,late.join(','));
+   await holder.query('SELECT RELEASE_LOCK(?)',[lock]);                                                   // the importer session is finally gone
+   const reopened=await waitFor(async()=>(await hit('/api/auth/get-session'))!==503,8000);
+   const jobsBefore=await count('jobs',c.name,c.org),w=await api1('/api/projects','POST',{name:'Written after the importer stopped'});
+   check('expiry case: only once the importer session has ended does the app reopen (within seconds, no restart needed) and normal writes resume',reopened&&[200,201].includes(w.status)&&(await count('jobs',c.name,c.org))===jobsBefore+1,`reopened=${reopened} write=${w.status}`);
+   await killGroup(x);}
  }
  const capBase={...captured};
 
@@ -187,7 +212,7 @@ try{
  h=startCmd(hostedEnv(f,allow,{EXISTING_TENANT_LOAD:'apply',EXISTING_TENANT_PLAN_HASH:ph,EXISTING_TENANT_BACKUP_EVIDENCE_JSON:evJson,DEMO_SEED_PASSWORD:password}));
  const done=await finished(h,'apply',600000);
  const n={areas:await count('project_work_areas',f.name,f.org),points:await count('project_work_points',f.name,f.org),links:await count('shift_work_areas',f.name,f.org),shifts:await count('shifts',f.name,f.org),jobs:await count('jobs',f.name,f.org),users:await count('users',f.name,f.org)};
- check('hosted flow: with the reviewed hash, evidence and the one-run password the full demo company is ADDED to the existing owner tenant (SMTP/AI/billing/R2 settings were present in the app\'s environment and were not passed on)',done&&exitOk(h,'apply')&&n.areas===20&&n.points===3&&n.links===27&&n.shifts===17&&n.jobs===ownerJobsBefore+3&&n.users===6&&/Backup evidence accepted/.test(h.log),JSON.stringify(n)+h.log.slice(-120));
+ check('hosted flow: with the reviewed hash, evidence and the one-run password the full demo company is ADDED to the existing owner tenant (SMTP/AI/billing/R2 settings were present in the app\'s environment and were not passed on)',done&&exitOk(h,'apply')&&n.areas===20&&n.points===3&&n.links===27&&n.shifts===17&&n.jobs===ownerJobsBefore+3&&n.users===6&&/Backup evidence accepted/.test(h.log)&&/import deadline: /.test(h.log)&&/database quiescence after the importer stopped: killed 0 active session\(s\), 0 still active/.test(h.log),JSON.stringify(n)+h.log.slice(-120));
  check('preservation: the owner\'s own client and project, login, memberships, company profile and the other tenant are byte-for-byte unchanged; the importer itself reported 0 changed and 0 removed rows',JSON.stringify(await preserved(f))===JSON.stringify(base0)&&/Existing rows changed: 0; removed: 0/.test(h.log)&&(await count('clients',f.name,f.org))===ownerBefore+4&&(await count('project_work_areas',f.name,f.orgB))===otherAreasBefore&&(await count('shift_work_areas',f.name,f.orgB))===0,'');
  check('the other tenant received nothing and the owner\'s login and company profile are untouched (two logins, two profiles)',(await count('auth_user',f.name))===2&&(await count('organisation_profiles',f.name))===2);
  await killGroup(h);
@@ -244,6 +269,45 @@ try{
   x=startCmd(hostedEnv(g,aG,{EXISTING_TENANT_LOAD:'plan'}));await finished(x,'plan',120000);const phL=planHash(x);const planRefused=!exitOk(x,'plan');await killGroup(x);
   x=startCmd(it.applyEnv({EXISTING_TENANT_PLAN_HASH:phL||'0'.repeat(64)}));await finished(x,'apply',300000);
   check('a LOST baseline after an interruption is never guessed around: the resume is refused (conflicts or changed-since-backup) and nothing is duplicated or modified; recovery is the restore of the backup',!exitOk(x,'apply')&&JSON.stringify(await expectFull(g))===JSON.stringify(keep)&&JSON.stringify(await preserved(g))===JSON.stringify(baseG),`plan refused=${planRefused} `+x.log.replace(/\s+/g,' ').slice(-170));await killGroup(x);}
+
+ // ------------------------------------------------------------------ the importer's own deadline: nothing mutates after it, even with a request in flight; delayed sessions are cleared; resume works
+ {const g=await populated('etr_deadline_test','e'),aG=mkAllow(g),baseG=await preserved(g),evG=writeEv(await evidenceFor(g));
+  const envG={...g.env,DEMO_SEED_EMAIL:g.emailA,DEMO_SEED_PASSWORD:password,EXISTING_TENANT_CONFIRM_SHA256:sha(aG.txt)};
+  const imp=(args,t=240000)=>run('scripts/import-demo-tenant.mjs',envG,['--organisation-id',g.org,'--existing-tenant-allowlist',aG.file,...args],t);
+  const bad=imp(['--apply','--plan-hash','x','--baseline',join(dir,'x.json'),'--backup-evidence',evG,'--deadline-ms','1']);
+  check('deadline: a deadline that is already in the past is refused before anything happens',bad.status===2&&/future epoch/.test(out(bad)));
+  const phG=/planHash: ([0-9a-f]{64})/.exec(out(imp([])))?.[1],baselineG=join(dir,'g-baseline.json');
+  const deadline=Date.now()+32000;
+  const child=spawn(process.execPath,['scripts/import-demo-tenant.mjs','--organisation-id',g.org,'--existing-tenant-allowlist',aG.file,'--apply','--plan-hash',phG,'--baseline',baselineG,'--backup-evidence',evG,'--deadline-ms',String(deadline)],{env:{...process.env,...envG},stdio:['ignore','pipe','pipe']});
+  let cout='';child.stdout.on('data',b=>cout+=b);child.stderr.on('data',b=>cout+=b);
+  const exited=new Promise(r=>child.on('exit',c=>r(c)));
+  // Stall the import deterministically: once the shifts exist, a table lock makes the next work-area write BLOCK inside the database (an in-flight mutation).
+  await waitFor(async()=>(await count('shifts',g.name,g.org))>0,120000);
+  const L=await connectTo(g.name);await L.query('LOCK TABLES project_work_areas WRITE');
+  const waiting=async()=>Number((await db.query("SELECT COUNT(*) n FROM information_schema.PROCESSLIST WHERE DB=? AND COMMAND<>'Sleep' AND ID<>CONNECTION_ID() AND ID<>?",[g.name,L.threadId]))[0][0].n);
+  const blockedSeen=await waitFor(async()=>(await waiting())>0,60000);
+  const code=await Promise.race([exited,new Promise(r=>setTimeout(()=>r('timeout'),120000))]);
+  const stoppedAt=Date.now();
+  const stillWaiting=await waiting();                                                 // the importer is gone but its write is STILL queued on the server
+  check('deadline: an import blocked on an in-flight write is stopped by its watchdog at the deadline (exit 75, resumable), not left running past the window it was protecting',blockedSeen&&code===75&&stoppedAt<deadline+16000&&/Deadline watchdog|maintenance deadline/.test(cout),`blocked=${blockedSeen} exit=${code} stopped ${stoppedAt-deadline} ms after the deadline`);
+  const Yq=await connectTo(g.name);const qz0=await quiesce(Yq);                       // what the hosted loader does as soon as the importer has stopped
+  await L.query('UNLOCK TABLES');await new Promise(r=>setTimeout(r,4000));
+  const [[lastAudit]]=await db.query('SELECT MAX(created_at) m FROM `'+g.name+'`.audit_log WHERE organisation_id=?',[g.org]);
+  const areasAfter=await count('project_work_areas',g.name,g.org),activeAfter=await waiting()+0;
+  check('delayed termination: after the importer exited its in-flight write was still queued in the database; quiescence killed it, and once the lock was released NOTHING was written (no work area, no application write later than 5 s after the deadline, no active session)',stillWaiting>=1&&qz0.killed>=1&&qz0.remaining===0&&areasAfter===0&&String(lastAudit.m)<new Date(deadline+5000).toISOString()&&activeAfter===0,`waiting-after-exit=${stillWaiting} ${JSON.stringify(qz0)} areas=${areasAfter} lastAudit=${lastAudit.m} deadline=${new Date(deadline).toISOString()} active=${activeAfter}`);
+  const dry2=imp(['--baseline',baselineG,'--baseline-sha256',createHash('sha256').update(readFileSync(baselineG)).digest('hex')]);const ph2=/planHash: ([0-9a-f]{64})/.exec(out(dry2))?.[1];
+  const r2=imp(['--apply','--plan-hash',ph2,'--baseline',baselineG,'--baseline-sha256',createHash('sha256').update(readFileSync(baselineG)).digest('hex')]);
+  const fullG={areas:await count('project_work_areas',g.name,g.org),links:await count('shift_work_areas',g.name,g.org),shifts:await count('shifts',g.name,g.org)};
+  check('deadline: after extending the window the import RESUMES from the saved baseline and completes; every pre-existing owner, login and other-tenant row is unchanged',r2.status===0&&fullG.areas===20&&fullG.links===27&&fullG.shifts===17&&JSON.stringify(await preserved(g))===JSON.stringify(baseG)&&/Existing rows changed: 0; removed: 0/.test(out(r2)),`exit ${r2.status} ${JSON.stringify(fullG)}`);
+  // a session of a dead importer that is STILL executing a mutation on the server is cleared before the freeze is allowed to lapse
+  const X=await connectTo(g.name),Y=await connectTo(g.name),Z=await connectTo(g.name);
+  await X.query('START TRANSACTION');await X.query("INSERT INTO organisations (id,name,created_at) VALUES ('inflight-org','in flight',?)",[new Date().toISOString()]);
+  const running=X.query('SELECT SLEEP(60)').then(()=>'finished',e=>'killed');
+  await new Promise(r=>setTimeout(r,800));
+  const qz=await quiesce(Y);const verdict=await Promise.race([running,new Promise(r=>setTimeout(()=>r('still running'),5000))]);
+  const [[ghost]]=await db.query("SELECT COUNT(*) n FROM `"+g.name+"`.organisations WHERE id='inflight-org'");const [[zOk]]=await Z.query('SELECT 1 AS one');
+  check('delayed termination: quiescence kills a lingering in-flight transaction (it rolls back; the row never appears), reports it, leaves idle sessions alone and ends with no active session',qz.killed>=1&&qz.remaining===0&&verdict==='killed'&&Number(ghost.n)===0&&Number(zOk.one)===1,JSON.stringify(qz)+verdict);
+ }
  check('throughout every fingerprint, plan, apply, interruption, restart, resume and verify the HOSTED app (live-looking SMTP and storage settings, email enabled) contacted no integration',captured.smtp===capBase.smtp&&captured.s3===capBase.s3,`smtp+${captured.smtp-capBase.smtp} s3+${captured.s3-capBase.s3}`);
 }catch(e){fail++;console.log('FAIL    aborted — '+(e?.stack||e));}
 finally{smtpCap.close();s3Cap.close();for(const p of procs)try{process.kill(-p.pid,'SIGKILL');}catch{try{p.kill();}catch{/* gone */}}for(const c of conns)await c.end().catch(()=>{});for(const n of fixtures)await db.query('DROP DATABASE IF EXISTS `'+n+'`').catch(()=>{});await db.end();rmSync(dir,{recursive:true,force:true});}

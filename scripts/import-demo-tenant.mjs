@@ -26,6 +26,7 @@ import {startIsolatedApp} from './demo/import-app.mjs';
 import {evaluateAllowlist,assertOnlyNamedOrganisation} from './demo/staging-allowlist.mjs';
 import {evaluateExistingTenantAllowlist,evaluateBackupEvidence,databaseFingerprint,writeSidecar,hasSidecar} from './demo/existing-tenant.mjs';
 import {createHash} from 'node:crypto';
+import {mutationGate} from './demo/import-guards.mjs';
 import {applyImport} from './demo/import-apply.mjs';
 import {verifyImport} from './demo/import-verify.mjs';
 
@@ -36,6 +37,18 @@ const SEED_DATE=arg('--seed-date',new Date().toISOString().slice(0,10));  // the
 const apply=flag('--apply');
 if(!org||org.startsWith('--')){console.error('Usage: --organisation-id <id> [--seed-date YYYY-MM-DD] [--out plan.json]   (dry run)\n       --organisation-id <id> --apply --plan-hash <hash> --baseline <file>   (test environments only)');process.exit(2);}
 if(!/^\d{4}-\d{2}-\d{2}$/.test(SEED_DATE)||Number.isNaN(Date.parse(SEED_DATE))){console.error('--seed-date must be a valid YYYY-MM-DD date');process.exit(2);}
+// --deadline-ms <epoch ms>: after it, no mutation of any kind is issued (guards), and a watchdog ends the process shortly after, which also stops the
+// importer's temporary app. The hosted loader passes the end of the maintenance window minus a margin, so an import can never outlive its freeze.
+const deadlineArg=arg('--deadline-ms');
+if(deadlineArg!==undefined){
+ const d=Number(deadlineArg);if(!Number.isInteger(d)||d<=Date.now()){console.error('Refusing: --deadline-ms must be a future epoch in milliseconds.');process.exit(2);}
+ mutationGate.deadline=d;
+ setTimeout(()=>{console.error('Deadline watchdog: the maintenance deadline passed; stopping now (resumable).');process.exit(75);},Math.max(0,d-Date.now())+10_000).unref();   // unref: a finished import must exit at once; the watchdog only matters while work is still running
+ // The hosted loader runs the importer in its OWN process group (so it can stop the whole tree at the deadline). If the loader or the app dies (host
+ // restart, SIGKILL) the importer must not become an orphan that keeps mutating: it exits as soon as its parent is gone, which also stops its temporary app.
+ const parent=process.ppid;
+ setInterval(()=>{if(process.ppid!==parent){console.error('The loader is gone: stopping the import now (resumable).');process.exit(76);}},300).unref();   // ppid changes the moment the parent exits (a kill(pid,0) probe would still succeed on an unreaped zombie)
+}
 const out=arg('--out');
 if(out&&existsSync(out)){console.error('Refusing to overwrite an existing file: '+out);process.exit(2);}
 
@@ -163,5 +176,5 @@ try{
   if(drift.changedRows||drift.removedRows)failed++;
   process.exitCode=failed?1:0;
  }
-}catch(e){console.error(e.code==='NO_ORG'?e.message:'Import failed: '+String(e.message).replace(/\s+/g,' ').slice(0,300));process.exitCode=1;}
+}catch(e){if(e.code==='DEADLINE'){console.error(e.message);process.exitCode=75;}else{console.error(e.code==='NO_ORG'?e.message:'Import failed: '+String(e.message).replace(/\s+/g,' ').slice(0,300));process.exitCode=1;}}
 finally{app?.stop();await raw.end();}

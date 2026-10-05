@@ -55,7 +55,8 @@ if(apply){
  need(/_test$/.test(process.env.MYSQL_DATABASE||''),'MYSQL_DATABASE must end in _test');
  need(['127.0.0.1','localhost','::1'].includes(process.env.MYSQL_HOST||''),'MYSQL_HOST must be this machine; remote databases are refused');
  }
- need(process.env.NODE_ENV!=='production','NODE_ENV=production is refused');
+ // A managed host runs every app with NODE_ENV=production, so the allow-list path (which carries far stronger checks of its own) is the only place it is accepted.
+ need(Boolean(allowFile)||process.env.NODE_ENV!=='production','NODE_ENV=production is refused');
  need(Boolean(arg('--plan-hash')),'--plan-hash from a fresh dry run is required');
  need(Boolean(arg('--baseline')),'--baseline <file> is required (it is written before the first change and reused when an interrupted import is resumed)');
  for(const name of ['SMTP_HOST','SMTP_USER','BILLING_PROVIDER','BILLING_WEBHOOK_SECRET','ABR_GUID','AI_API_KEY','OPENAI_API_KEY','TWILIO_AUTH_TOKEN','SMS_PROVIDER'])need(!process.env[name],`${name} is set: external integrations must be unconfigured`);

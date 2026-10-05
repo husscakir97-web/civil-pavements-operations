@@ -184,6 +184,52 @@ try{
  check('binding: the importer\'s own app receives exactly the allow-listed database and no integration (email/AI off, fake locations, no SMTP/AI/billing values carried over)',ie.MYSQL_DATABASE===dbName&&ie.EMAIL_ENABLED==='false'&&ie.AI_ENABLED==='false'&&ie.LOCATION_PROVIDER==='fake'&&!ie.SMTP_HOST&&!ie.AI_API_KEY&&!ie.BILLING_PROVIDER);
  const probs=st.stagingProblems(stagingEnv(PORT));
  check('binding: the hosted app\'s staging environment names the same database as the allow-list file',probs.length===0&&stagingEnv(PORT).STAGING_DEMO_DATABASE===JSON.parse(readFileSync(allow,'utf8')).database);
+
+ // ---- managed-hosting path: no shell, no npm. Everything runs from the app's own start command (scripts/start.mjs), controlled by environment variables only.
+ {const Y=dbName+'_y',P2=PORT+2,o2=`http://127.0.0.1:${P2}`;await makeDb(Y);
+  const startCmd=(env)=>{const c=spawn(process.execPath,['scripts/start.mjs'],{env:{...env,PORT:String(P2)},stdio:['ignore','pipe','pipe']});let log='';c.stdout.on('data',b=>log+=b);c.stderr.on('data',b=>log+=b);servers.push(c);return {c,get log(){return log;}};};
+  const waitFor=async(fn,ms=240000)=>{for(let i=0;i<ms/500;i++){if(await fn())return true;await new Promise(r=>setTimeout(r,500));}return false;};
+  const up=async()=>{try{return (await fetch(o2+'/login')).ok;}catch{return false;}};
+  const stop=async h=>{h.c.kill();servers.splice(servers.indexOf(h.c),1);await new Promise(r=>setTimeout(r,1500));};
+  const baseEnv=stagingEnv(P2,{},Y);
+  let h=startCmd(baseEnv);
+  check('managed start: scripts/start.mjs (what the host runs) migrates the staging database and serves',await waitFor(up)&&(await tableCount(Y))>50);
+  const rr=await signup(o2,ADMIN);const [[adm]]=await db.query('SELECT organisation_id FROM `'+Y+'`.users WHERE email=?',[ADMIN]);
+  check('managed start: the administrator registers once on that app',rr.ok&&Boolean(adm?.organisation_id));
+  const t2=new Date().toISOString();await db.query('INSERT INTO `'+Y+'`.organisation_profiles (organisation_id,created_at,updated_at,onboarding_completed_at) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE onboarding_completed_at=VALUES(onboarding_completed_at)',[adm.organisation_id,t2,t2,t2]);
+  await stop(h);
+  const allowJson=JSON.stringify({environment:'staging-demo',host:process.env.MYSQL_HOST,port:Number(process.env.MYSQL_PORT||3306),database:Y,user:process.env.MYSQL_USER,appUrl:o2,adminEmail:ADMIN});
+  const loadEnv=over=>({...baseEnv,STAGING_DEMO_ALLOWLIST_JSON:allowJson,STAGING_DEMO_CONFIRM_SHA256:createHash('sha256').update(allowJson).digest('hex'),...over});
+  const stateDir=join(dir,'state');
+  const countY=t=>count(t,Y);
+  h=startCmd(loadEnv({STAGING_DEMO_LOAD:'plan'}));
+  const planned=await waitFor(()=>/plan finished with exit code/.test(h.log));const ph=/planHash: ([0-9a-f]{64})/.exec(h.log)?.[1];
+  check('managed load (plan): the plan and its hash are printed to the runtime log, nothing is written, and the app serves meanwhile',planned&&Boolean(ph)&&/exit code 0/.test(h.log)&&await up()&&(await countY('project_work_areas'))===0&&(await countY('shifts'))===0,h.log.slice(-200));
+  await stop(h);
+  h=startCmd(loadEnv({STAGING_DEMO_LOAD:'apply',STAGING_DEMO_PLAN_HASH:'a'.repeat(64),DEMO_SEED_PASSWORD:password,STAGING_DEMO_STATE_DIR:stateDir}));
+  await waitFor(()=>/apply finished with exit code/.test(h.log));
+  check('managed load (apply): a plan hash that was not reviewed is refused and nothing changes',!/exit code 0/.test(h.log)&&(await countY('project_work_areas'))===0&&(await countY('shifts'))===0,h.log.slice(-200));
+  await stop(h);
+  h=startCmd(loadEnv({STAGING_DEMO_LOAD:'apply',STAGING_DEMO_PLAN_HASH:ph,STAGING_DEMO_STATE_DIR:stateDir}));
+  await waitFor(()=>/apply needs DEMO_SEED_PASSWORD/.test(h.log),30000);
+  check('managed load (apply): refused without the administrator password (set only for the run), nothing changes',/DEMO_SEED_PASSWORD/.test(h.log)&&(await countY('shifts'))===0);
+  await stop(h);
+  h=startCmd(loadEnv({STAGING_DEMO_LOAD:'apply',STAGING_DEMO_PLAN_HASH:ph,DEMO_SEED_PASSWORD:password,STAGING_DEMO_STATE_DIR:stateDir}));
+  const applied=await waitFor(()=>/apply finished with exit code/.test(h.log),600000);
+  const nY={areas:await countY('project_work_areas'),links:await countY('shift_work_areas'),shifts:await countY('shifts'),users:await countY('users'),logins:await countY('auth_user')};
+  check('managed load (apply): with the reviewed hash and the one-run password the full demo company is loaded from inside the app process (NODE_ENV=production accepted only on the allow-list path)',applied&&/exit code 0/.test(h.log)&&nY.areas===20&&nY.links===27&&nY.shifts===17&&nY.users===6&&nY.logins===1,JSON.stringify(nY)+h.log.slice(-200));
+  await stop(h);
+  h=startCmd(loadEnv({STAGING_DEMO_LOAD:'verify'}));
+  await waitFor(()=>/verify finished with exit code/.test(h.log));
+  check('managed load (verify): the read-only verifier passes after the load',/verified/.test(h.log)&&/verify finished with exit code 0/.test(h.log),h.log.slice(-160));
+  await stop(h);
+  h=startCmd(loadEnv({STAGING_DEMO_LOAD:'apply',STAGING_DEMO_PLAN_HASH:ph,DEMO_SEED_PASSWORD:password,STAGING_DEMO_STATE_DIR:stateDir}));
+  await waitFor(()=>/apply finished with exit code/.test(h.log),240000);
+  check('managed load: a restart with the apply setting still on does nothing harmful (stale hash refused, no duplicates)',!/exit code 0/.test(h.log)&&(await countY('project_work_areas'))===20&&(await countY('shifts'))===17);
+  await stop(h);
+  {const noMode=run('scripts/import-demo-tenant.mjs',{...process.env,NODE_ENV:'production',...mysqlEnv(Y),DEMO_SEED_EMAIL:ADMIN,DEMO_SEED_PASSWORD:password},['--organisation-id',adm.organisation_id,'--apply','--plan-hash','x','--baseline',join(dir,'nb.json')],30000);
+   check('the default importer path still refuses NODE_ENV=production (only the allow-list path accepts it)',noMode.status===2&&/NODE_ENV=production is refused/.test(out(noMode)));}
+ }
 }catch(e){fail++;console.log('FAIL    aborted — '+(e?.stack||e));}
 finally{for(const s of servers)s.kill();for(const f of fixtures)await db.query('DROP DATABASE IF EXISTS `'+f+'`').catch(()=>{});await db.query('DROP DATABASE IF EXISTS `'+dbName+'_x`').catch(()=>{});await db.end();rmSync(dir,{recursive:true,force:true});}
 console.log(`\n${fail?'FAILED':'OK'}: ${pass} passed, ${fail} failed`);

@@ -6,6 +6,21 @@ The company view is a responsive two-week list grouped by project division. Date
 filters use the existing hash navigation, so browser Back restores them. Project drilldown uses
 the existing project Programme tab; conflict details remain read-only in the company view.
 
+## Scope-switch draft preservation
+
+Review identified that the original Company/Project switch unmounted ProjectProgramme, discarding
+the selected project and QuickAdd's unsaved name, date, duration and owner. The browser regression
+reproduced this before the fix: the project picker was empty instead of `p` after a dirty roundtrip.
+The editor now mounts on first use and remains mounted but hidden in Company mode. Returning to
+Project mode restores the same selection and draft; no discard confirmation is needed because
+the switch discards nothing. Backend behaviour and authorisation are unchanged.
+
+The real-component fixture test now supplies an editable session and project-team fixture and
+passes six dirty roundtrips (three each at 390px and 1280px), checking project, name, date, duration,
+owner, hidden-editor visibility and page width. All observed API requests remain GET. Existing
+filter/race/error/back checks are retained. `SKIP_SCREENSHOTS=1` runs without overwriting the saved
+screenshots. This is component fixture evidence, not authenticated backend browser QA.
+
 ## Data contract
 
 - GET `/api/projects/program/portfolio`, optional `start`, `divisionId`, `projectId`.

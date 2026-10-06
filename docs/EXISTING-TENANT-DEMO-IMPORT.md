@@ -97,3 +97,21 @@ The import adds records only; it cannot remove them. Undo = the §5 full restore
 
 ## Assumptions only the real host can confirm
 (a) `npm start` runs from the app root; (b) the runtime log is readable in hPanel; (c) memory allows the app plus the importer's temporary app; (d) the state directory survives a restart (otherwise an interruption is recovered by restore); (e) hPanel accepts ~500-character variables; (f) the host does not probe `/` and restart on a 503 (it can use `/api/health`).
+
+## Persistence probe for the recovery folder (filesystem only)
+
+`scripts/demo/state-probe.mjs` answers one question before any backup is trusted to a folder outside the release
+directories: does a harmless marker there survive a restart and a redeployment? It imports no database code, opens no
+endpoint and reads no secrets; it is off unless set at runtime and runs only in the standalone production server.
+
+* `EXISTING_TENANT_STATE_PROBE=create` + `EXISTING_TENANT_STATE_PROBE_DIR=<absolute dir>`: creates the folder (parent must
+  exist) and one marker, `infrastruct-state-probe.json`, atomically and never over an existing file. Logs
+  `[state-probe] OK ... id=<uuid> sha256=<hash>` to the private app log.
+* `EXISTING_TENANT_STATE_PROBE=verify`: read-only; fails (`[state-probe] FAIL`) if the marker is missing, unreadable or
+  different, and never recreates it. Optional `..._EXPECT_ID` / `..._EXPECT_SHA256` pin the values logged by `create`.
+* Refused: relative or un-normalised paths, any `public_html`/`hbuilds`/`node_modules`/`.next`/`.git` segment, anything
+  inside or containing the running release, a symlinked folder or marker, or a symlinked parent resolving to those places.
+* A FAIL never stops the app from starting. Unset the variable afterwards.
+
+A matching id/sha256 before and after a restart and a redeploy proves *observed* persistence on that host at that time,
+not a permanent hosting guarantee.

@@ -124,6 +124,13 @@ test('installed Next env loader cannot repopulate isolated credentials or trigge
  }finally{rmSync(root,{recursive:true,force:true});}
 });
 
+test('interruption fixture driver rejects hosted targets and production mode before any database connection',()=>{
+ for(const extra of [{MYSQL_HOST:'hosted.example.invalid'},{MYSQL_HOST:'127.0.0.1',NODE_ENV:'production'}]){
+  const child=spawnSync(process.execPath,['scripts/test-existing-tenant-path.mjs'],{env:{PATH:process.env.PATH,MYSQL_DATABASE:'fixture_test',...extra},encoding:'utf8'});
+  assert.notEqual(child.status,0);assert.match(child.stderr,/Fixture tests require a disposable loopback MySQL service and a non-production test driver/);
+ }
+});
+
 test('explicit trace list covers mysql2 lockfile dependency closure and loader relative module/assets graph',()=>{
  const config=ts.transpileModule(readFileSync('next.config.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
  const exports={};vm.runInNewContext(config,{exports,process:{env:{}}});

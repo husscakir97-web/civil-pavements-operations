@@ -19,6 +19,7 @@ import {CHILD_ENV_KEYS} from './existing-tenant-load.mjs';
 import {loaderLockName} from './demo/loader-lock.mjs';
 
 if(!process.env.MYSQL_DATABASE?.endsWith('_test'))throw new Error('MYSQL_DATABASE must name a disposable database ending in _test');
+if(!['127.0.0.1','localhost','::1'].includes(process.env.MYSQL_HOST)||process.env.NODE_ENV==='production')throw new Error('Fixture tests require a disposable loopback MySQL service and a non-production test driver');
 const standalone=process.env.EXISTING_TENANT_TEST_STANDALONE_ROOT;
 if(standalone&&(!standalone.startsWith(tmpdir()+'/standalone-mysql-')||!existsSync(join(standalone,'server.js'))||process.env.MYSQL_HOST!=='127.0.0.1'))throw new Error('Standalone tests require a copied temp artifact and loopback MySQL');
 const productScript=file=>standalone&&['scripts/import-demo-tenant.mjs','scripts/existing-tenant-verify.mjs'].includes(file)?join(standalone,file):resolve(file);
@@ -206,11 +207,11 @@ try{
  await killGroup(h);
  const evJson=JSON.stringify(await evidenceFor(f,{fingerprint:fp}));
  h=startCmd(hostedEnv(f,allow,{EXISTING_TENANT_LOAD:'apply',EXISTING_TENANT_PLAN_HASH:ph,EXISTING_TENANT_BACKUP_EVIDENCE_JSON:evJson}));
- await finished(h,'apply',60000);
+ await waitFor(()=>/apply needs DEMO_SEED_PASSWORD/.test(h.log),60000);
  check('hosted flow: apply without the one-run administrator password is refused and nothing changes',!exitOk(h,'apply')&&/DEMO_SEED_PASSWORD/.test(h.log)&&(await world(f.name))===w0);
  await killGroup(h);
  h=startCmd(hostedEnv(f,allow,{EXISTING_TENANT_LOAD:'apply',EXISTING_TENANT_PLAN_HASH:ph,DEMO_SEED_PASSWORD:password}));
- await finished(h,'apply',60000);
+ await waitFor(()=>/the first apply needs EXISTING_TENANT_BACKUP_EVIDENCE_JSON/.test(h.log),60000);
  check('hosted flow: the first apply without backup evidence is refused and nothing changes',!exitOk(h,'apply')&&/BACKUP_EVIDENCE/.test(h.log)&&(await world(f.name))===w0);
  await killGroup(h);
  h=startCmd(hostedEnv(f,allow,{EXISTING_TENANT_LOAD:'apply',EXISTING_TENANT_PLAN_HASH:ph,EXISTING_TENANT_BACKUP_EVIDENCE_JSON:evJson,DEMO_SEED_PASSWORD:password}));
@@ -247,10 +248,19 @@ try{
 
  // ------------------------------------------------------------------ scenarios 2 and 3: interruption and restart (the host kills the app mid-load)
  const interrupt=async(g,allowG,tag)=>{
+  // Test-only database barrier: reads/fingerprints remain unchanged, but the first
+  // work-area INSERT cannot race past the SIGKILL polling point. Install before
+  // the backup fingerprint/plan and remove only after killed sessions are quiet.
+  const barrier=await connectTo(g.name),barrierName='test_interrupt_'+sha(g.name).slice(0,32);
+  const [[held]]=await barrier.query('SELECT GET_LOCK(?,0) a',[barrierName]);
+  if(Number(held.a)!==1)throw new Error('Could not acquire interruption fixture barrier');
+  await barrier.query("CREATE TRIGGER test_interrupt_gate BEFORE INSERT ON project_work_areas FOR EACH ROW SET @test_interrupt_gate = GET_LOCK('"+barrierName+"',120)");
+  try{
   const fpG=await databaseFingerprint(await connectTo(g.name)),ev=JSON.stringify(await evidenceFor(g,{fingerprint:fpG}));
   let x=startCmd(hostedEnv(g,allowG,{EXISTING_TENANT_LOAD:'plan'}));await finished(x,'plan',120000);const phG=planHash(x);await killGroup(x);
   const applyEnv=(over={})=>hostedEnv(g,allowG,{EXISTING_TENANT_LOAD:'apply',EXISTING_TENANT_PLAN_HASH:phG,EXISTING_TENANT_BACKUP_EVIDENCE_JSON:ev,DEMO_SEED_PASSWORD:password,...over});
   x=startCmd(applyEnv());
+  const killed=new Promise(r=>x.c.once('exit',(_code,signal)=>r(signal)));
   const underway=await waitFor(async()=>(await count('shifts',g.name,g.org))>0,300000);
   if(standalone&&tag==='b'){
    const [[owner]]=await db.query('SELECT IS_USED_LOCK(?) id',[loaderLockName(g.name)]);
@@ -259,9 +269,16 @@ try{
    check('standalone recovery: loss of the real MySQL mutex session stops the loader',await waitFor(()=>/loader lock connection lost/.test(x.log),10000),x.log.slice(-200));
   }
   await killGroup(x);                                                          // SIGKILL the whole process group: the host restarted the app
+  check('interruption: the actual hosted process exits from SIGKILL ('+tag+')',await killed==='SIGKILL');
   const lockFree=await waitFor(async()=>{const c=await connectTo(g.name);const [[l]]=await c.query('SELECT GET_LOCK(?,0) a',[lockName(g.name,g.org)]);if(Number(l.a)){await c.query('SELECT RELEASE_LOCK(?)',[lockName(g.name,g.org)]);return true;}return false;},30000);
   const partial={areas:await count('project_work_areas',g.name,g.org),shifts:await count('shifts',g.name,g.org),jobs:await count('jobs',g.name,g.org)};
   return {phG,applyEnv,underway,lockFree,partial,state:stateOf(g.name)};
+  }finally{
+   const quiet=await quiesce(await connectTo(g.name));
+   if(quiet.remaining)throw new Error('Interrupted fixture still has active sessions');
+   await barrier.query('SELECT RELEASE_LOCK(?)',[barrierName]);
+   await barrier.query('DROP TRIGGER test_interrupt_gate');
+  }
  };
  const expectFull=async g=>({areas:await count('project_work_areas',g.name,g.org),links:await count('shift_work_areas',g.name,g.org),shifts:await count('shifts',g.name,g.org),users:await count('users',g.name,g.org)});
  {const g=await populated('etr_resume_test','b'),aG=mkAllow(g),baseG=await preserved(g);

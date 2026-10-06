@@ -7,9 +7,8 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {connect} from './mysql-config.mjs';
-import {SESSION_TABLES} from './demo/import-guards.mjs';
 import {databaseFingerprint} from './demo/existing-tenant.mjs';
-import {DELETE_TABLES,PRESERVE_ORG_TABLES,confirmText} from './demo/one-off-reset-tenant.mjs';
+import {DELETE_TABLES,PRESERVE_ORG_TABLES,REFUSE_IF_PRESENT_TABLES,confirmText} from './demo/one-off-reset-tenant.mjs';
 
 if(!process.env.MYSQL_DATABASE?.endsWith('_test'))throw new Error('MYSQL_DATABASE must name a disposable database ending in _test');
 if(!['127.0.0.1','localhost','::1'].includes(process.env.MYSQL_HOST)||process.env.NODE_ENV==='production')throw new Error('Fixture tests require a disposable loopback MySQL service and a non-production test driver');
@@ -57,12 +56,11 @@ const loaderEnv=(f,a,state,over={})=>({...f.env,NODE_ENV:'production',BETTER_AUT
  EXISTING_TENANT_ALLOWLIST_JSON:a.txt,EXISTING_TENANT_CONFIRM_SHA256:sha(a.txt),EXISTING_TENANT_STATE_DIR:join(dir,state),DEMO_SEED_PASSWORD:password,...over});
 const load=(f,a,state,mode,over={})=>spawnSync(process.execPath,['scripts/existing-tenant-load.mjs'],{cwd:process.cwd(),env:loaderEnv(f,a,state,{EXISTING_TENANT_LOAD:mode,...over}),encoding:'utf8',timeout:1800000});
 const planHash=o=>o.match(/planHash[=:] ?"?([0-9a-f]{64})/)?.[1];
-const world=async(name,org)=>{const per={};for(const t of [...DELETE_TABLES,...PRESERVE_ORG_TABLES])per[t]=await orgCount(name,t,org);return per;};
+const world=async(name,org)=>{const per={};for(const t of [...DELETE_TABLES,...PRESERVE_ORG_TABLES,...REFUSE_IF_PRESENT_TABLES])per[t]=await orgCount(name,t,org);return per;};
 const rowsDigest=async(name,t,where,p)=>digest(name,`SELECT * FROM {db}.\`${t}\` WHERE ${where} ORDER BY 1`,p);
-const tenantDigest=async(name,org)=>{let h='';for(const t of [...DELETE_TABLES,...PRESERVE_ORG_TABLES])h+=await rowsDigest(name,t,'organisation_id=?',[org]);return sha(h);};
+const tenantDigest=async(name,org)=>{let h='';for(const t of [...DELETE_TABLES,...PRESERVE_ORG_TABLES,...REFUSE_IF_PRESENT_TABLES])h+=await rowsDigest(name,t,'organisation_id=?',[org]);return sha(h);};
 const identityDigest=async f=>sha([await digest(f.name,'SELECT * FROM {db}.auth_user ORDER BY id'),await digest(f.name,'SELECT * FROM {db}.auth_account ORDER BY id'),await digest(f.name,'SELECT * FROM {db}.organisations ORDER BY id'),
- await digest(f.name,'SELECT * FROM {db}.users WHERE LOWER(email) IN (SELECT LOWER(email) FROM {db}.auth_user) ORDER BY id'),await digest(f.name,'SELECT * FROM {db}.organisation_profiles ORDER BY organisation_id'),await digest(f.name,'SELECT * FROM {db}.organisation_entitlements ORDER BY organisation_id'),
- await digest(f.name,'SELECT * FROM {db}.audit_log ORDER BY id')].join(''));
+ await digest(f.name,'SELECT * FROM {db}.users WHERE id=? ORDER BY id',[f.ownerUser]),await digest(f.name,'SELECT * FROM {db}.organisation_profiles WHERE organisation_id=? ORDER BY 1',[f.org]),await digest(f.name,'SELECT * FROM {db}.organisation_entitlements WHERE organisation_id=? ORDER BY 1,2',[f.org])].join(''));
 
 try{
  const f=await fixture('roadworx_reset_main_test');
@@ -73,28 +71,38 @@ try{
  r=load(f,A,'state-src','plan');const h0=planHash(out(r));check('fixture: the demo import plan is clean',r.status===0&&!!h0,out(r).slice(-300));
  r=load(f,A,'state-src','apply',{EXISTING_TENANT_PLAN_HASH:h0,EXISTING_TENANT_BACKUP_EVIDENCE_JSON:await evidence(f,{fingerprint:fp0})});
  check('fixture: the full demo is loaded into the owner tenant as the pre-existing dummy workspace',r.status===0&&/Existing rows changed: 0; removed: 0/.test(out(r)),out(r).slice(-300));
- // a colleague WITH a login in the owner tenant: the current reset keeps this member (the requested outcome would not), and the plan must say so
+ // a colleague WITH a login in the owner tenant, plus invitation / preference / bookkeeping rows in BOTH tenants: the requested outcome keeps none of the owner tenant's, and none of the other tenant's may be touched
+ const iso=new Date().toISOString();
  await q("INSERT INTO `"+f.name+"`.auth_user (id,name,email,email_verified,image,created_at,updated_at) VALUES ('colleague-auth','Test Colleague','colleague@roadworx-test.example.invalid',1,NULL,NOW(3),NOW(3))");
- await q("INSERT INTO `"+f.name+"`.users (id,organisation_id,email,name,role,created_at,active) VALUES ('colleague-user',?,'colleague@roadworx-test.example.invalid','Test Colleague','manager',?,1)",[f.org,new Date().toISOString()]);
+ await q("INSERT INTO `"+f.name+"`.users (id,organisation_id,email,name,role,created_at,active) VALUES ('colleague-user',?,'colleague@roadworx-test.example.invalid','Test Colleague','manager',?,1)",[f.org,iso]);
+ for(const [org,admin,tag] of [[f.org,f.ownerUser,'a'],[f.orgB,f.otherUser,'b']]){
+  await q("INSERT INTO `"+f.name+"`.organisation_invitations (id,organisation_id,email,role,token_hash,invited_by,expires_at,created_at) VALUES (?,?,?,'member',?,?,?,?)",['inv-'+tag,org,'invitee-'+tag+'@example.invalid','h'+tag,admin,iso.slice(0,19).replace('T',' '),iso.slice(0,19).replace('T',' ')]);
+  await q("INSERT INTO `"+f.name+"`.notification_preferences (id,organisation_id,user_id,updated_at) VALUES (?,?,?,?)",['pref-'+tag,org,admin,iso]);
+  await q("INSERT INTO `"+f.name+"`.data_migration_issues (id,organisation_id,migration,entity_type,entity_id,field,issue,created_at) VALUES (?,?,'m','worker','w','f','i',?)",['dmi-'+tag,org,iso]);
+  await q("INSERT INTO `"+f.name+"`.app_backfills (id,organisation_id,name,status,counts,started_at) VALUES (?,?,'resources','complete','{}',?)",['bf-'+tag,org,iso]);
+ }
  const before=await world(f.name,f.org),otherBefore=await tenantDigest(f.name,f.orgB),idBefore=await identityDigest(f);
- const loginlessBefore=Number((await q('SELECT COUNT(*) n FROM `'+f.name+'`.users u WHERE organisation_id=? AND NOT EXISTS (SELECT 1 FROM `'+f.name+'`.auth_user a WHERE LOWER(a.email)=LOWER(u.email))',[f.org]))[0].n);
- const totalBefore=DELETE_TABLES.reduce((n,t)=>n+before[t],0)+loginlessBefore;check('fixture: the demo left login-less team members in users (to be replaced by the reset)',loginlessBefore>=5,loginlessBefore);
+ const othersBefore=Number((await q('SELECT COUNT(*) n FROM `'+f.name+'`.users WHERE organisation_id=? AND id<>?',[f.org,f.ownerUser]))[0].n);
+ const totalBefore=DELETE_TABLES.reduce((n,t)=>n+before[t],0)+othersBefore;check('fixture: the owner tenant has other members (demo staff and a colleague with a login) besides the owner',othersBefore>=6,othersBefore);
  check('fixture: the owner tenant holds many operational rows across many tables (own old records + demo)',totalBefore>500&&DELETE_TABLES.filter(t=>before[t]).length>40,`${totalBefore} rows in ${DELETE_TABLES.filter(t=>before[t]).length} tables`);
  const [[ownClient]]=await db.query('SELECT COUNT(*) n FROM `'+f.name+'`.clients WHERE organisation_id=? AND client_code=?',[f.org,'OLD-1']);check('fixture: the owner\'s own old client is present before the reset',Number(ownClient.n)===1);
 
  // ---- classification is fail-closed and complete
  const [cols]=await db.query("SELECT DISTINCT TABLE_NAME t FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND COLUMN_NAME='organisation_id'",[f.name]);
- check('every table with organisation_id is classified exactly once as delete or preserve (no gaps, no overlap)',cols.length===DELETE_TABLES.length+PRESERVE_ORG_TABLES.length&&new Set([...DELETE_TABLES,...PRESERVE_ORG_TABLES]).size===cols.length&&cols.every(c=>DELETE_TABLES.includes(c.t)||PRESERVE_ORG_TABLES.includes(c.t)),`${cols.length} tables`);
+ const ALL=[...DELETE_TABLES,...PRESERVE_ORG_TABLES,...REFUSE_IF_PRESENT_TABLES];
+ check('every table with organisation_id is classified exactly once as delete, keep or refuse-if-present (no gaps, no overlap)',cols.length===ALL.length&&new Set(ALL).size===cols.length&&cols.every(c=>ALL.includes(c.t)),`${cols.length} tables`);
+ check('the kept set is minimal: only profile, entitlements and the admin membership (users) are kept of the tenant-scoped tables',PRESERVE_ORG_TABLES.length===3&&['organisation_profiles','organisation_entitlements','users'].every(t=>PRESERVE_ORG_TABLES.includes(t)));
 
  // ---- reset-plan is read-only and reports exactly what is deleted and preserved
  const fpBefore=await databaseFingerprint(await connectTo(f.name));
  r=load(f,A,'state-new','reset-plan');const hr=planHash(out(r));const planText=out(r);
  check('reset-plan prints the plan and its hash and changes no data (it still needs the freeze: it is maintenance-required, not read-only)',r.status===0&&!!hr&&await databaseFingerprint(await connectTo(f.name))===fpBefore,out(r).slice(-200));
  const plan=JSON.parse(planText.slice(planText.indexOf('{'),planText.lastIndexOf('}')+1));
- check('the plan\'s per-table deletion counts equal the real counts in the database',DELETE_TABLES.every(t=>(plan.deletedRowCounts[t]||0)===before[t])&&plan.deletedLoginlessMembers.length===loginlessBefore&&plan.deletedRowTotal===totalBefore);
- check('the plan shows the difference from the requested outcome: other login-bearing members and history rows it keeps beyond the minimum',plan.keptLoginBearingMembers.length===1&&plan.keptLoginBearingMembers[0].email.startsWith('colleague@')&&plan.preservedBeyondRequestedMinimum['users (other login-bearing members)']===1&&plan.preservedBeyondRequestedMinimum.audit_log>0&&/MORE than that/.test(plan.requestedOutcomeDifference)&&/DIFFERENCE FROM THE REQUESTED OUTCOME/.test(planText)&&/maintenance-required/.test(planText),JSON.stringify(plan.preservedBeyondRequestedMinimum));
- check('the plan names the preserved login, membership and organisation',plan.adminLogin.email===f.emailA&&plan.preservedMemberships.some(u=>u.id===f.ownerUser&&u.role==='admin')&&plan.organisation.id===f.org,JSON.stringify(plan.adminLogin));
- console.log('\n--- PLAN (isolated copy) ---\n'+JSON.stringify({organisation:plan.organisation,adminLogin:plan.adminLogin,preservedMemberships:plan.preservedMemberships,preservedRowCounts:plan.preservedRowCounts,deletedLoginlessMembers:plan.deletedLoginlessMembers,deletedTableCount:plan.deletedTableCount,deletedRowTotal:plan.deletedRowTotal,deletedRowCounts:plan.deletedRowCounts},null,1)+'\n--- END PLAN ---\n');
+ check('the plan\'s per-table deletion counts equal the real counts in the database',DELETE_TABLES.every(t=>(plan.deletedRowCounts[t]||0)===before[t])&&plan.deletedMembers.length===othersBefore&&plan.deletedRowTotal===totalBefore);
+ check('the plan lists the other members to be deleted (including the colleague WITH a login) and states there is no difference from the requested outcome',plan.deletedMembers.some(u=>u.email.startsWith('colleague@')&&u.hasLogin)&&plan.deletedMembersWithLogin>=1&&/^None/.test(plan.requestedOutcomeDifference)&&/DIFFERENCE FROM THE REQUESTED OUTCOME: None/.test(planText)&&/maintenance-required/.test(planText));
+ check('the plan names what is kept and why: organisation, admin membership, profile, entitlements, and the shared identities left untouched',plan.preservedRecords.length===5&&plan.preservedRecords.every(r=>r.why&&r.why.length>20)&&plan.preservedRecords[1].record.includes('admin membership')&&plan.preservedRecords[4].record.includes('shared identities'));
+ check('the plan names the preserved login and organisation',plan.adminLogin.email===f.emailA&&plan.adminLogin.userId===f.ownerUser&&plan.organisation.id===f.org,JSON.stringify(plan.adminLogin));
+ console.log('\n--- PLAN (isolated copy) ---\n'+JSON.stringify({organisation:plan.organisation,adminLogin:plan.adminLogin,preservedRecords:plan.preservedRecords,deletedMembers:plan.deletedMembers,deletedTableCount:plan.deletedTableCount,deletedRowTotal:plan.deletedRowTotal,deletedRowCounts:plan.deletedRowCounts},null,1)+'\n--- END PLAN ---\n');
  if(process.env.RESET_PLAN_OUT)writeFileSync(process.env.RESET_PLAN_OUT,JSON.stringify(plan,null,1));
 
  // ---- refusals: nothing is connected-and-changed unless every guard holds
@@ -114,6 +122,10 @@ try{
  r=load(f,A,'state-src','reset',base);check('reset refuses while an earlier import baseline exists in the state directory (reset must come first)',r.status!==0&&/baseline already exists/.test(out(r))&&await same(),out(r).slice(-160));
  await q('CREATE TABLE `'+f.name+'`.surprise_table (id varchar(20) primary key, organisation_id varchar(191))');
  r=load(f,A,'state-new','reset-plan');check('an unclassified new table with organisation_id makes the reset refuse (fail-closed)',r.status!==0&&/not classified/.test(out(r)),out(r).slice(-200));await q('DROP TABLE `'+f.name+'`.surprise_table');
+ await q("INSERT INTO `"+f.name+"`.billing_customers (id,organisation_id,provider,created_at,updated_at) VALUES ('bill-1',?,'none',?,?)",[f.org,iso,iso]);
+ r=load(f,A,'state-new','reset',{...base,EXISTING_TENANT_BACKUP_EVIDENCE_JSON:await evidence(f)});
+ check('a tenant with billing / AI-spend rows is refused (financial records are never deleted by this reset); nothing changed',r.status!==0&&/financial/.test(out(r))&&Number((await q('SELECT COUNT(*) n FROM `'+f.name+'`.billing_customers WHERE id=?',['bill-1']))[0].n)===1&&(await world(f.name,f.org)).billing_customers===1,out(r).slice(-200));
+ await q('DELETE FROM `'+f.name+'`.billing_customers WHERE id=?',['bill-1']);
 
  // ---- atomic: a failure part-way through the deletes rolls everything back
  await q("CREATE TRIGGER `"+f.name+"`.boom BEFORE DELETE ON `"+f.name+"`.crews FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='forced failure mid-delete'");
@@ -127,8 +139,9 @@ try{
  check('the reset commits and reports the exact number of rows deleted',r.status===0&&new RegExp(`Reset committed: ${totalBefore} row\\(s\\) deleted across ${plan.deletedTableCount} table`).test(out(r)),out(r).slice(-300));
  const after=await world(f.name,f.org);
  check('every delete table is empty for the tenant',DELETE_TABLES.every(t=>after[t]===0));
- check('every preserved table is unchanged for the tenant (row counts)',PRESERVE_ORG_TABLES.every(t=>t==='users'?after[t]===before[t]-loginlessBefore:after[t]===before[t])&&after.users===2&&(await q('SELECT COUNT(*) n FROM `'+f.name+'`.users WHERE id=?',['colleague-user']))[0].n==1);
- check('login, memberships (all users rows), organisation, profile, entitlements and audit trail are byte-identical',await identityDigest(f)===idBefore);
+ check('only the records required for the owner\'s access remain in the tenant: profile and entitlements unchanged, and the admin is the only member',after.users===1&&after.organisation_profiles===before.organisation_profiles&&after.organisation_entitlements===before.organisation_entitlements&&(await q('SELECT id FROM `'+f.name+'`.users WHERE organisation_id=?',[f.org])).map(r=>r.id).join()===f.ownerUser);
+ check('the other members are gone from this tenant, but their shared logins (auth_user) are untouched and the other tenant\'s equivalent rows survive',Number((await q('SELECT COUNT(*) n FROM `'+f.name+'`.users WHERE id=?',['colleague-user']))[0].n)===0&&Number((await q('SELECT COUNT(*) n FROM `'+f.name+'`.auth_user WHERE id=?',['colleague-auth']))[0].n)===1&&Number((await q("SELECT COUNT(*) n FROM `"+f.name+"`.organisation_invitations WHERE id='inv-b'"))[0].n)===1&&Number((await q("SELECT COUNT(*) n FROM `"+f.name+"`.app_backfills WHERE id='bf-b'"))[0].n)===1);
+ check('shared identities (all auth_user/auth_account), the organisation, the admin membership, profile and entitlements are byte-identical',await identityDigest(f)===idBefore);
  check('the other tenant is byte-identical',await tenantDigest(f.name,f.orgB)===otherBefore);
  const [[ow]]=await db.query('SELECT COUNT(*) n FROM `'+f.name+'`.project_work_areas WHERE organisation_id=?',[f.orgB]);
  check('the other tenant still has its client-less project and work area',Number(ow.n)===1&&(await q('SELECT COUNT(*) n FROM `'+f.name+'`.jobs WHERE organisation_id=?',[f.orgB]))[0].n==1);
@@ -153,6 +166,8 @@ try{
  const sin=await fetch(`http://127.0.0.1:${P0}/api/auth/sign-in/email`,{method:'POST',headers:{origin:`http://127.0.0.1:${P0}`,'Content-Type':'application/json'},body:JSON.stringify({email:f.emailA,password})});
  const ck=sin.headers.getSetCookie().map(c=>c.split(';')[0]).filter(c=>!c.endsWith('=')).join('; ');
  const jobs=await call(ck,`http://127.0.0.1:${P0}`)('/api/projects');
+ const ws=await call(ck,`http://127.0.0.1:${P0}`)('/api/workspace');
+ check('the preserved login reaches the workspace as an administrator (profile, entitlements and membership intact: no onboarding detour)',ws.status===200&&ws.body.canEdit===true,`${ws.status}`);
  check('the preserved login signs in with the same password and sees the demo projects (admin access intact)',sin.ok&&jobs.status===200&&JSON.stringify(jobs.body).includes('DEMO'),`${sin.status} ${jobs.status}`);
  app.kill();procs.splice(procs.indexOf(app),1);
 }catch(e){fail++;console.log('FAIL    aborted — '+(e?.stack||e));}

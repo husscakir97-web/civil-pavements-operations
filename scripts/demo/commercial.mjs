@@ -67,9 +67,15 @@ export async function commercialStage(c){
   }
   return claim;
  };
+ // Anchor historical claims to distinct completed UTC months for every supplied seed date.
+ const monthEnd=new Date(d(0)+'T00:00:00Z');
+ monthEnd.setUTCDate(0);
+ const secondClaimDate=monthEnd.toISOString().slice(0,10);
+ monthEnd.setUTCDate(0);
+ const firstClaimDate=monthEnd.toISOString().slice(0,10);
  const b1=await contractLine('B1');
- await drive({key:'B1',period:monthOf(d(-35)),date:d(-35),notes:'Progress claim 1 (demonstration)',lines:[{lineType:'contract',sourceId:b1.sourceId,thisClaim:60000}],target:'paid',certifiedAmount:60000,certifiedDate:d(-28),invoiceNumber:'DEMO-INV-0001',invoiceDate:d(-27),dueDate:d(3),payDate:d(-5)});
- if(monthOf(d(-5))!==monthOf(d(0)))await drive({key:'B1',period:monthOf(d(-5)),date:d(-5),notes:'Progress claim 2 (demonstration)',lines:[{lineType:'contract',sourceId:b1.sourceId,thisClaim:55000}],target:'submitted'});
+ await drive({key:'B1',period:monthOf(firstClaimDate),date:firstClaimDate,notes:'Progress claim 1 (demonstration)',lines:[{lineType:'contract',sourceId:b1.sourceId,thisClaim:60000}],target:'paid',certifiedAmount:60000,certifiedDate:d(-28),invoiceNumber:'DEMO-INV-0001',invoiceDate:d(-27),dueDate:d(3),payDate:d(-5)});
+ await drive({key:'B1',period:monthOf(secondClaimDate),date:secondClaimDate,notes:'Progress claim 2 (demonstration)',lines:[{lineType:'contract',sourceId:b1.sourceId,thisClaim:55000}],target:'submitted'});
  {
   // current-month claim: docket-linked line with a SEPARATELY AGREED client charge of $1,000 (internal cost is $725)
   const cl=await claimable('B1'),dk=await find('DEMO-D-006');

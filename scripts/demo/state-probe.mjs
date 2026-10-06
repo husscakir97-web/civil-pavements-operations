@@ -1,6 +1,7 @@
 import {existsSync,realpathSync,lstatSync,mkdirSync,openSync,writeSync,closeSync,linkSync,unlinkSync,readFileSync,constants} from 'node:fs';
 import {resolve,join,sep,dirname} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
+import {standaloneRuntimeProblem,skipNote} from './standalone-runtime.mjs';
 
 // Filesystem-only persistence diagnostic. Imports no database code, opens no
 // endpoint, reads no secrets. Off unless EXISTING_TENANT_STATE_PROBE is set to
@@ -74,11 +75,12 @@ export function runStateProbe(env=process.env,root=process.cwd()){
 }
 
 let started=false;
-// Same standalone-server guard as runtime-loader.mjs. Never throws into app start.
+// Explicit opt-in (EXISTING_TENANT_STATE_PROBE) plus the launcher-independent standalone-server proof (standalone-runtime.mjs). Silent when not opted in;
+// when opted in but declined, logs one concise private skip line (reason code, launcher file name). Never throws into app start.
 export function startStateProbe(env=process.env,argv=process.argv,root=process.cwd(),log=console){
- if(started||env.NODE_ENV!=='production'||!env.EXISTING_TENANT_STATE_PROBE||!env.__NEXT_PRIVATE_STANDALONE_CONFIG)return null;
- const entry=resolve(argv[1]||''),server=join(root,'server.js');
- if(entry!==server&&(!existsSync(entry)||!existsSync(server)||realpathSync(entry)!==realpathSync(server)))return null;
+ if(started||!env.EXISTING_TENANT_STATE_PROBE)return null;
+ const problem=standaloneRuntimeProblem(env,root);
+ if(problem){log.warn(skipNote('[state-probe]',problem,argv));return null;}
  started=true;
  try{
   const r=runStateProbe(env,root);

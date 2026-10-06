@@ -66,6 +66,7 @@ export async function existingTenantLoad(env=process.env){
   }
   const stateDir=env.EXISTING_TENANT_STATE_DIR||join(homedir(),'.existing-tenant-state');
   // ONE-OFF (owner-requested, remove after the demo is loaded): replace this tenant's operational data. Same freeze, lock, quiescence and exact-target guards.
+  // reset-plan changes no data but is MAINTENANCE-REQUIRED, not read-only: it needs the freeze and quiescence KILLs active database sessions of this user (above).
   if(mode==='reset-plan'){script='scripts/demo/one-off-reset-tenant.mjs';args=base;}
   else if(mode==='reset'){
    if(!/^[0-9a-f]{64}$/.test(env.EXISTING_TENANT_PLAN_HASH||'')||!env.EXISTING_TENANT_RESET_CONFIRM||!env.EXISTING_TENANT_BACKUP_EVIDENCE_JSON){log('reset needs EXISTING_TENANT_PLAN_HASH (from reset-plan), EXISTING_TENANT_RESET_CONFIRM and EXISTING_TENANT_BACKUP_EVIDENCE_JSON; nothing was done.');return 2;}

@@ -1,10 +1,13 @@
 // ONE-OFF, owner-requested: replace all operational data of ONE tenant before the full fictional demo is imported. NOT a reusable feature:
 // delete this file (and the two `reset*` branches in scripts/existing-tenant-load.mjs) after the demo is loaded.
 //
-//   plan   (read-only):  node scripts/demo/one-off-reset-tenant.mjs --organisation-id <id> --existing-tenant-allowlist <file> [--out plan.json]
+//   plan   (changes no data, but MAINTENANCE-REQUIRED when run through the loader: it freezes writes and terminates leftover database sessions, see below):  node scripts/demo/one-off-reset-tenant.mjs --organisation-id <id> --existing-tenant-allowlist <file> [--out plan.json]
 //   apply:               ... --apply --plan-hash <hash> --backup-evidence <file> --confirm "RESET-OPERATIONAL-DATA <id> <hash>" --ledger <new file>
 //
 // Login-less `users` rows of the tenant (team members without access, e.g. earlier demo staff) are operational dummy data and ARE deleted; they are listed in the plan.
+// NOT read-only in the operational sense: the loader's reset-plan and reset modes both run quiescence (KILL of any ACTIVE session of the database user in this
+// database; idle sessions are left alone) and refuse unless the maintenance freeze is in force. Run them only inside the freeze window.
+// An existing import baseline in the state directory is never moved or deleted by this tooling: the reset refuses until the operator decides what to do with it.
 // Scope: rows WHERE organisation_id=<id> in the DELETE tables below, in one InnoDB transaction. Everything else is preserved byte-for-byte:
 // the `organisations` row, every login (auth_*), every `users` membership that has a login (and always the allow-listed admin), the company profile, entitlements, invitations, billing,
 // audit trail, AI usage ledger, migration bookkeeping and every other tenant. Fail-closed: every table carrying organisation_id must be
@@ -57,6 +60,7 @@ export async function buildResetPlan(db,org,adminEmail){
  const [loginless]=await db.query('SELECT u.id,u.email,u.role,u.active FROM users u WHERE u.organisation_id=? AND u.id<>? AND NOT EXISTS (SELECT 1 FROM auth_user a WHERE LOWER(a.email)=LOWER(u.email)) ORDER BY u.id',[org,admin.id]);
  const loginlessIds=new Set(loginless.map(u=>u.id));
  if(!au)throw new Error('Refusing: the allow-listed administrator has no login (auth_user).');
+ const keptLoginMembers=admins.filter(u=>u.id!==admin.id&&!loginlessIds.has(u.id)).map(u=>({id:u.id,email:u.email,role:u.role,active:Number(u.active)}));
  const deleteCounts={},otherTenantRows={};let total=0;
  for(const t of DELETE_TABLES){
   const [[a]]=await db.query(`SELECT COUNT(*) n FROM ${identifier(t)} WHERE organisation_id=?`,[org]);const [[b]]=await db.query(`SELECT COUNT(*) n FROM ${identifier(t)} WHERE organisation_id<>?`,[org]);
@@ -66,8 +70,10 @@ export async function buildResetPlan(db,org,adminEmail){
  for(const t of PRESERVE_ORG_TABLES.filter(x=>x!=='users')){const [[a]]=await db.query(`SELECT COUNT(*) n FROM ${identifier(t)} WHERE organisation_id=?`,[org]);preserved[t]=Number(a.n);}
  preserved.users=admins.length-loginless.length;
  for(const t of ['organisations','auth_user','auth_account'])preserved[t+' (all tenants)']=Number((await db.query(`SELECT COUNT(*) n FROM ${identifier(t)}`))[0][0].n);
+ const beyond={'users (other login-bearing members)':keptLoginMembers.length};
+ for(const t of ['organisation_invitations','billing_customers','billing_events','billing_subscriptions','audit_log','audit_events','domain_events','ai_usage_ledger','notification_preferences','app_backfills','data_migration_issues'])beyond[t]=preserved[t];
  const body={tool:'one-off-reset-tenant',organisation:{id:o.id,name:o.name},adminLogin:{email:adminEmail,userId:admin.id,authUserId:au.id},
-  preservedMemberships:admins.filter(u=>!loginlessIds.has(u.id)).map(u=>({id:u.id,email:u.email,role:u.role,active:Number(u.active)})),deletedLoginlessMembers:loginless.map(u=>({id:u.id,email:u.email,role:u.role,active:Number(u.active)})),preservedRowCounts:preserved,
+  preservedMemberships:admins.filter(u=>!loginlessIds.has(u.id)).map(u=>({id:u.id,email:u.email,role:u.role,active:Number(u.active)})),minimumRecordsRequired:['organisations (this tenant)','auth_user + auth_account (the allow-listed admin)','users (the allow-listed admin membership)','organisation_profiles','organisation_entitlements'],preservedBeyondRequestedMinimum:Object.fromEntries(Object.entries(beyond).filter(([,n])=>n)),keptLoginBearingMembers:keptLoginMembers,requestedOutcomeDifference:keptLoginMembers.length||Object.keys(beyond).some(k=>beyond[k])?`The requested outcome is only the owner login plus the minimum records it requires. This procedure keeps MORE than that: ${keptLoginMembers.length} other login-bearing member(s) of this tenant and the history/bookkeeping rows listed in preservedBeyondRequestedMinimum (audit trail, billing, invitations and similar). Execution needs your explicit decision on that difference; as written they are NOT deleted.`:'None: nothing beyond the minimum is preserved.',deletedLoginlessMembers:loginless.map(u=>({id:u.id,email:u.email,role:u.role,active:Number(u.active)})),preservedRowCounts:preserved,
   deletedRowCounts:Object.fromEntries(Object.entries(deleteCounts).filter(([,n])=>n)),deletedTableCount:Object.values(deleteCounts).filter(Boolean).length,deletedRowTotal:total+loginless.length,
   otherTenantRowsInDeleteTables:Object.values(otherTenantRows).reduce((a,b)=>a+b,0),schema:sha(await schemaShape(db))};
  return {...body,planHash:sha(JSON.stringify({...body,deleteCounts}))};
@@ -128,7 +134,7 @@ async function main(){
  try{
   const plan=await buildResetPlan(db,org,al.entry.adminEmail);
   if(out)writeFileSync(out,JSON.stringify(plan,null,1),{mode:0o600,flag:'wx'});
-  if(!apply){console.log(JSON.stringify(plan,null,1));console.log('Nothing was changed. planHash='+plan.planHash);return 0;}
+  if(!apply){console.log(JSON.stringify(plan,null,1));console.log('DIFFERENCE FROM THE REQUESTED OUTCOME: '+plan.requestedOutcomeDifference);console.log('No data was changed. This run is maintenance-required (write freeze in force; leftover active database sessions of this user are terminated by quiescence); it is not a read-only step to run against a live app. planHash='+plan.planHash);return 0;}
   const problems=[];
   if(arg('--plan-hash')!==plan.planHash)problems.push('the plan hash does not match a fresh plan (the data changed, or the wrong hash)');
   if(arg('--confirm')!==mark(org,plan.planHash))problems.push('--confirm must be exactly: '+mark(org,plan.planHash));

@@ -104,14 +104,27 @@ The import adds records only; it cannot remove them. Undo = the §5 full restore
 directories: does a harmless marker there survive a restart and a redeployment? It imports no database code, opens no
 endpoint and reads no secrets; it is off unless set at runtime and runs only in the standalone production server.
 
-* `EXISTING_TENANT_STATE_PROBE=create` + `EXISTING_TENANT_STATE_PROBE_DIR=<absolute dir>`: creates the folder (parent must
-  exist) and one marker, `infrastruct-state-probe.json`, atomically and never over an existing file. Logs
-  `[state-probe] OK ... id=<uuid> sha256=<hash>` to the private app log.
-* `EXISTING_TENANT_STATE_PROBE=verify`: read-only; fails (`[state-probe] FAIL`) if the marker is missing, unreadable or
-  different, and never recreates it. Optional `..._EXPECT_ID` / `..._EXPECT_SHA256` pin the values logged by `create`.
-* Refused: relative or un-normalised paths, any `public_html`/`hbuilds`/`node_modules`/`.next`/`.git` segment, anything
-  inside or containing the running release, a symlinked folder or marker, or a symlinked parent resolving to those places.
-* A FAIL never stops the app from starting. Unset the variable afterwards.
+Run it in this order. The runtime variables are set by the operator in Hostinger, never in the repository.
+
+1. **Create once.** Set `EXISTING_TENANT_STATE_PROBE=create` and `EXISTING_TENANT_STATE_PROBE_DIR=<absolute dir>` (parent
+   must exist), then start the app once. It creates the folder and one marker, `infrastruct-state-probe.json`, atomically
+   and never over an existing file, and logs `[state-probe] OK mode=create created=true id=<uuid> sha256=<hash>` to the
+   private app log. Record the `id` and `sha256`. Do not redeploy, and do not start the app again in `create` mode.
+2. **Switch to verify with both values pinned, before any further restart or redeployment.** Change the variables to
+   `EXISTING_TENANT_STATE_PROBE=verify`, `EXISTING_TENANT_STATE_PROBE_EXPECT_ID=<id>` and
+   `EXISTING_TENANT_STATE_PROBE_EXPECT_SHA256=<sha256>`, keeping `EXISTING_TENANT_STATE_PROBE_DIR`. The probe runs only
+   at server start, so the next start is the first restart and must already pass this check. `verify` is read-only: it never creates or repairs the marker and logs `[state-probe] FAIL` if the marker
+   is missing, unreadable, or its id or content hash differs from the pinned values. (An unpinned `verify` only checks that
+   the marker is well-formed, so it is not sufficient evidence.)
+3. **Restart once more, then redeploy**, leaving the pinned `verify` settings in place. After each start, the log must show
+   `[state-probe] OK mode=verify created=false` with the same `id` and `sha256`. Any `FAIL`, or a changed `id`/`sha256`,
+   means the folder is not to be trusted for recovery files.
+4. **Unset all `EXISTING_TENANT_STATE_PROBE*` variables** when finished. Leaving `create` set is harmless (an existing marker
+   is only validated, never overwritten) but is not evidence of persistence.
+
+Refused up front: relative or un-normalised paths, any `public_html`/`hbuilds`/`node_modules`/`.next`/`.git` segment,
+anything inside or containing the running release, a symlinked folder or marker, or a symlinked parent resolving to those
+places. A `FAIL` never stops the app from starting.
 
 A matching id/sha256 before and after a restart and a redeploy proves *observed* persistence on that host at that time,
 not a permanent hosting guarantee.

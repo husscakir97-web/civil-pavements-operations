@@ -2,7 +2,21 @@
 
 Destination: the **existing darkgray site and its existing tenant**. No third website is prepared. Everything already entered there is dummy data, but it is **preserved by default**, together with the owner's login, memberships and company profile. Nothing in this document has been run against any hosted system; no merge, deployment, deletion or hosted import has happened.
 
-## Release plan (corrected)
+## Standalone compatibility candidate (2026-10-06; not activated)
+
+The historical release/`npm start` assumptions below are not evidence that the loader runs on Hostinger's Next.js preset. Its publisher launches the generated standalone `server.js`. The local compatibility candidate uses Next's instrumentation hook only when `NODE_ENV=production`, `NEXT_RUNTIME=nodejs`, `EXISTING_TENANT_RUNTIME_ENABLE=true`, a loader mode is set, and the generated standalone entry is executing. Builds, `next dev`, ordinary startup and the isolated importer app remain inert. The hook spawns the existing loader; it does not import database code, migrate, or quiesce in the Next process.
+
+`next.config.ts` explicitly includes the loader scripts, two JSON manifests, policy modules, and mysql2's dependency closure. The isolated app launches `server.js` on a free loopback port with a fresh environment. It also prevents Next from reloading deployment `.env` files into that environment; the installed `@next/env` behavior is covered by a regression test.
+
+All loader modes acquire a database-wide MySQL advisory mutex before quiescence or child launch and hold it through final quiescence. A concurrent instance exits without quiescing. A surviving importer fence also refuses a restarted loader. Connection loss stops the loader; runtime parent loss stops its child loader, and the existing importer watchdog handles loader death. The existing apply lock, deadline, backup attestation/fingerprint, reviewed plan hash and durable baseline/sidecar checks remain in force. This does not authorize concurrent manual importers or other writers.
+
+**Validation gate:** require green results on the exact candidate head before considering publication/deployment readiness. Local preparation could not build the artifact because C: had roughly 81 MiB free. CI uses Linux Node 22 and disposable loopback MySQL: the normal full suite, then the copied artifact with the source checkout hidden, and the complete existing-tenant suite through that copied artifact with concurrent runtime and lock-owner-loss checks. Interruption fixtures use a test-only database trigger barrier so SIGKILL cannot race with import completion; no production hook or guard is bypassed. `npm run test:standalone-artifact -- .next/standalone` checks normal and opt-in startup and the packaged isolated app. `npm run test:standalone-loader` supplies no-database boundary, concurrent-mutex, expiry, resume-argument and process-fixture tests; these are not end-to-end import proof. Consult the PR's current CI evidence for the actual result.
+
+Do not enable the hook on the host until the candidate and those results are reviewed and publication/deployment are separately approved. Before any later import, confirm maintenance across every public runtime instance, a persistent state directory, a fresh restore-tested frozen backup, and the operator-reviewed plan. Clear `EXISTING_TENANT_RUNTIME_ENABLE` with the other run-only variables after the operation. Keep the existing Next.js hosting preset.
+
+Sources: [Next standalone output/tracing](https://nextjs.org/docs/app/api-reference/config/next-config-js/output), [instrumentation lifecycle](https://nextjs.org/docs/app/api-reference/file-conventions/instrumentation).
+
+## Historical release plan (superseded for standalone startup)
 * PR #68 (`claude/integrated-work-map-workflow`) is at `b793be2` and **does not contain** the existing-tenant import work. That work is on the local branch `claude/existing-tenant-import`, which **descends from** PR #68's head (a fast-forward), as one complete candidate: PR #68's content + the existing-tenant import path + the maintenance freeze + the CI additions.
 * **Nothing is merged or deployed until the exact candidate has passed verification** (below). Publication means pushing the candidate to PR #68's branch (a normal fast-forward push, so PR #68 *is* the candidate) — that needs your approval.
 

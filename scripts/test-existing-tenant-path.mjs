@@ -8,7 +8,7 @@ import {createServer as netServer} from 'node:net';
 import {createServer as httpServer} from 'node:http';
 import {mkdtempSync,writeFileSync,chmodSync,readFileSync,rmSync,existsSync,mkdirSync,copyFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {connect} from './mysql-config.mjs';
 import {SESSION_TABLES} from './demo/import-guards.mjs';
@@ -16,8 +16,13 @@ import {databaseFingerprint,evaluateExistingTenantAllowlist,evaluateBackupEviden
 import {quiesce} from './demo/quiesce.mjs';
 import {importLockName} from '../lib/platform/maintenance-policy.mjs';
 import {CHILD_ENV_KEYS} from './existing-tenant-load.mjs';
+import {loaderLockName} from './demo/loader-lock.mjs';
 
 if(!process.env.MYSQL_DATABASE?.endsWith('_test'))throw new Error('MYSQL_DATABASE must name a disposable database ending in _test');
+if(!['127.0.0.1','localhost','::1'].includes(process.env.MYSQL_HOST)||process.env.NODE_ENV==='production')throw new Error('Fixture tests require a disposable loopback MySQL service and a non-production test driver');
+const standalone=process.env.EXISTING_TENANT_TEST_STANDALONE_ROOT;
+if(standalone&&(!standalone.startsWith(tmpdir()+'/standalone-mysql-')||!existsSync(join(standalone,'server.js'))||process.env.MYSQL_HOST!=='127.0.0.1'))throw new Error('Standalone tests require a copied temp artifact and loopback MySQL');
+const productScript=file=>standalone&&['scripts/import-demo-tenant.mjs','scripts/existing-tenant-verify.mjs'].includes(file)?join(standalone,file):resolve(file);
 let pass=0,fail=0;const check=(s,ok,d='')=>{if(ok)pass++;else fail++;console.log(`${ok?'PASS':'FAIL'}    ${s}${d?' — '+String(d).replace(/\s+/g,' ').slice(0,220):''}`);return ok;};
 const sha=x=>createHash('sha256').update(x).digest('hex');
 const dir=mkdtempSync(join(tmpdir(),'existing-tenant-test-'));
@@ -33,8 +38,8 @@ const count=async(t,name,org)=>Number((await q('SELECT COUNT(*) n FROM `'+name+'
 const world=async name=>{const [t]=await db.query('SELECT TABLE_NAME n FROM information_schema.TABLES WHERE TABLE_SCHEMA=? ORDER BY 1',[name]);const h=createHash('sha256');for(const {n} of t){if(SESSION_TABLES.has(n))continue;h.update(n+JSON.stringify((await db.query('SELECT * FROM `'+name+'`.`'+n+'`'))[0]));}return h.digest('hex');};
 const rowsDigest=async(name,sql,p)=>sha(JSON.stringify((await db.query(sql.replaceAll('{db}','`'+name+'`'),p))[0]));
 const out=r=>(r.stdout||'')+(r.stderr||'');
-const run=(file,env,args=[],timeout=120000)=>spawnSync(process.execPath,[file,...args],{env,encoding:'utf8',timeout});
-const startApp=async(port,env)=>{const c=spawn(process.execPath,['node_modules/next/dist/bin/next','start','-p',String(port),'--hostname','127.0.0.1'],{env,stdio:'ignore'});procs.push(c);for(let i=0;i<120;i++){try{if((await fetch(`http://127.0.0.1:${port}/login`)).ok)return c;}catch{/* starting */}await new Promise(r=>setTimeout(r,500));}throw new Error('app did not start');};
+const run=(file,env,args=[],timeout=120000)=>spawnSync(process.execPath,[productScript(file),...args],{cwd:standalone&&file==='scripts/import-demo-tenant.mjs'?standalone:process.cwd(),env,encoding:'utf8',timeout});
+const startApp=async(port,env)=>{const args=standalone?[join(standalone,'server.js')]:['node_modules/next/dist/bin/next','start','-p',String(port),'--hostname','127.0.0.1'];const c=spawn(process.execPath,args,{cwd:standalone||process.cwd(),env:{...env,PORT:String(port),HOSTNAME:'127.0.0.1'},stdio:'ignore'});procs.push(c);for(let i=0;i<120;i++){try{if((await fetch(`http://127.0.0.1:${port}/login`)).ok)return c;}catch{/* starting */}await new Promise(r=>setTimeout(r,500));}throw new Error('app did not start');};
 const call=(cookie,origin)=>async(path,method='GET',body)=>{const r=await fetch(origin+path,{method,headers:{origin,cookie,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const t=await r.text();let j;try{j=JSON.parse(t);}catch{j=t;}return {status:r.status,body:j};};
 const signup=async(origin,name,email)=>{let r;for(let a=0;a<8;a++){r=await fetch(origin+'/api/auth/sign-up/email',{method:'POST',headers:{origin,'Content-Type':'application/json'},body:JSON.stringify({name,email,password})});if(r.status!==429)break;await new Promise(x=>setTimeout(x,5000));}if(!r.ok)throw new Error('sign-up '+r.status);return r.headers.getSetCookie().map(c=>c.split(';')[0]).filter(c=>!c.endsWith('=')).join('; ');};
 
@@ -70,7 +75,7 @@ const writeEv=(obj,mode=0o600)=>{const file=join(dir,'ev-'+Math.random().toStrin
 const lockName=(name,org)=>'demo_import_'+createHash('sha256').update(name+'|'+org).digest('hex').slice(0,40);
 
 // the hosted flow: scripts/start.mjs with environment variables only
-const startCmd=(env,port=P1)=>{const c=spawn(process.execPath,['scripts/start.mjs'],{env:{...env,PORT:String(port)},stdio:['ignore','pipe','pipe'],detached:true});let log='';c.stdout.on('data',b=>log+=b);c.stderr.on('data',b=>log+=b);procs.push(c);return {c,get log(){return log;}};};
+const startCmd=(env,port=P1)=>{const c=spawn(process.execPath,[standalone?join(standalone,'server.js'):'scripts/start.mjs'],{cwd:standalone||process.cwd(),env:{...env,PORT:String(port),HOSTNAME:'127.0.0.1',...(standalone?{EXISTING_TENANT_RUNTIME_ENABLE:'true'}:{})},stdio:['ignore','pipe','pipe'],detached:true});let log='';c.stdout.on('data',b=>log+=b);c.stderr.on('data',b=>log+=b);procs.push(c);return {c,get log(){return log;}};};
 const killGroup=async h=>{try{process.kill(-h.c.pid,'SIGKILL');}catch{/* gone */}const i=procs.indexOf(h.c);if(i>=0)procs.splice(i,1);await new Promise(r=>setTimeout(r,2500));};
 const waitFor=async(fn,ms=300000)=>{for(let i=0;i<ms/400;i++){if(await fn())return true;await new Promise(r=>setTimeout(r,400));}return false;};
 // capture servers: the hosted app is given REAL-LOOKING integration settings that point here; any email or object-storage traffic would be counted
@@ -202,14 +207,28 @@ try{
  await killGroup(h);
  const evJson=JSON.stringify(await evidenceFor(f,{fingerprint:fp}));
  h=startCmd(hostedEnv(f,allow,{EXISTING_TENANT_LOAD:'apply',EXISTING_TENANT_PLAN_HASH:ph,EXISTING_TENANT_BACKUP_EVIDENCE_JSON:evJson}));
- await finished(h,'apply',60000);
+ await waitFor(()=>/apply needs DEMO_SEED_PASSWORD/.test(h.log),60000);
  check('hosted flow: apply without the one-run administrator password is refused and nothing changes',!exitOk(h,'apply')&&/DEMO_SEED_PASSWORD/.test(h.log)&&(await world(f.name))===w0);
  await killGroup(h);
  h=startCmd(hostedEnv(f,allow,{EXISTING_TENANT_LOAD:'apply',EXISTING_TENANT_PLAN_HASH:ph,DEMO_SEED_PASSWORD:password}));
- await finished(h,'apply',60000);
+ await waitFor(()=>/the first apply needs EXISTING_TENANT_BACKUP_EVIDENCE_JSON/.test(h.log),60000);
  check('hosted flow: the first apply without backup evidence is refused and nothing changes',!exitOk(h,'apply')&&/BACKUP_EVIDENCE/.test(h.log)&&(await world(f.name))===w0);
  await killGroup(h);
  h=startCmd(hostedEnv(f,allow,{EXISTING_TENANT_LOAD:'apply',EXISTING_TENANT_PLAN_HASH:ph,EXISTING_TENANT_BACKUP_EVIDENCE_JSON:evJson,DEMO_SEED_PASSWORD:password}));
+ if(standalone){
+  // Freeze a real import mid-flight without modifying product code. A second
+  // runtime must lose the loader mutex BEFORE quiescence can kill that query.
+  const owner=async name=>(await db.query('SELECT IS_USED_LOCK(?) id',[name]))[0][0].id;
+  check('standalone concurrency setup: real loader and importer own their MySQL locks',await waitFor(async()=>Boolean(await owner(loaderLockName(f.name)))&&Boolean(await owner(lockName(f.name,f.org))),60000),h.log.slice(-200));
+  const blocked=await connectTo(f.name);await blocked.query('LOCK TABLES project_work_areas WRITE');
+  try{
+   const before=await owner(lockName(f.name,f.org));
+   const contender=startCmd(hostedEnv(f,allow,{EXISTING_TENANT_LOAD:'plan'}),P1+1);
+   await waitFor(()=>/another loader\/import is running/.test(contender.log),30000);
+   check('standalone concurrency: second runtime refuses before quiescence and leaves the live importer lock intact',Boolean(before)&&await owner(lockName(f.name,f.org))===before&&/another loader\/import is running/.test(contender.log)&&!/database quiescence/.test(contender.log),contender.log.slice(-240));
+   await killGroup(contender);
+  }finally{await blocked.query('UNLOCK TABLES');}
+ }
  const done=await finished(h,'apply',600000);
  const n={areas:await count('project_work_areas',f.name,f.org),points:await count('project_work_points',f.name,f.org),links:await count('shift_work_areas',f.name,f.org),shifts:await count('shifts',f.name,f.org),jobs:await count('jobs',f.name,f.org),users:await count('users',f.name,f.org)};
  check('hosted flow: with the reviewed hash, evidence and the one-run password the full demo company is ADDED to the existing owner tenant (SMTP/AI/billing/R2 settings were present in the app\'s environment and were not passed on)',done&&exitOk(h,'apply')&&n.areas===20&&n.points===3&&n.links===27&&n.shifts===17&&n.jobs===ownerJobsBefore+3&&n.users===6&&/Backup evidence accepted/.test(h.log)&&/import deadline: /.test(h.log)&&/database quiescence after the importer stopped: killed 0 active session\(s\), 0 still active/.test(h.log),JSON.stringify(n)+h.log.slice(-120));
@@ -229,15 +248,37 @@ try{
 
  // ------------------------------------------------------------------ scenarios 2 and 3: interruption and restart (the host kills the app mid-load)
  const interrupt=async(g,allowG,tag)=>{
+  // Test-only database barrier: reads/fingerprints remain unchanged, but the first
+  // work-area INSERT cannot race past the SIGKILL polling point. Install before
+  // the backup fingerprint/plan and remove only after killed sessions are quiet.
+  const barrier=await connectTo(g.name),barrierName='test_interrupt_'+sha(g.name).slice(0,32);
+  const [[held]]=await barrier.query('SELECT GET_LOCK(?,0) a',[barrierName]);
+  if(Number(held.a)!==1)throw new Error('Could not acquire interruption fixture barrier');
+  await barrier.query("CREATE TRIGGER test_interrupt_gate BEFORE INSERT ON project_work_areas FOR EACH ROW SET @test_interrupt_gate = GET_LOCK('"+barrierName+"',120)");
+  try{
   const fpG=await databaseFingerprint(await connectTo(g.name)),ev=JSON.stringify(await evidenceFor(g,{fingerprint:fpG}));
   let x=startCmd(hostedEnv(g,allowG,{EXISTING_TENANT_LOAD:'plan'}));await finished(x,'plan',120000);const phG=planHash(x);await killGroup(x);
   const applyEnv=(over={})=>hostedEnv(g,allowG,{EXISTING_TENANT_LOAD:'apply',EXISTING_TENANT_PLAN_HASH:phG,EXISTING_TENANT_BACKUP_EVIDENCE_JSON:ev,DEMO_SEED_PASSWORD:password,...over});
   x=startCmd(applyEnv());
+  const killed=new Promise(r=>x.c.once('exit',(_code,signal)=>r(signal)));
   const underway=await waitFor(async()=>(await count('shifts',g.name,g.org))>0,300000);
+  if(standalone&&tag==='b'){
+   const [[owner]]=await db.query('SELECT IS_USED_LOCK(?) id',[loaderLockName(g.name)]);
+   if(!owner.id)throw new Error('Expected a live standalone loader mutex owner');
+   await db.query('KILL '+Number(owner.id));
+   check('standalone recovery: loss of the real MySQL mutex session stops the loader',await waitFor(()=>/loader lock connection lost/.test(x.log),10000),x.log.slice(-200));
+  }
   await killGroup(x);                                                          // SIGKILL the whole process group: the host restarted the app
+  check('interruption: the actual hosted process exits from SIGKILL ('+tag+')',await killed==='SIGKILL');
   const lockFree=await waitFor(async()=>{const c=await connectTo(g.name);const [[l]]=await c.query('SELECT GET_LOCK(?,0) a',[lockName(g.name,g.org)]);if(Number(l.a)){await c.query('SELECT RELEASE_LOCK(?)',[lockName(g.name,g.org)]);return true;}return false;},30000);
   const partial={areas:await count('project_work_areas',g.name,g.org),shifts:await count('shifts',g.name,g.org),jobs:await count('jobs',g.name,g.org)};
   return {phG,applyEnv,underway,lockFree,partial,state:stateOf(g.name)};
+  }finally{
+   const quiet=await quiesce(await connectTo(g.name));
+   if(quiet.remaining)throw new Error('Interrupted fixture still has active sessions');
+   await barrier.query('SELECT RELEASE_LOCK(?)',[barrierName]);
+   await barrier.query('DROP TRIGGER test_interrupt_gate');
+  }
  };
  const expectFull=async g=>({areas:await count('project_work_areas',g.name,g.org),links:await count('shift_work_areas',g.name,g.org),shifts:await count('shifts',g.name,g.org),users:await count('users',g.name,g.org)});
  {const g=await populated('etr_resume_test','b'),aG=mkAllow(g),baseG=await preserved(g);
@@ -271,19 +312,26 @@ try{
   check('a LOST baseline after an interruption is never guessed around: the resume is refused (conflicts or changed-since-backup) and nothing is duplicated or modified; recovery is the restore of the backup',!exitOk(x,'apply')&&JSON.stringify(await expectFull(g))===JSON.stringify(keep)&&JSON.stringify(await preserved(g))===JSON.stringify(baseG),`plan refused=${planRefused} `+x.log.replace(/\s+/g,' ').slice(-170));await killGroup(x);}
 
  // ------------------------------------------------------------------ the importer's own deadline: nothing mutates after it, even with a request in flight; delayed sessions are cleared; resume works
- {const g=await populated('etr_deadline_test','e'),aG=mkAllow(g),baseG=await preserved(g),evG=writeEv(await evidenceFor(g));
+ {const g=await populated('etr_deadline_test','e'),aG=mkAllow(g),baseG=await preserved(g);
+  // Install the write barrier before fingerprint/plan: polling for shifts and
+  // THEN locking this table can let the first area commit before the lock lands.
+  const L=await connectTo(g.name),deadlineBarrier='test_deadline_'+sha(g.name).slice(0,32);
+  const [[held]]=await L.query('SELECT GET_LOCK(?,0) a',[deadlineBarrier]);
+  if(Number(held.a)!==1)throw new Error('Could not acquire deadline fixture barrier');
+  await L.query("CREATE TRIGGER test_deadline_gate BEFORE INSERT ON project_work_areas FOR EACH ROW SET @test_deadline_gate = GET_LOCK('"+deadlineBarrier+"',120)");
+  const evG=writeEv(await evidenceFor(g));
   const envG={...g.env,DEMO_SEED_EMAIL:g.emailA,DEMO_SEED_PASSWORD:password,EXISTING_TENANT_CONFIRM_SHA256:sha(aG.txt)};
   const imp=(args,t=240000)=>run('scripts/import-demo-tenant.mjs',envG,['--organisation-id',g.org,'--existing-tenant-allowlist',aG.file,...args],t);
   const bad=imp(['--apply','--plan-hash','x','--baseline',join(dir,'x.json'),'--backup-evidence',evG,'--deadline-ms','1']);
   check('deadline: a deadline that is already in the past is refused before anything happens',bad.status===2&&/future epoch/.test(out(bad)));
   const phG=/planHash: ([0-9a-f]{64})/.exec(out(imp([])))?.[1],baselineG=join(dir,'g-baseline.json');
   const deadline=Date.now()+32000;
-  const child=spawn(process.execPath,['scripts/import-demo-tenant.mjs','--organisation-id',g.org,'--existing-tenant-allowlist',aG.file,'--apply','--plan-hash',phG,'--baseline',baselineG,'--backup-evidence',evG,'--deadline-ms',String(deadline)],{env:{...process.env,...envG},stdio:['ignore','pipe','pipe']});
+  const child=spawn(process.execPath,[productScript('scripts/import-demo-tenant.mjs'),'--organisation-id',g.org,'--existing-tenant-allowlist',aG.file,'--apply','--plan-hash',phG,'--baseline',baselineG,'--backup-evidence',evG,'--deadline-ms',String(deadline)],{cwd:standalone||process.cwd(),env:{...process.env,...envG},stdio:['ignore','pipe','pipe']});
   let cout='';child.stdout.on('data',b=>cout+=b);child.stderr.on('data',b=>cout+=b);
   const exited=new Promise(r=>child.on('exit',c=>r(c)));
-  // Stall the import deterministically: once the shifts exist, a table lock makes the next work-area write BLOCK inside the database (an in-flight mutation).
+  // The trigger leaves the first work-area mutation in flight until quiescence
+  // kills it. No work area can slip through before polling sees the shifts.
   await waitFor(async()=>(await count('shifts',g.name,g.org))>0,120000);
-  const L=await connectTo(g.name);await L.query('LOCK TABLES project_work_areas WRITE');
   const waiting=async()=>Number((await db.query("SELECT COUNT(*) n FROM information_schema.PROCESSLIST WHERE DB=? AND COMMAND<>'Sleep' AND ID<>CONNECTION_ID() AND ID<>?",[g.name,L.threadId]))[0][0].n);
   const blockedSeen=await waitFor(async()=>(await waiting())>0,60000);
   const code=await Promise.race([exited,new Promise(r=>setTimeout(()=>r('timeout'),120000))]);
@@ -291,7 +339,7 @@ try{
   const stillWaiting=await waiting();                                                 // the importer is gone but its write is STILL queued on the server
   check('deadline: an import blocked on an in-flight write is stopped by its watchdog at the deadline (exit 75, resumable), not left running past the window it was protecting',blockedSeen&&code===75&&stoppedAt<deadline+16000&&/Deadline watchdog|maintenance deadline/.test(cout),`blocked=${blockedSeen} exit=${code} stopped ${stoppedAt-deadline} ms after the deadline`);
   const Yq=await connectTo(g.name);const qz0=await quiesce(Yq);                       // what the hosted loader does as soon as the importer has stopped
-  await L.query('UNLOCK TABLES');await new Promise(r=>setTimeout(r,4000));
+  await L.query('SELECT RELEASE_LOCK(?)',[deadlineBarrier]);await L.query('DROP TRIGGER test_deadline_gate');await new Promise(r=>setTimeout(r,4000));
   const [[lastAudit]]=await db.query('SELECT MAX(created_at) m FROM `'+g.name+'`.audit_log WHERE organisation_id=?',[g.org]);
   const areasAfter=await count('project_work_areas',g.name,g.org),activeAfter=await waiting()+0;
   check('delayed termination: after the importer exited its in-flight write was still queued in the database; quiescence killed it, and once the lock was released NOTHING was written (no work area, no application write later than 5 s after the deadline, no active session)',stillWaiting>=1&&qz0.killed>=1&&qz0.remaining===0&&areasAfter===0&&String(lastAudit.m)<new Date(deadline+5000).toISOString()&&activeAfter===0,`waiting-after-exit=${stillWaiting} ${JSON.stringify(qz0)} areas=${areasAfter} lastAudit=${lastAudit.m} deadline=${new Date(deadline).toISOString()} active=${activeAfter}`);

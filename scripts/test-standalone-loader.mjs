@@ -2,7 +2,7 @@
 // packaging closure checks. Real standalone acceptance is a separate command.
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync,copyFileSync} from 'node:fs';
+import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync,copyFileSync,symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createRequire} from 'node:module';
@@ -63,6 +63,20 @@ test('database-wide nonblocking mutex excludes concurrent runtime instances befo
  const source=readFileSync('scripts/existing-tenant-load.mjs','utf8');
  assert.ok(source.indexOf('await acquireLoaderLock')<source.indexOf('await quiesce'));
  assert.ok(source.indexOf('await lease.end()')>source.lastIndexOf('await quiesce'));
+});
+
+test('runtime accepts the same generated server through a deployment current-directory symlink',async()=>{
+ const temp=mkdtempSync(join(tmpdir(),'runtime-current-')),root=join(temp,'release'),current=join(temp,'current');
+ try{
+  mkdirSync(join(root,'.next'),{recursive:true});mkdirSync(join(root,'scripts'));
+  writeFileSync(join(root,'server.js'),'');writeFileSync(join(root,'.next','BUILD_ID'),'test');writeFileSync(join(root,'scripts','existing-tenant-load.mjs'),'');
+  symlinkSync(root,current,process.platform==='win32'?'junction':'dir');
+  const {startRuntimeLoader:start}=await import('./demo/runtime-loader.mjs?current-link-test');
+  let launches=0;
+  assert.equal(start({NODE_ENV:'production',EXISTING_TENANT_RUNTIME_ENABLE:'true',EXISTING_TENANT_LOAD:'plan',__NEXT_PRIVATE_STANDALONE_CONFIG:'{}'},
+   [process.execPath,join(current,'server.js')],root,()=>{launches++;return {on(){}};}),true);
+  assert.equal(launches,1);
+ }finally{rmSync(current,{force:true,recursive:true});rmSync(temp,{recursive:true,force:true});}
 });
 
 test('disabled/invalid loader refuses without database settings; child environment cannot enable recursion or outbound integrations',async()=>{

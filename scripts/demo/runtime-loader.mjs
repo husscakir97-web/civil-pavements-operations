@@ -1,5 +1,5 @@
 import {spawn} from 'node:child_process';
-import {existsSync} from 'node:fs';
+import {existsSync,realpathSync} from 'node:fs';
 import {resolve,join} from 'node:path';
 
 // Never import loader/database code into the Next runtime or a build worker.
@@ -10,7 +10,11 @@ export const runtimeLoaderEnv=env=>Object.fromEntries(RUNTIME_ENV_KEYS.filter(k=
 let started=false;
 export function startRuntimeLoader(env=process.env,argv=process.argv,root=process.cwd(),launch=spawn){
  if(started||env.NODE_ENV!=='production'||env.EXISTING_TENANT_RUNTIME_ENABLE!=='true'||!env.EXISTING_TENANT_LOAD||
-    !env.__NEXT_PRIVATE_STANDALONE_CONFIG||resolve(argv[1]||'')!==join(root,'server.js'))return false;
+    !env.__NEXT_PRIVATE_STANDALONE_CONFIG)return false;
+ const entry=resolve(argv[1]||''),server=join(root,'server.js');
+ // Publishers may launch current/server.js through a release-directory symlink.
+ // Accept only that same physical entry, never a Next build/CLI worker.
+ if(entry!==server&&(!existsSync(entry)||!existsSync(server)||realpathSync(entry)!==realpathSync(server)))return false;
  if(!existsSync(join(root,'.next','BUILD_ID'))||!existsSync(join(root,'scripts','existing-tenant-load.mjs')))
   throw new Error('Standalone loader assets are missing; refusing to start the loader.');
  started=true;

@@ -70,11 +70,22 @@ let n=0;const t=(name,fn)=>Promise.resolve(fn()).then(()=>{n++;console.log('PASS
   assert.ok(!fs.existsSync('src/instrumentation.ts'));
   const hook=fs.readFileSync('instrumentation.ts','utf8');
   assert.ok(!/connect\(|quiesce\(|mysql|setTimeout\(|setInterval\(/.test(hook));
-  // Behavioral build/disabled/edge tests and the standalone argv guard live in
-  // test-standalone-loader.mjs. Keep the scan above: normal app code cannot write
-  // in the background behind the maintenance request gate.
-  assert.match(hook,/EXISTING_TENANT_RUNTIME_ENABLE !== 'true'/);
-  assert.match(hook,/__NEXT_PRIVATE_STANDALONE_CONFIG/);
+  // Behavioral build/disabled/edge/loader-launch tests live in test-standalone-loader.mjs and the standalone artifact tests. Keep the scan above: normal app code
+  // cannot write in the background behind the maintenance request gate. Intended rule change (launcher-independent hooks): instrumentation.ts keeps the explicit
+  // opt-ins, the production/Node.js gate and the build-phase exclusion and imports the hooks dynamically; the standalone-server proof lives in the shared guard.
+  assert.match(hook,/EXISTING_TENANT_RUNTIME_ENABLE === 'true'/);
+  assert.match(hook,/EXISTING_TENANT_STATE_PROBE/);
+  assert.match(hook,/NODE_ENV !== 'production'/);
+  assert.match(hook,/phase-production-build/);
+  assert.ok(!/^import .*scripts\/demo/m.test(hook),'the hooks must be imported dynamically, never statically');
+  const guard=fs.readFileSync('scripts/demo/standalone-runtime.mjs','utf8');
+  assert.match(guard,/__NEXT_PRIVATE_STANDALONE_CONFIG/);
+  assert.match(guard,/server\.js/);
+  for(const f of ['scripts/demo/runtime-loader.mjs','scripts/demo/state-probe.mjs']){
+   const src=fs.readFileSync(f,'utf8');
+   assert.match(src,/standaloneRuntimeProblem\(/,f+' must use the shared standalone-server proof');
+   assert.ok(!/argv\[1\]/.test(src.replace(/\/\/.*$/gm,'')),f+' must not use argv[1] as proof (code only; comments may explain why)');
+  }
   const timeouts=files.filter(f=>/setTimeout\(/.test(fs.readFileSync(f,'utf8')));
   for(const f of timeouts)assert.ok(/AbortController|AbortSignal|timed out|requestAnimationFrame|useEffect|window\./.test(fs.readFileSync(f,'utf8')),'unexpected timer in '+f);});
  console.log(`\n${n} passed, 0 failed`);

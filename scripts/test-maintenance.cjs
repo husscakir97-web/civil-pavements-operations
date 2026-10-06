@@ -62,12 +62,19 @@ let n=0;const t=(name,fn)=>Promise.resolve(fn()).then(()=>{n++;console.log('PASS
  await t('health route exists, runs no query of its own (only the import-fence lock probe when an apply is configured) and reports the maintenance state',()=>{const h=fs.readFileSync('app/api/health/route.ts','utf8');assert.match(h,/maintenanceState/);assert.match(h,/importInFlight/);assert.ok(!/SELECT|INSERT|UPDATE|session/i.test(h.replace(/\/\/.*$/gm,'')));});
  await t('every outbound integration choke point calls assertNotMaintenance (email, object storage, address provider, AI, ABN lookup)',()=>{for(const [f,w] of [['email.ts','email'],['storage.ts','object storage'],['location-provider.ts','the address provider'],['ai.ts','the AI provider'],['abn.ts','the ABN lookup']])assert.ok(fs.readFileSync('lib/platform/'+f,'utf8').includes(`assertNotMaintenance('${w}')`),f);});
  await t('maintenance.ts stays free of Node-only imports (it is reachable from browser bundles)',()=>{assert.ok(!/from 'node:/.test(fs.readFileSync('lib/platform/maintenance.ts','utf8')));});
- await t('the application has no background writer: no timers other than per-request timeouts, no scheduler, no instrumentation hook',()=>{
+ await t('the application has no unguarded background writer: no scheduler; instrumentation only delegates to the opt-in standalone loader',()=>{
   const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?(e.name==='node_modules'?[]:walk(d+'/'+e.name)):/\.(ts|tsx|mjs|js)$/.test(e.name)?[d+'/'+e.name]:[]);
   const files=[...walk('app'),...walk('lib')].filter(f=>!/^\s*['"]use client['"]/m.test(fs.readFileSync(f,'utf8')));   // server code; browser code (e.g. the offline queue) can only reach the app through requests, which the gate refuses
   const bad=files.filter(f=>/setInterval\(|node-cron|\bcron\b|schedule\(|queueMicrotask\(/.test(fs.readFileSync(f,'utf8').replace(/\/\/.*$/gm,'')));
   assert.deepEqual(bad,[],bad.join());
-  assert.ok(!fs.existsSync('instrumentation.ts')&&!fs.existsSync('src/instrumentation.ts'));
+  assert.ok(!fs.existsSync('src/instrumentation.ts'));
+  const hook=fs.readFileSync('instrumentation.ts','utf8');
+  assert.ok(!/connect\(|quiesce\(|mysql|setTimeout\(|setInterval\(/.test(hook));
+  // Behavioral build/disabled/edge tests and the standalone argv guard live in
+  // test-standalone-loader.mjs. Keep the scan above: normal app code cannot write
+  // in the background behind the maintenance request gate.
+  assert.match(hook,/EXISTING_TENANT_RUNTIME_ENABLE !== 'true'/);
+  assert.match(hook,/__NEXT_PRIVATE_STANDALONE_CONFIG/);
   const timeouts=files.filter(f=>/setTimeout\(/.test(fs.readFileSync(f,'utf8')));
   for(const f of timeouts)assert.ok(/AbortController|AbortSignal|timed out|requestAnimationFrame|useEffect|window\./.test(fs.readFileSync(f,'utf8')),'unexpected timer in '+f);});
  console.log(`\n${n} passed, 0 failed`);

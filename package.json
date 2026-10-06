@@ -44,6 +44,7 @@
     "seed:work-map-demo": "node --env-file-if-exists=.env scripts/seed-work-map-demo.mjs",
     "test:employment": "node scripts/test-employment.cjs",
     "test:standalone-loader": "node --test scripts/test-standalone-loader.mjs",
+    "test:one-off-reset": "node scripts/test-one-off-tenant-reset.mjs",
     "test:state-probe": "node --test scripts/test-state-probe.mjs",
     "test:standalone-state-probe": "node scripts/test-standalone-state-probe.mjs",
     "test:standalone-artifact": "node scripts/test-standalone-artifact.mjs"

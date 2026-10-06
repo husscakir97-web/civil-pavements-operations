@@ -97,3 +97,34 @@ The import adds records only; it cannot remove them. Undo = the §5 full restore
 
 ## Assumptions only the real host can confirm
 (a) `npm start` runs from the app root; (b) the runtime log is readable in hPanel; (c) memory allows the app plus the importer's temporary app; (d) the state directory survives a restart (otherwise an interruption is recovered by restore); (e) hPanel accepts ~500-character variables; (f) the host does not probe `/` and restart on a 503 (it can use `/api/health`).
+
+## Persistence probe for the recovery folder (filesystem only)
+
+`scripts/demo/state-probe.mjs` answers one question before any backup is trusted to a folder outside the release
+directories: does a harmless marker there survive a restart and a redeployment? It imports no database code, opens no
+endpoint and reads no secrets; it is off unless set at runtime and runs only in the standalone production server.
+
+Run it in this order. The runtime variables are set by the operator in Hostinger, never in the repository.
+
+1. **Create once.** Set `EXISTING_TENANT_STATE_PROBE=create` and `EXISTING_TENANT_STATE_PROBE_DIR=<absolute dir>` (parent
+   must exist), then start the app once. It creates the folder and one marker, `infrastruct-state-probe.json`, atomically
+   and never over an existing file, and logs `[state-probe] OK mode=create created=true id=<uuid> sha256=<hash>` to the
+   private app log. Record the `id` and `sha256`. Do not redeploy, and do not start the app again in `create` mode.
+2. **Switch to verify with both values pinned, before any further restart or redeployment.** Change the variables to
+   `EXISTING_TENANT_STATE_PROBE=verify`, `EXISTING_TENANT_STATE_PROBE_EXPECT_ID=<id>` and
+   `EXISTING_TENANT_STATE_PROBE_EXPECT_SHA256=<sha256>`, keeping `EXISTING_TENANT_STATE_PROBE_DIR`. The probe runs only
+   at server start, so the next start is the first restart and must already pass this check. `verify` is read-only: it never creates or repairs the marker and logs `[state-probe] FAIL` if the marker
+   is missing, unreadable, or its id or content hash differs from the pinned values. (An unpinned `verify` only checks that
+   the marker is well-formed, so it is not sufficient evidence.)
+3. **Restart once more, then redeploy**, leaving the pinned `verify` settings in place. After each start, the log must show
+   `[state-probe] OK mode=verify created=false` with the same `id` and `sha256`. Any `FAIL`, or a changed `id`/`sha256`,
+   means the folder is not to be trusted for recovery files.
+4. **Unset all `EXISTING_TENANT_STATE_PROBE*` variables** when finished. Leaving `create` set is harmless (an existing marker
+   is only validated, never overwritten) but is not evidence of persistence.
+
+Refused up front: relative or un-normalised paths, any `public_html`/`hbuilds`/`node_modules`/`.next`/`.git` segment,
+anything inside or containing the running release, a symlinked folder or marker, or a symlinked parent resolving to those
+places. A `FAIL` never stops the app from starting.
+
+A matching id/sha256 before and after a restart and a redeploy proves *observed* persistence on that host at that time,
+not a permanent hosting guarantee.

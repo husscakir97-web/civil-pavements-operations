@@ -312,7 +312,14 @@ try{
   check('a LOST baseline after an interruption is never guessed around: the resume is refused (conflicts or changed-since-backup) and nothing is duplicated or modified; recovery is the restore of the backup',!exitOk(x,'apply')&&JSON.stringify(await expectFull(g))===JSON.stringify(keep)&&JSON.stringify(await preserved(g))===JSON.stringify(baseG),`plan refused=${planRefused} `+x.log.replace(/\s+/g,' ').slice(-170));await killGroup(x);}
 
  // ------------------------------------------------------------------ the importer's own deadline: nothing mutates after it, even with a request in flight; delayed sessions are cleared; resume works
- {const g=await populated('etr_deadline_test','e'),aG=mkAllow(g),baseG=await preserved(g),evG=writeEv(await evidenceFor(g));
+ {const g=await populated('etr_deadline_test','e'),aG=mkAllow(g),baseG=await preserved(g);
+  // Install the write barrier before fingerprint/plan: polling for shifts and
+  // THEN locking this table can let the first area commit before the lock lands.
+  const L=await connectTo(g.name),deadlineBarrier='test_deadline_'+sha(g.name).slice(0,32);
+  const [[held]]=await L.query('SELECT GET_LOCK(?,0) a',[deadlineBarrier]);
+  if(Number(held.a)!==1)throw new Error('Could not acquire deadline fixture barrier');
+  await L.query("CREATE TRIGGER test_deadline_gate BEFORE INSERT ON project_work_areas FOR EACH ROW SET @test_deadline_gate = GET_LOCK('"+deadlineBarrier+"',120)");
+  const evG=writeEv(await evidenceFor(g));
   const envG={...g.env,DEMO_SEED_EMAIL:g.emailA,DEMO_SEED_PASSWORD:password,EXISTING_TENANT_CONFIRM_SHA256:sha(aG.txt)};
   const imp=(args,t=240000)=>run('scripts/import-demo-tenant.mjs',envG,['--organisation-id',g.org,'--existing-tenant-allowlist',aG.file,...args],t);
   const bad=imp(['--apply','--plan-hash','x','--baseline',join(dir,'x.json'),'--backup-evidence',evG,'--deadline-ms','1']);
@@ -322,9 +329,9 @@ try{
   const child=spawn(process.execPath,[productScript('scripts/import-demo-tenant.mjs'),'--organisation-id',g.org,'--existing-tenant-allowlist',aG.file,'--apply','--plan-hash',phG,'--baseline',baselineG,'--backup-evidence',evG,'--deadline-ms',String(deadline)],{cwd:standalone||process.cwd(),env:{...process.env,...envG},stdio:['ignore','pipe','pipe']});
   let cout='';child.stdout.on('data',b=>cout+=b);child.stderr.on('data',b=>cout+=b);
   const exited=new Promise(r=>child.on('exit',c=>r(c)));
-  // Stall the import deterministically: once the shifts exist, a table lock makes the next work-area write BLOCK inside the database (an in-flight mutation).
+  // The trigger leaves the first work-area mutation in flight until quiescence
+  // kills it. No work area can slip through before polling sees the shifts.
   await waitFor(async()=>(await count('shifts',g.name,g.org))>0,120000);
-  const L=await connectTo(g.name);await L.query('LOCK TABLES project_work_areas WRITE');
   const waiting=async()=>Number((await db.query("SELECT COUNT(*) n FROM information_schema.PROCESSLIST WHERE DB=? AND COMMAND<>'Sleep' AND ID<>CONNECTION_ID() AND ID<>?",[g.name,L.threadId]))[0][0].n);
   const blockedSeen=await waitFor(async()=>(await waiting())>0,60000);
   const code=await Promise.race([exited,new Promise(r=>setTimeout(()=>r('timeout'),120000))]);
@@ -332,7 +339,7 @@ try{
   const stillWaiting=await waiting();                                                 // the importer is gone but its write is STILL queued on the server
   check('deadline: an import blocked on an in-flight write is stopped by its watchdog at the deadline (exit 75, resumable), not left running past the window it was protecting',blockedSeen&&code===75&&stoppedAt<deadline+16000&&/Deadline watchdog|maintenance deadline/.test(cout),`blocked=${blockedSeen} exit=${code} stopped ${stoppedAt-deadline} ms after the deadline`);
   const Yq=await connectTo(g.name);const qz0=await quiesce(Yq);                       // what the hosted loader does as soon as the importer has stopped
-  await L.query('UNLOCK TABLES');await new Promise(r=>setTimeout(r,4000));
+  await L.query('SELECT RELEASE_LOCK(?)',[deadlineBarrier]);await L.query('DROP TRIGGER test_deadline_gate');await new Promise(r=>setTimeout(r,4000));
   const [[lastAudit]]=await db.query('SELECT MAX(created_at) m FROM `'+g.name+'`.audit_log WHERE organisation_id=?',[g.org]);
   const areasAfter=await count('project_work_areas',g.name,g.org),activeAfter=await waiting()+0;
   check('delayed termination: after the importer exited its in-flight write was still queued in the database; quiescence killed it, and once the lock was released NOTHING was written (no work area, no application write later than 5 s after the deadline, no active session)',stillWaiting>=1&&qz0.killed>=1&&qz0.remaining===0&&areasAfter===0&&String(lastAudit.m)<new Date(deadline+5000).toISOString()&&activeAfter===0,`waiting-after-exit=${stillWaiting} ${JSON.stringify(qz0)} areas=${areasAfter} lastAudit=${lastAudit.m} deadline=${new Date(deadline).toISOString()} active=${activeAfter}`);

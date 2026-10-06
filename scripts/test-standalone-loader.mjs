@@ -129,6 +129,8 @@ test('interruption fixture driver rejects hosted targets and production mode bef
   const child=spawnSync(process.execPath,['scripts/test-existing-tenant-path.mjs'],{env:{PATH:process.env.PATH,MYSQL_DATABASE:'fixture_test',...extra},encoding:'utf8'});
   assert.notEqual(child.status,0);assert.match(child.stderr,/Fixture tests require a disposable loopback MySQL service and a non-production test driver/);
  }
+ const wrapper=spawnSync(process.execPath,['scripts/test-standalone-mysql.mjs'],{env:{PATH:process.env.PATH,MYSQL_DATABASE:'fixture_test',MYSQL_HOST:'127.0.0.1',NODE_ENV:'production'},encoding:'utf8'});
+ assert.notEqual(wrapper.status,0);assert.match(wrapper.stderr,/Fixture wrapper refuses production mode/);
 });
 
 test('explicit trace list covers mysql2 lockfile dependency closure and loader relative module/assets graph',()=>{

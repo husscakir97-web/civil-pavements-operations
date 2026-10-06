@@ -8,6 +8,7 @@ import {once} from 'node:events';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 
+assert.notEqual(process.env.NODE_ENV,'production','Fixture wrapper refuses production mode');
 assert.equal(process.platform,'linux','Recovery suite requires Linux process-group semantics');
 assert.equal(process.env.MYSQL_HOST,'127.0.0.1','Only the disposable loopback MySQL service is allowed');
 assert.ok(process.env.MYSQL_DATABASE?.endsWith('_test'));

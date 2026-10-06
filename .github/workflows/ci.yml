@@ -37,6 +37,8 @@ jobs:
         run: npm run build
       - name: Standalone artifact startup with source checkout unavailable
         run: node scripts/test-standalone-artifact.mjs .next/standalone --hide-source
+      - name: Standalone filesystem state probe (no database)
+        run: node scripts/test-standalone-state-probe.mjs .next/standalone
       - name: MySQL migrations and production integration
         env:
           MYSQL_HOST: 127.0.0.1

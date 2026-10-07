@@ -34,7 +34,19 @@ jobs:
       - name: Match Hostinger production-only dependency installation
         run: npm prune --omit=dev
       - id: production_build
-        run: npm run build
+        # Every runtime opt-in is set during the real build: the hooks must never start in a build (no output, no folder, nothing launched).
+        env:
+          EXISTING_TENANT_STATE_PROBE: create
+          EXISTING_TENANT_STATE_PROBE_DIR: /tmp/build-must-not-create-this
+          EXISTING_TENANT_RUNTIME_ENABLE: 'true'
+          EXISTING_TENANT_LOAD: plan
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee build-output.log
+      - name: The build ran no runtime hook
+        run: |
+          if grep -E "\[state-probe\]|\[existing-tenant-load\]" build-output.log; then echo "a runtime hook ran during the build"; exit 1; fi
+          test ! -e /tmp/build-must-not-create-this
       - name: Standalone artifact startup with source checkout unavailable
         run: node scripts/test-standalone-artifact.mjs .next/standalone --hide-source
       - name: Standalone filesystem state probe (no database)

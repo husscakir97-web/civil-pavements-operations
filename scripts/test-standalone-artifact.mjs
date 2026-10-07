@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {createServer} from 'node:net';
-import {cpSync,existsSync,mkdtempSync,readdirSync,rmSync,lstatSync,renameSync,symlinkSync} from 'node:fs';
+import {cpSync,existsSync,mkdtempSync,readdirSync,rmSync,lstatSync,renameSync,symlinkSync,writeFileSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {pathToFileURL} from 'node:url';
@@ -32,18 +32,23 @@ try{
  for(const f of ['scripts/existing-tenant-load.mjs','scripts/import-demo-tenant.mjs','scripts/existing-tenant-verify.mjs',
   'scripts/demo/app-supervisor.mjs','docs/DEMO-COMPANY-MANIFEST.json','docs/DEMO-IMPORT-FOOTPRINT.json'])assert.ok(existsSync(join(root,f)),f);
  const current=join(temp,'current');symlinkSync(root,current,process.platform==='win32'?'junction':'dir');
- for(const [enabled,entry] of [[false,root],[true,root],[true,current]]){
+ // A host process manager is the process entry point (argv[1] is its loader, NOT server.js) and starts from another working directory.
+ const hostLoader=join(temp,'host-loader.cjs');writeFileSync(hostLoader,"import(require('node:url').pathToFileURL(process.argv[2]).href).catch(e=>{console.error(e);process.exit(1);});\n");
+ for(const [enabled,entry,via,extra] of [[false,root],[true,root],[true,current],[true,root,'host'],[true,current,'host'],[true,root,'host',{EXISTING_TENANT_RUNTIME_PARENT_PID:'1'}],[true,root,'host',{NEXT_PHASE:'phase-production-build'}]]){
   const p=await port();let output='';
   const env={PATH:process.env.PATH||'',NODE_ENV:'production',__NEXT_PROCESSED_ENV:'true',HOSTNAME:'127.0.0.1',PORT:String(p),EMAIL_ENABLED:'false',AI_ENABLED:'false',
    LOCATION_PROVIDER:'fake',BETTER_AUTH_SECRET:'standalone-test-only-secret-at-least-32-chars',BETTER_AUTH_URL:`http://127.0.0.1:${p}`,
-   EXISTING_TENANT_LOAD:'invalid-artifact-probe',...(enabled?{EXISTING_TENANT_RUNTIME_ENABLE:'true'}:{})};
-  const c=spawn(process.execPath,[join(entry,'server.js')],{cwd:entry,env,stdio:['ignore','pipe','pipe']});processes.add(c);
+   EXISTING_TENANT_LOAD:'invalid-artifact-probe',...(enabled?{EXISTING_TENANT_RUNTIME_ENABLE:'true'}:{}),...(extra||{})};
+  const c=spawn(process.execPath,via?[hostLoader,join(entry,'server.js')]:[join(entry,'server.js')],{cwd:via?temp:entry,env,stdio:['ignore','pipe','pipe']});processes.add(c);
   c.stdout.on('data',b=>output+=b);c.stderr.on('data',b=>output+=b);
   await waitFor(async()=>{if(c.exitCode!==null)throw new Error(output);try{return (await fetch(`http://127.0.0.1:${p}/api/health`)).ok;}catch{return false;}});
   assert.equal((await fetch(`http://127.0.0.1:${p}/login`)).status,200);
-  if(enabled)await waitFor(()=>output.includes('EXISTING_TENANT_LOAD must be fingerprint, plan, apply or verify'));
+  if(enabled&&extra?.EXISTING_TENANT_RUNTIME_PARENT_PID){await waitFor(()=>output.includes('runtime hook skipped: reason=loader-child-process launcher=host-loader.cjs'));
+   await new Promise(r=>setTimeout(r,1500));assert.ok(!output.includes('EXISTING_TENANT_LOAD must be'),'a loader child must never launch the loader again');}
+  else if(enabled&&extra?.NEXT_PHASE){await new Promise(r=>setTimeout(r,2500));assert.ok(!output.includes('[existing-tenant-load]'),'a build phase must never run the hook');}
+  else if(enabled)await waitFor(()=>output.includes('EXISTING_TENANT_LOAD must be fingerprint, plan, apply or verify'));
   else assert.ok(!output.includes('[existing-tenant-load]'),'Default startup must not launch loader');
-  await stop(c);processes.delete(c);console.log('PASS detached artifact startup, runtime enabled='+enabled+', current symlink='+(entry===current));
+  await stop(c);processes.delete(c);console.log('PASS detached artifact startup, runtime enabled='+enabled+', current symlink='+(entry===current)+(via?', host launcher'+(extra?' ('+Object.keys(extra)[0]+')':''):''));
  }
  // Import the PACKAGED supervisor helper, which launches PACKAGED server.js with
  // a fresh loopback port. No source module or build tree participates.

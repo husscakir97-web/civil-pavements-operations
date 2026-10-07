@@ -1,6 +1,7 @@
 // Run AFTER a production build. Boots the packaged standalone server with the
 // filesystem probe: create -> restart (verify) -> "redeploy" into a new release
 // dir (verify with expected id/sha) -> verify fails if marker is changed.
+// Also launches it the way a host process manager does (argv[1] is a loader, not server.js, from another initial cwd) and proves the negatives.
 // No database settings are provided; no database is touched.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -16,11 +17,11 @@ const base=realpathSync(mkdtempSync(join(tmpdir(),'standalone-probe-')));
 const stateDir=join(base,'.existing-tenant-state');
 const port=async()=>{const s=createServer();s.listen(0,'127.0.0.1');await once(s,'listening');const p=s.address().port;await new Promise(r=>s.close(r));return p;};
 const waitFor=async(fn,t=60_000)=>{const end=Date.now()+t;while(Date.now()<end){if(await fn())return;await new Promise(r=>setTimeout(r,100));}throw new Error('Timed out');};
-async function boot(entry,probe){
+async function boot(entry,probe,{via}={}){
  const p=await port();let out='';
  const env={PATH:process.env.PATH||'',NODE_ENV:'production',__NEXT_PROCESSED_ENV:'true',HOSTNAME:'127.0.0.1',PORT:String(p),EMAIL_ENABLED:'false',AI_ENABLED:'false',
   LOCATION_PROVIDER:'fake',BETTER_AUTH_SECRET:'standalone-test-only-secret-at-least-32-chars',BETTER_AUTH_URL:`http://127.0.0.1:${p}`,...probe};
- const c=spawn(process.execPath,[join(entry,'server.js')],{cwd:entry,env,stdio:['ignore','pipe','pipe']});
+ const c=spawn(process.execPath,via==='host'?[join(base,'host-loader.cjs'),join(entry,'server.js')]:[join(entry,'server.js')],{cwd:via==='host'?base:entry,env,stdio:['ignore','pipe','pipe']});
  c.stdout.on('data',b=>out+=b);c.stderr.on('data',b=>out+=b);
  await waitFor(async()=>{if(c.exitCode!==null)throw new Error(out);try{return (await fetch(`http://127.0.0.1:${p}/api/health`)).ok;}catch{return false;}});
  assert.equal((await fetch(`http://127.0.0.1:${p}/login`)).status,200,'app must serve normally');
@@ -53,5 +54,20 @@ try{
  out=await boot(rel1,envOn('verify',{EXISTING_TENANT_STATE_PROBE_EXPECT_ID:id}));assert.match(out,/\[state-probe\] FAIL .*differs/);
  rmSync(marker);out=await boot(rel1,envOn('verify'));assert.match(out,/\[state-probe\] FAIL .*missing/);
  assert.deepEqual(readdirSync(stateDir),[]);
+ // 6. launcher-compatible: through a host-style loader (argv[1] is NOT server.js), from a different initial working directory
+ writeFileSync(join(base,'host-loader.cjs'),"import(require('node:url').pathToFileURL(process.argv[2]).href).catch(e=>{console.error(e);process.exit(1);});\n");
+ const state2=join(base,'.state-host'),host=m=>({EXISTING_TENANT_STATE_PROBE:m,EXISTING_TENANT_STATE_PROBE_DIR:state2});
+ out=await boot(rel1,host('create'),{via:'host'});
+ const h=out.match(/\[state-probe\] OK mode=create created=true id=(\S+) sha256=([0-9a-f]{64})/);assert.ok(h,'probe must run under a host launcher: '+out);
+ out=await boot(rel1,{...host('verify'),EXISTING_TENANT_STATE_PROBE_EXPECT_ID:h[1],EXISTING_TENANT_STATE_PROBE_EXPECT_SHA256:h[2]},{via:'host'});
+ assert.match(out,new RegExp(`OK mode=verify created=false id=${h[1]} sha256=${h[2]}`));
+ out=await boot(join(cur,'nodejs'),{...host('verify'),EXISTING_TENANT_STATE_PROBE_EXPECT_ID:h[1]},{via:'host'});
+ assert.match(out,new RegExp(`OK mode=verify created=false id=${h[1]}`));
+ // 7. negatives on the real server: a loader child never runs the hook; a build phase never does; the skip line names a reason and a launcher, nothing else
+ out=await boot(rel1,{...host('verify'),EXISTING_TENANT_RUNTIME_PARENT_PID:'1'},{via:'host'});
+ assert.match(out,/\[state-probe\] skipped: reason=loader-child-process launcher=host-loader\.cjs/);assert.ok(!/\[state-probe\] OK/.test(out)&&!out.includes(state2),'skip line must not leak values');
+ const state3=join(base,'.state-build');
+ out=await boot(rel1,{EXISTING_TENANT_STATE_PROBE:'create',EXISTING_TENANT_STATE_PROBE_DIR:state3,NEXT_PHASE:'phase-production-build'},{via:'host'});
+ assert.ok(!out.includes('[state-probe]')&&!existsSync(state3),'a build phase must never run the hook');
  console.log('PASS standalone state probe: disabled default, create, restart, redeploy-via-symlink, unsafe path, changed/missing marker');
 }finally{rmSync(base,{recursive:true,force:true});}

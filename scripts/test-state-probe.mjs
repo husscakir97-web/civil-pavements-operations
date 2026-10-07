@@ -7,6 +7,7 @@ import {join} from 'node:path';
 import {spawn} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import {runStateProbe,startStateProbe,_resetStateProbeForTests,MARKER_NAME} from './demo/state-probe.mjs';
+import {standaloneFixture} from './testing/standalone-fixture.mjs';
 
 const sandbox=()=>{const base=realpathSync(mkdtempSync(join(tmpdir(),'probe-')));const root=join(base,'hbuilds','current','nodejs');
  mkdirSync(root,{recursive:true});writeFileSync(join(root,'server.js'),'');return {base,root,dir:join(base,'.existing-tenant-state')};};
@@ -76,20 +77,31 @@ test('concurrent starts across processes produce exactly one intact marker',asyn
  }finally{rmSync(base,{recursive:true,force:true});}
 });
 
-test('startStateProbe is inert unless enabled in the standalone server; never throws; logs privately',()=>{
- const {base,root,dir}=sandbox();const logs=[],errs=[];const log={log:m=>logs.push(m),error:m=>errs.push(m)};
- const on={NODE_ENV:'production',__NEXT_PRIVATE_STANDALONE_CONFIG:'{}',...env(dir)};const argv=[process.execPath,join(root,'server.js')];
+test('startStateProbe: explicit opt-in plus launcher-independent standalone proof; silent unless opted in; concise private skip reasons; never throws',()=>{
+ const {base,root,dir}=sandbox();const logs=[],errs=[],warns=[];const log={log:m=>logs.push(m),error:m=>errs.push(m),warn:m=>warns.push(m)};
+ const on={...standaloneFixture(root),...env(dir)};
+ const host=[process.execPath,'/opt/host/lsnode.js'];   // a host process manager, NOT server.js
  try{
-  for(const e of [{},{...on,EXISTING_TENANT_STATE_PROBE:''},{...on,NODE_ENV:'development'},{...on,__NEXT_PRIVATE_STANDALONE_CONFIG:undefined}]){
-   _resetStateProbeForTests();assert.equal(startStateProbe(e,argv,root,log),null);}
-  _resetStateProbeForTests();assert.equal(startStateProbe(on,[process.execPath,join(root,'other.js')],root,log),null);
+  // not opted in: silent, nothing created
+  for(const e of [{},{...on,EXISTING_TENANT_STATE_PROBE:''}]){_resetStateProbeForTests();assert.equal(startStateProbe(e,host,root,log),null);}
+  assert.equal(warns.length,0);assert.equal(existsSync(dir),false);
+  // opted in but not the generated standalone server: one concise reason (code + launcher file name), never a value or a path
+  const cases=[[{NODE_ENV:'development'},'not-production'],[{NEXT_RUNTIME:'edge'},'not-node-runtime'],[{NEXT_PHASE:'phase-production-build'},'build-phase'],[{NEXT_PHASE:'phase-development-server'},'unexpected-next-phase'],
+   [{EXISTING_TENANT_RUNTIME_PARENT_PID:'1'},'loader-child-process'],[{__NEXT_PRIVATE_STANDALONE_CONFIG:undefined},'standalone-config-missing'],[{__NEXT_PRIVATE_STANDALONE_CONFIG:'{"output":"standalone"}'},'standalone-config-mismatch']];
+  for(const [over,reason] of cases){_resetStateProbeForTests();warns.length=0;assert.equal(startStateProbe({...on,...over},host,root,log),null,reason);
+   assert.equal(warns.length,1,reason);assert.equal(warns[0],`[state-probe] skipped: reason=${reason} launcher=lsnode.js`);assert.ok(!warns[0].includes(dir)&&!warns[0].includes(base));}
+  // the variable ALONE is no proof: a directory that is not standalone output
+  const bare=mkdtempSync(join(tmpdir(),'probe-bare-'));
+  try{_resetStateProbeForTests();warns.length=0;assert.equal(startStateProbe(on,host,bare,log),null);assert.match(warns[0],/reason=standalone-files-missing/);}finally{rmSync(bare,{recursive:true,force:true});}
   assert.equal(existsSync(dir),false);assert.equal(logs.length+errs.length,0);
-  _resetStateProbeForTests();const r=startStateProbe(on,argv,root,log);assert.ok(r.created);
+  // valid under a host launcher, and with the server phase set
+  _resetStateProbeForTests();const r=startStateProbe(on,host,root,log);assert.ok(r.created);
   assert.match(logs[0],/\[state-probe\] OK mode=create created=true id=\S+ sha256=[0-9a-f]{64}/);
-  assert.equal(startStateProbe(on,argv,root,log),null); // once per process
-  _resetStateProbeForTests();assert.equal(startStateProbe({...on,EXISTING_TENANT_STATE_PROBE:'verify',EXISTING_TENANT_STATE_PROBE_EXPECT_ID:'nope'},argv,root,log),false);
+  assert.equal(startStateProbe(on,host,root,log),null); // once per process
+  _resetStateProbeForTests();assert.equal(startStateProbe({...on,NEXT_PHASE:'phase-production-server'},host,root,log).created,false);
+  _resetStateProbeForTests();assert.equal(startStateProbe({...on,EXISTING_TENANT_STATE_PROBE:'verify',EXISTING_TENANT_STATE_PROBE_EXPECT_ID:'nope'},host,root,log),false);
   assert.match(errs[0],/FAIL .*differs/);
-  _resetStateProbeForTests();assert.equal(startStateProbe({...on,EXISTING_TENANT_STATE_PROBE_DIR:join(root,'x')},argv,root,log),false);
+  _resetStateProbeForTests();assert.equal(startStateProbe({...on,EXISTING_TENANT_STATE_PROBE_DIR:join(root,'x')},host,root,log),false);
  }finally{rmSync(base,{recursive:true,force:true});}
 });
 

@@ -2,7 +2,7 @@
 // packaging closure checks. Real standalone acceptance is a separate command.
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync,copyFileSync,symlinkSync} from 'node:fs';
+import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync,copyFileSync,symlinkSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createRequire} from 'node:module';
@@ -12,37 +12,72 @@ import {spawnSync} from 'node:child_process';
 import vm from 'node:vm';
 import ts from 'typescript';
 import {startRuntimeLoader,runtimeLoaderEnv} from './demo/runtime-loader.mjs';
+import {standaloneRuntimeProblem} from './demo/standalone-runtime.mjs';
+import {standaloneFixture} from './testing/standalone-fixture.mjs';
 import {acquireLoaderLock,loaderLockName} from './demo/loader-lock.mjs';
 import {isolatedAppEnv} from './demo/import-app.mjs';
 import {existingTenantLoad} from './existing-tenant-load.mjs';
 
-test('instrumentation never imports loader in build/default/dev/edge/isolated environments',async()=>{
+test('instrumentation imports a hook only when its own opt-in is set in a production Node.js server outside a build phase',async()=>{
  const code=ts.transpileModule(readFileSync('instrumentation.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
- const enabled={NEXT_RUNTIME:'nodejs',NODE_ENV:'production',EXISTING_TENANT_RUNTIME_ENABLE:'true',EXISTING_TENANT_LOAD:'plan',__NEXT_PRIVATE_STANDALONE_CONFIG:'{}'};
- for(const env of [{},{...enabled,__NEXT_PRIVATE_STANDALONE_CONFIG:undefined},{...enabled,NEXT_RUNTIME:'edge'},
-  {...enabled,NODE_ENV:'development'},{...enabled,EXISTING_TENANT_RUNTIME_ENABLE:undefined},
-  {...enabled,EXISTING_TENANT_LOAD:''},isolatedAppEnv(enabled,'http://127.0.0.1:3333')]){
-  const exports={};vm.runInNewContext(code,{exports,process:{env},require(){assert.fail('unexpected loader import');}});
+ const runtime={NEXT_RUNTIME:'nodejs',NODE_ENV:'production'};
+ const probeOn={...runtime,EXISTING_TENANT_STATE_PROBE:'verify'},loaderOn={...runtime,EXISTING_TENANT_RUNTIME_ENABLE:'true',EXISTING_TENANT_LOAD:'plan'},both={...probeOn,...loaderOn};
+ for(const env of [{},runtime,{...both,NEXT_RUNTIME:'edge'},{...both,NODE_ENV:'development'},{...both,NODE_ENV:undefined},{...both,NEXT_PHASE:'phase-production-build'},
+  {...loaderOn,EXISTING_TENANT_RUNTIME_ENABLE:undefined},{...loaderOn,EXISTING_TENANT_LOAD:''},{...loaderOn,EXISTING_TENANT_RUNTIME_ENABLE:'1'},{...probeOn,EXISTING_TENANT_STATE_PROBE:''},
+  isolatedAppEnv(both,'http://127.0.0.1:3333')]){
+  const exports={};vm.runInNewContext(code,{exports,process:{env},require(){assert.fail('unexpected hook import');}});
   await exports.register();
  }
- let called=0;const exports={};vm.runInNewContext(code,{exports,process:{env:enabled},require(){return {startRuntimeLoader(){called++;}};}});
- await exports.register();assert.equal(called,1);
+ const run=async env=>{let probes=0,loaders=0;const exports={};
+  vm.runInNewContext(code,{exports,process:{env},require(path){return path.endsWith('state-probe.mjs')?{startStateProbe(){probes++;}}:path.endsWith('runtime-loader.mjs')?{startRuntimeLoader(){loaders++;}}:assert.fail('unexpected import '+path);}});
+  await exports.register();return [probes,loaders];};
+ assert.deepEqual(await run(loaderOn),[0,1]);assert.deepEqual(await run(probeOn),[1,0]);assert.deepEqual(await run(both),[1,1]);
+ assert.deepEqual(await run({...both,NEXT_PHASE:'phase-production-server'}),[1,1]);
+ // the standalone variable is no longer a gate in instrumentation: the hooks decline (and say why) after the stronger proof fails
+ assert.deepEqual(await run({...loaderOn,__NEXT_PRIVATE_STANDALONE_CONFIG:undefined}),[0,1]);
 });
 
-test('standalone runtime rejects build/CLI argv even with all enable flags; launches once with a restricted environment',()=>{
+test('runtime hook: explicit opt-in plus launcher-independent proof; build, CLI, child processes and a bare standalone variable never start it; launches once with a restricted environment',()=>{
  const root=mkdtempSync(join(tmpdir(),'loader-runtime-'));
- const env={NODE_ENV:'production',EXISTING_TENANT_RUNTIME_ENABLE:'true',EXISTING_TENANT_LOAD:'plan',__NEXT_PRIVATE_STANDALONE_CONFIG:'{}',
-  NODE_OPTIONS:'--require malicious',NODE_PATH:'/untrusted',PORT:'443',HOSTNAME:'0.0.0.0',OPENAI_API_KEY:'test-only',MYSQL_HOST:'127.0.0.1'};
+ const base={EXISTING_TENANT_RUNTIME_ENABLE:'true',EXISTING_TENANT_LOAD:'plan',NODE_OPTIONS:'--require malicious',NODE_PATH:'/untrusted',PORT:'443',HOSTNAME:'0.0.0.0',OPENAI_API_KEY:'test-only',MYSQL_HOST:'127.0.0.1',MYSQL_PASSWORD:'must-not-appear'};
  let count=0;const launch=(exe,args,opts)=>{count++;assert.equal(exe,process.execPath);assert.deepEqual(args,[join(root,'scripts','existing-tenant-load.mjs')]);assert.equal(opts.cwd,root);
-  for(const key of ['NODE_OPTIONS','NODE_PATH','PORT','HOSTNAME','OPENAI_API_KEY','EXISTING_TENANT_RUNTIME_ENABLE','__NEXT_PRIVATE_STANDALONE_CONFIG'])assert.equal(opts.env[key],undefined,key);
+  for(const key of ['NODE_OPTIONS','NODE_PATH','PORT','HOSTNAME','OPENAI_API_KEY','EXISTING_TENANT_RUNTIME_ENABLE','__NEXT_PRIVATE_STANDALONE_CONFIG','NEXT_RUNTIME','NEXT_PHASE'])assert.equal(opts.env[key],undefined,key);
+  assert.ok(opts.env.EXISTING_TENANT_RUNTIME_PARENT_PID);
+  // the loader's own child can never satisfy the hook again, whatever it inherits
+  assert.equal(standaloneRuntimeProblem({...opts.env,NEXT_RUNTIME:'nodejs'},root),'loader-child-process');
   return {on(){}};};
+ const warns=[],realWarn=console.warn;console.warn=m=>warns.push(String(m));
+ const host=[process.execPath,'/opt/host/process-manager.js'];   // a launcher that is NOT server.js
  try{
-  for(const argv of [[process.execPath,'next','build'],[process.execPath,'scripts/start.mjs'],[process.execPath]])assert.equal(startRuntimeLoader(env,argv,root,launch),false);
-  assert.throws(()=>startRuntimeLoader(env,[process.execPath,join(root,'server.js')],root,launch),/assets are missing/);
-  mkdirSync(join(root,'.next'));mkdirSync(join(root,'scripts'));writeFileSync(join(root,'.next','BUILD_ID'),'test');writeFileSync(join(root,'scripts','existing-tenant-load.mjs'),'');
-  assert.equal(startRuntimeLoader(env,[process.execPath,join(root,'server.js')],root,launch),true);
-  assert.equal(startRuntimeLoader(env,[process.execPath,join(root,'server.js')],root,launch),false);assert.equal(count,1);
- }finally{rmSync(root,{recursive:true,force:true});}
+  const cfg=standaloneFixture(root);const env={...base,...cfg};
+  // not opted in: silent
+  for(const e of [{...env,EXISTING_TENANT_RUNTIME_ENABLE:undefined},{...env,EXISTING_TENANT_RUNTIME_ENABLE:'1'},{...env,EXISTING_TENANT_LOAD:''}])assert.equal(startRuntimeLoader(e,host,root,launch),false);
+  assert.equal(warns.length,0);
+  // opted in but not the generated standalone server: declined with a concise private reason
+  const repoRoot=process.cwd();
+  for(const [label,e,cwd,reason] of [
+   ['ordinary script / next start (no standalone variable, NODE_ENV production)',{...base,NODE_ENV:'production',NEXT_RUNTIME:'nodejs'},repoRoot,'standalone-config-missing'],
+   ['the standalone variable ALONE, in a directory that is not standalone output',{...env,__NEXT_PRIVATE_STANDALONE_CONFIG:'{"output":"standalone"}'},repoRoot,'standalone-files-missing'],
+   ['the standalone variable alone, in a standalone directory whose server.js does not match it',{...env,__NEXT_PRIVATE_STANDALONE_CONFIG:'{"output":"standalone"}'},root,'standalone-config-mismatch'],
+   ['next build / build worker',{...env,NEXT_PHASE:'phase-production-build'},root,'build-phase'],
+   ['another Next phase',{...env,NEXT_PHASE:'phase-development-server'},root,'unexpected-next-phase'],
+   ['development',{...env,NODE_ENV:'development'},root,'not-production'],
+   ['edge runtime',{...env,NEXT_RUNTIME:'edge'},root,'not-node-runtime'],
+   ['the loader\'s own child',{...env,EXISTING_TENANT_RUNTIME_PARENT_PID:'123'},root,'loader-child-process'],
+  ]){warns.length=0;assert.equal(startRuntimeLoader(e,[process.execPath,'scripts/start.mjs'],cwd,launch),false,label);
+   assert.equal(warns.length,1,label);assert.equal(warns[0],`[existing-tenant-load] runtime hook skipped: reason=${reason} launcher=start.mjs`,label);
+   assert.ok(!warns[0].includes('must-not-appear')&&!warns[0].includes(root),'skip line leaks nothing');}
+  assert.equal(count,0);
+  // a server.js that sets the variable from a literal declaring another output is not the standalone server either
+  const other=mkdtempSync(join(tmpdir(),'loader-runtime-other-'));
+  try{const c2=standaloneFixture(other,{config:{output:'export'}});warns.length=0;assert.equal(startRuntimeLoader({...base,...c2},host,other,launch),false);assert.match(warns[0],/reason=not-standalone-output/);}finally{rmSync(other,{recursive:true,force:true});}
+  // identity holds but loader assets are missing: refuse loudly
+  assert.throws(()=>startRuntimeLoader(env,host,root,launch),/assets are missing/);
+  // valid under a host process manager (argv[1] is not server.js): launches exactly once
+  standaloneFixture(root,{loaderAssets:true});
+  assert.equal(startRuntimeLoader(env,host,root,launch),true);
+  assert.equal(startRuntimeLoader(env,host,root,launch),false);assert.equal(count,1);
+ }finally{console.warn=realWarn;rmSync(root,{recursive:true,force:true});}
 });
 
 test('database-wide nonblocking mutex excludes concurrent runtime instances before quiescence; releases for resume',async()=>{
@@ -65,18 +100,40 @@ test('database-wide nonblocking mutex excludes concurrent runtime instances befo
  assert.ok(source.indexOf('await lease.end()')>source.lastIndexOf('await quiesce'));
 });
 
-test('runtime accepts the same generated server through a deployment current-directory symlink',async()=>{
+test('runtime hook accepts the generated standalone directory through a deployment current-directory symlink, whatever the launcher',async()=>{
  const temp=mkdtempSync(join(tmpdir(),'runtime-current-')),root=join(temp,'release'),current=join(temp,'current');
  try{
-  mkdirSync(join(root,'.next'),{recursive:true});mkdirSync(join(root,'scripts'));
-  writeFileSync(join(root,'server.js'),'');writeFileSync(join(root,'.next','BUILD_ID'),'test');writeFileSync(join(root,'scripts','existing-tenant-load.mjs'),'');
+  const cfg=standaloneFixture(root,{loaderAssets:true});
   symlinkSync(root,current,process.platform==='win32'?'junction':'dir');
   const {startRuntimeLoader:start}=await import('./demo/runtime-loader.mjs?current-link-test');
   let launches=0;
-  assert.equal(start({NODE_ENV:'production',EXISTING_TENANT_RUNTIME_ENABLE:'true',EXISTING_TENANT_LOAD:'plan',__NEXT_PRIVATE_STANDALONE_CONFIG:'{}'},
-   [process.execPath,join(current,'server.js')],root,()=>{launches++;return {on(){}};}),true);
+  assert.equal(start({EXISTING_TENANT_RUNTIME_ENABLE:'true',EXISTING_TENANT_LOAD:'plan',...cfg},[process.execPath,'/usr/lib/node-loader.js'],current,()=>{launches++;return {on(){}};}),true);
   assert.equal(launches,1);
  }finally{rmSync(current,{force:true,recursive:true});rmSync(temp,{recursive:true,force:true});}
+});
+
+test('importing the hooks never starts anything: ordinary scripts and build-like processes with every opt-in variable set do nothing and print no environment values',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'hook-import-'));
+ const env={PATH:process.env.PATH,NODE_ENV:'production',NEXT_RUNTIME:'nodejs',NEXT_PHASE:'phase-production-build',EXISTING_TENANT_RUNTIME_ENABLE:'true',EXISTING_TENANT_LOAD:'plan',
+  EXISTING_TENANT_STATE_PROBE:'create',EXISTING_TENANT_STATE_PROBE_DIR:join(dir,'state'),__NEXT_PRIVATE_STANDALONE_CONFIG:'{"output":"standalone"}',MYSQL_PASSWORD:'must-not-appear'};
+ const url=f=>pathToFileURL(resolve('scripts/demo/'+f)).href;
+ try{
+  for(const file of ['runtime-loader.mjs','state-probe.mjs','standalone-runtime.mjs']){
+   const r=spawnSync(process.execPath,['--input-type=module','-e',`await import(${JSON.stringify(url(file))})`],{env,cwd:dir,encoding:'utf8'});
+   assert.equal(r.status,0,file);assert.equal(r.stdout+r.stderr,'',file+' must have no import side effects');
+  }
+  assert.equal(existsSync(join(dir,'state')),false);
+  // an ordinary script that CALLS the starters (not Next, not a standalone server): nothing starts, one concise reason each, no values
+  for(const phase of [undefined,'phase-production-build']){
+   const r=spawnSync(process.execPath,['--input-type=module','-e',`import {startRuntimeLoader} from ${JSON.stringify(url('runtime-loader.mjs'))};import {startStateProbe} from ${JSON.stringify(url('state-probe.mjs'))};console.log(JSON.stringify([startRuntimeLoader(),startStateProbe()]))`],
+    {env:{...env,NEXT_PHASE:phase},cwd:process.cwd(),encoding:'utf8'});
+   assert.equal(r.status,0);assert.equal(r.stdout.trim(),'[false,null]');
+   assert.match(r.stderr,phase?/runtime hook skipped: reason=build-phase/:/runtime hook skipped: reason=standalone-files-missing/);
+   assert.match(r.stderr,phase?/\[state-probe\] skipped: reason=build-phase/:/\[state-probe\] skipped: reason=standalone-files-missing/);
+   assert.ok(!r.stderr.includes('must-not-appear')&&!r.stderr.includes(dir)&&!r.stderr.includes('standalone"}'));
+  }
+  assert.equal(existsSync(join(dir,'state')),false);
+ }finally{rmSync(dir,{recursive:true,force:true});}
 });
 
 test('disabled/invalid loader refuses without database settings; child environment cannot enable recursion or outbound integrations',async()=>{

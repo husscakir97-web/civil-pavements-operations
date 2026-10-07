@@ -97,6 +97,17 @@ jobs:
         run: |
           mysql -h 127.0.0.1 -uroot -pintegration-only -e "CREATE DATABASE reset_control_test CHARACTER SET utf8mb4;"
           npm run test:one-off-reset
+      - name: Runtime child output reaches a console-only host log (invalid mode, fingerprint; disposable database)
+        timeout-minutes: 10
+        env:
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: integration-only
+          MYSQL_DATABASE: child_output_test
+        run: |
+          mysql -h 127.0.0.1 -uroot -pintegration-only -e "CREATE DATABASE child_output_test CHARACTER SET utf8mb4;"
+          node scripts/test-standalone-child-output.mjs .next/standalone
       - name: Standalone MySQL concurrency, maintenance, interruption and resume (copied artifact)
         if: ${{ !cancelled() && steps.production_build.outcome == 'success' }}
         timeout-minutes: 35

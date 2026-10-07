@@ -12,9 +12,13 @@ const parent=process.ppid;
 const server=['server.js','.next/standalone/server.js'].map(p=>resolve(p)).find(p=>existsSync(p));
 const env={...isolatedAppEnv(process.env,`http://127.0.0.1:${port}`),PORT:String(port),HOSTNAME:'127.0.0.1'};
 const args=server?[server]:['node_modules/next/dist/bin/next','start','-p',String(port),'--hostname','127.0.0.1'];
-const child=spawn(process.execPath,args,{stdio:'ignore',env});
+// The server's own output is forwarded to this process's stdout/stderr (the importer captures both, bounded and redacted); supervisor events are tagged.
+const note=m=>{try{process.stderr.write('[supervisor] '+m+'\n');}catch{/* closed */}};
+note(`starting ${server?server.split(/[\\/]/).slice(-2).join('/'):'next start'} on 127.0.0.1:${port}`);
+const child=spawn(process.execPath,args,{stdio:['ignore','pipe','pipe'],env});
+child.stdout.on('data',c=>{try{process.stdout.write(c);}catch{/* closed */}});child.stderr.on('data',c=>{try{process.stderr.write(c);}catch{/* closed */}});
 const stop=()=>{try{child.kill('SIGTERM');}catch{/* already gone */}process.exit(0);};
 setInterval(()=>{try{process.kill(parent,0);}catch{stop();}},500).unref?.();
-child.on('exit',()=>process.exit(0));
-child.on('error',()=>process.exit(1));
+child.on('exit',(code,signal)=>{note(`server exited code=${code} signal=${signal}`);setTimeout(()=>process.exit(0),100);});
+child.on('error',e=>{note('server failed to start: '+String(e&&e.code||'error'));setTimeout(()=>process.exit(1),100);});
 process.on('SIGTERM',stop);process.on('SIGINT',stop);

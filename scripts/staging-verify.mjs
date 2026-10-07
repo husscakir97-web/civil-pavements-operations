@@ -3,7 +3,7 @@
 // Safe to run any time, including after an interrupted or repeated import. Writes nothing.
 //   node scripts/staging-verify.mjs --organisation-id <id> --staging-allowlist allow.json   (env: MYSQL_*, DEMO_SEED_EMAIL, STAGING_DEMO_CONFIRM_SHA256)
 import {connect} from './mysql-config.mjs';
-import {assertReadOnlySql} from './live-tenant-inventory.mjs';
+import {assertReadOnlySql,beginConsistentReadOnlySnapshot} from './live-tenant-inventory.mjs';
 import {evaluateAllowlist,assertOnlyNamedOrganisation} from './demo/staging-allowlist.mjs';
 import {verifyImport} from './demo/import-verify.mjs';
 const arg=n=>{const i=process.argv.indexOf(n);return i>=0?process.argv[i+1]:undefined;};
@@ -16,7 +16,7 @@ try{
  const bad=await assertOnlyNamedOrganisation(raw,org,ev.entry);
  if(bad.length){console.error('Staging database check failed:\n - '+bad.join('\n - '));process.exitCode=3;}
  else{
-  await raw.query('SET SESSION TRANSACTION READ ONLY');await raw.query('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY');
+  await beginConsistentReadOnlySnapshot(async sql=>(await raw.query(sql))[0]);
   const r=await verifyImport(async(sql,p=[])=>{assertReadOnlySql(sql);return (await raw.query(sql,p))[0];},org,console.log);
   await raw.query('ROLLBACK');
   console.log(r.failed?`\nVERIFICATION FAILED: ${r.failed} check(s)`:'\nStaging demonstration database verified.');process.exitCode=r.failed?1:0;

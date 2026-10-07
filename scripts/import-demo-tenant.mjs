@@ -19,7 +19,7 @@
 // The plan hash binds an apply to the plan that was reviewed. It is NOT proof of approval, of a valid backup or of a restore.
 import {writeFileSync,existsSync} from 'node:fs';
 import {connect} from './mysql-config.mjs';
-import {assertReadOnlySql} from './live-tenant-inventory.mjs';
+import {assertReadOnlySql,beginConsistentReadOnlySnapshot} from './live-tenant-inventory.mjs';
 import {buildPlan} from './demo/import-plan.mjs';
 import {snapshot,compare,writeBaseline,loadBaseline,schemaShape,makeProvenance,verifyBinding} from './demo/import-guards.mjs';
 import {startIsolatedApp} from './demo/import-app.mjs';
@@ -89,8 +89,8 @@ if(apply){
 
 let raw;try{raw=await connect();}catch{console.error('Could not connect to the database (check MYSQL_* settings; details withheld).');process.exit(2);}
 const readOnly=async fn=>{ // every plan query runs in one consistent, server-enforced read-only snapshot
- await raw.query('SET SESSION TRANSACTION READ ONLY');await raw.query('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY');
- try{return await fn(async(sql,p=[])=>{assertReadOnlySql(sql);return (await raw.query(sql,p))[0];});}finally{await raw.query('ROLLBACK');await raw.query('SET SESSION TRANSACTION READ WRITE');}
+ const restoreIsolation=await beginConsistentReadOnlySnapshot(async sql=>(await raw.query(sql))[0]);
+ try{return await fn(async(sql,p=[])=>{assertReadOnlySql(sql);return (await raw.query(sql,p))[0];});}finally{await raw.query('ROLLBACK');await raw.query('SET SESSION TRANSACTION READ WRITE');await restoreIsolation();}
 };
 const render=plan=>{
  console.log(`\nDemonstration import plan for organisation ${org} (seed date ${plan.seedDate})\n`);

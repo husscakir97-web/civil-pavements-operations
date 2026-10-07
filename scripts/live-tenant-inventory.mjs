@@ -27,7 +27,24 @@ import {pathToFileURL} from 'node:url';
 import {connect,identifier} from './mysql-config.mjs';
 
 export const TOOL_VERSION=1;
-const ALLOWED=/^\s*(SELECT\b|SHOW\b|START TRANSACTION (READ ONLY|WITH CONSISTENT SNAPSHOT,? READ ONLY)\b|SET SESSION TRANSACTION READ ONLY\b|ROLLBACK\b)/i;
+const ALLOWED=/^\s*(SELECT\b|SHOW\b|START TRANSACTION (READ ONLY|WITH CONSISTENT SNAPSHOT,? READ ONLY)\b|SET SESSION TRANSACTION (READ ONLY|ISOLATION LEVEL (READ UNCOMMITTED|READ COMMITTED|REPEATABLE READ|SERIALIZABLE))\s*$|ROLLBACK\b)/i;
+
+// START TRANSACTION WITH CONSISTENT SNAPSHOT is only valid at REPEATABLE READ: MyRocks (RocksDB) rejects any other level with an error, InnoDB silently
+// drops the snapshot. The level is therefore never inherited from the server default: it is requested for THIS session, read back on the SAME connection,
+// and the snapshot only starts once the server confirms it (otherwise abort, nothing is started). `rows` runs one statement and returns its rows.
+// Returns restore(): call it after ROLLBACK to put the session's previous isolation level back.
+const LEVELS=new Set(['READ UNCOMMITTED','READ COMMITTED','REPEATABLE READ','SERIALIZABLE']);
+export async function beginConsistentReadOnlySnapshot(rows){
+ // MySQL 8 calls the variable transaction_isolation, MariaDB and MySQL 5.7 tx_isolation.
+ const effective=async()=>{const r=await rows("SHOW SESSION VARIABLES WHERE Variable_name IN ('transaction_isolation','tx_isolation')");return r.length?String(r[0].Value).replace(/-/g,' ').toUpperCase():'';};
+ const prior=await effective();
+ await rows('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+ const now=await effective();
+ if(now!=='REPEATABLE READ')throw new Error(`Aborted: the server did not confirm a REPEATABLE READ session (it reports "${now||'unknown'}"), which a consistent snapshot requires. Nothing was started.`);
+ await rows('SET SESSION TRANSACTION READ ONLY');
+ await rows('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY');
+ return async()=>{if(LEVELS.has(prior)&&prior!=='REPEATABLE READ')await rows('SET SESSION TRANSACTION ISOLATION LEVEL '+prior);};
+}
 // Only reads may be issued by this tool. Anything else (INSERT, UPDATE, DELETE, DDL, CALL, LOCK, multi-statement) is refused.
 export function assertReadOnlySql(sql){
  const text=String(sql);
@@ -40,8 +57,7 @@ const VOLATILE=/^auth_|^sessions?$|^verifications?$|^rate_limit/i;
 
 export async function inventory(db,organisationId){
  const query=async(sql,params=[])=>{assertReadOnlySql(sql);return (await db.query(sql,params))[0];};
- await query('SET SESSION TRANSACTION READ ONLY');
- await query('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY');
+ await beginConsistentReadOnlySnapshot(query);
  // MySQL calls the variable transaction_read_only, MariaDB tx_read_only.
  const flags=await query("SHOW SESSION VARIABLES WHERE Variable_name IN ('transaction_read_only','tx_read_only')");
  if(!flags.length||!flags.every(f=>['ON','1'].includes(String(f.Value).toUpperCase())))throw new Error('Aborted: the server did not confirm a read-only session.');

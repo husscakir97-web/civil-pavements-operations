@@ -7,11 +7,11 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
-import {EventEmitter} from 'node:events';
-import {spawnSync} from 'node:child_process';
+import {EventEmitter,once} from 'node:events';
+import {spawn,spawnSync} from 'node:child_process';
 import vm from 'node:vm';
 import ts from 'typescript';
-import {startRuntimeLoader,runtimeLoaderEnv} from './demo/runtime-loader.mjs';
+import {startRuntimeLoader,runtimeLoaderEnv,relayLines,redactor,MAX_RELAY_LINE} from './demo/runtime-loader.mjs';
 import {standaloneRuntimeProblem} from './demo/standalone-runtime.mjs';
 import {standaloneFixture} from './testing/standalone-fixture.mjs';
 import {acquireLoaderLock,loaderLockName} from './demo/loader-lock.mjs';
@@ -110,6 +110,46 @@ test('runtime hook accepts the generated standalone directory through a deployme
   assert.equal(start({EXISTING_TENANT_RUNTIME_ENABLE:'true',EXISTING_TENANT_LOAD:'plan',...cfg},[process.execPath,'/usr/lib/node-loader.js'],current,()=>{launches++;return {on(){}};}),true);
   assert.equal(launches,1);
  }finally{rmSync(current,{force:true,recursive:true});rmSync(temp,{recursive:true,force:true});}
+});
+
+test('runtime child output is relayed through the parent console: both streams, in order, secrets redacted, bounded, exit code preserved',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'runtime-relay-'));
+ const logs=[],errs=[],realLog=console.log,realErr=console.error;
+ try{
+  const cfg=standaloneFixture(root,{loaderAssets:true});
+  // a child that behaves like the loader under a host that does not capture inherited descriptors: it writes to its own stdout/stderr
+  writeFileSync(join(root,'scripts','existing-tenant-load.mjs'),[
+   "console.log('[existing-tenant-load] mode=fingerprint organisation=org-x');",
+   "console.error('[existing-tenant-load] refused (nothing was connected or changed):');",
+   "console.log('leak? '+process.env.DEMO_SEED_PASSWORD+' and '+process.env.MYSQL_PASSWORD);",
+   "console.log('[existing-tenant-load] fingerprint: '+'a'.repeat(64));",
+   "process.stdout.write('x'.repeat("+(MAX_RELAY_LINE*2+10)+")+'\\n');",
+   "process.stdout.write('last line without a newline');",
+   "process.exitCode=2;"].join('\n'));
+  const env={EXISTING_TENANT_RUNTIME_ENABLE:'true',EXISTING_TENANT_LOAD:'fingerprint',DEMO_SEED_PASSWORD:'super-secret-pw',MYSQL_PASSWORD:'db-secret-pw',MYSQL_HOST:'127.0.0.1',PATH:process.env.PATH,...cfg};
+  console.log=(...m)=>logs.push(m.join(' '));console.error=(...m)=>errs.push(m.join(' '));
+  const {startRuntimeLoader:start}=await import('./demo/runtime-loader.mjs?relay-test');
+  let child;assert.equal(start(env,[process.execPath,'/opt/host/process-manager.js'],root,(exe,args,opts)=>{child=spawn(exe,args,opts);return child;}),true);
+  assert.deepEqual(child.spawnargs.length>0,true);
+  await once(child,'close');
+  console.log=realLog;console.error=realErr;
+  assert.equal(logs[0],'[existing-tenant-load] mode=fingerprint organisation=org-x');
+  assert.equal(errs[0],'[existing-tenant-load] refused (nothing was connected or changed):','stderr goes to console.error');
+  assert.equal(logs[1],'leak? [redacted] and [redacted]','password values are redacted');
+  assert.ok(!logs.concat(errs).join('\n').includes('super-secret-pw')&&!logs.concat(errs).join('\n').includes('db-secret-pw'));
+  assert.equal(logs[2],'[existing-tenant-load] fingerprint: '+'a'.repeat(64),'fingerprint output reaches the parent log');
+  const long=logs.filter(l=>/^x+$/.test(l));assert.ok(long.every(l=>l.length<=MAX_RELAY_LINE),'relayed lines are bounded');assert.equal(long.join('').length,MAX_RELAY_LINE*2+10,'nothing is lost when a long line is split');
+  assert.ok(logs.includes('last line without a newline'),'a final unterminated line is flushed');
+  assert.equal(logs[logs.length-1],'[existing-tenant-load] runtime child exit: 2','the exit line comes last and carries the real exit code');
+  assert.equal(logs.filter(l=>l.includes('runtime child exit')).length,1);
+ }finally{console.log=realLog;console.error=realErr;rmSync(root,{recursive:true,force:true});}
+});
+
+test('relay helpers: line splitting across chunks, CRLF, redaction of longest secret first, short or non-secret values untouched',()=>{
+ const out=[];const stream=new EventEmitter();relayLines(stream,l=>out.push(l),redactor({DEMO_SEED_PASSWORD:'abcd1234',MYSQL_PASSWORD:'abcd',MYSQL_HOST:'plainhost',BETTER_AUTH_SECRET:'not-in-runtime-keys-xyz'}));
+ stream.emit('data','one\r\ntw');stream.emit('data','o abcd1234 abcd plainhost not-in-runtime-keys-xyz\nthree');stream.emit('end');
+ assert.deepEqual(out,['one','two [redacted] [redacted] plainhost not-in-runtime-keys-xyz','three']);
+ assert.equal(redactor({DEMO_SEED_PASSWORD:'abc'})('abc'),'abc','values shorter than 4 characters are not redacted');
 });
 
 test('importing the hooks never starts anything: ordinary scripts and build-like processes with every opt-in variable set do nothing and print no environment values',()=>{

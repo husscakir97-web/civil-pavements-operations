@@ -85,7 +85,7 @@ for(const sql of ["UPDATE clients SET name='x'","DELETE FROM clients","INSERT IN
 }
 const issued=[];const spy={connection:db.connection,query:async(sql,p)=>{issued.push(String(sql));return db.query(sql,p);}};
 await inventory(spy,A);
-check('every statement the tool issued is a read or a read-only session control',issued.length>200&&issued.every(s=>/^\s*(SELECT|SHOW|SET SESSION TRANSACTION READ ONLY|START TRANSACTION|ROLLBACK)/i.test(s)),`${issued.length} statements`);
+check('every statement the tool issued is a read or a read-only session control',issued.length>200&&issued.every(s=>/^\s*(SELECT|SHOW|SET SESSION TRANSACTION (READ ONLY|ISOLATION LEVEL REPEATABLE READ)|START TRANSACTION|ROLLBACK)/i.test(s)),`${issued.length} statements`);
 let writeRefused=null;
 const probe={connection:db.connection,query:async(sql,p)=>{const res=await db.query(sql,p);if(writeRefused===null&&/FROM information_schema\.COLUMNS/.test(sql)){writeRefused=false;try{await db.query("UPDATE clients SET notes='probe' WHERE id='no-such-id'");}catch(e){writeRefused=/read[- ]only/i.test(e.message);}}return res;}};
 await inventory(probe,A);

@@ -45,16 +45,25 @@ export function outputTail(secrets,cap=DIAG_RAW_CAP,max=DIAG_TAIL_CHARS){
 }
 const describeProbeError=e=>String(e?.cause?.code||e?.code||e?.name||'error').replace(/[^\w.-]/g,'').slice(0,40)||'error';
 
-/** `opts` exist for tests only; the defaults are the production values (180 probes, 500 ms apart = 90 s). */
-export async function startIsolatedApp(source=process.env,{attempts=180,intervalMs=500,log=(...a)=>console.error(...a)}={}){
+export const READINESS_PROBE_TIMEOUT_MS=5000;
+const SIGNAL_EXIT={SIGTERM:143,SIGHUP:129};
+
+/**
+ * Starts the private app and waits until GET /login answers 2xx.
+ * The budget is a WALL-CLOCK deadline (attempts x intervalMs = 90 s by default). Every probe is cancellable and bounded (READINESS_PROBE_TIMEOUT_MS, never past the
+ * deadline), so one request the server accepts but never answers cannot stretch the budget, and a supervisor that exits while a probe is outstanding ends the wait
+ * at once. One marker line is logged at the start, so a log that stops after it shows where the process was. While waiting, SIGTERM/SIGHUP (a host stop) log the same
+ * bounded, redacted report and exit 143/129; SIGKILL cannot be caught or logged. `opts` exist for tests only; the defaults are the production values.
+ */
+export async function startIsolatedApp(source=process.env,{attempts=180,intervalMs=500,probeTimeoutMs=READINESS_PROBE_TIMEOUT_MS,log=(...a)=>console.error(...a)}={}){
  const port=await freePort(),base=`http://127.0.0.1:${port}`;
  const root=fileURLToPath(new URL('../../',import.meta.url));
  const env=isolatedAppEnv(source,base),secrets=diagnosticSecrets(source,env);
- const stdout=outputTail(secrets),stderr=outputTail(secrets),t0=Date.now();
+ const stdout=outputTail(secrets),stderr=outputTail(secrets),t0=Date.now(),budgetMs=attempts*intervalMs,deadline=t0+budgetMs;
  const child=spawn(process.execPath,[resolve(root,'scripts/demo/app-supervisor.mjs'),String(port)],{cwd:root,env,stdio:['ignore','pipe','pipe']});
  child.stdout.setEncoding('utf8');child.stderr.setEncoding('utf8');child.stdout.on('data',c=>stdout.push(c));child.stderr.on('data',c=>stderr.push(c));
- let dead=false,exit=null;const closed=new Promise(r=>child.on('close',r));
- child.on('exit',(code,signal)=>{dead=true;exit={code,signal};});child.on('error',e=>{dead=true;exit={error:describeProbeError(e)};});
+ let dead=false,exit=null,onExit;const exited=new Promise(r=>{onExit=r;}),closed=new Promise(r=>child.on('close',r));
+ child.on('exit',(code,signal)=>{dead=true;exit={code,signal};onExit('exited');});child.on('error',e=>{dead=true;exit={error:describeProbeError(e)};onExit('exited');});
  const stop=()=>{try{child.kill('SIGTERM');}catch{/* already gone */}};
  process.on('exit',stop);
  let probes=0,last='none yet';
@@ -66,12 +75,26 @@ export async function startIsolatedApp(source=process.env,{attempts=180,interval
    `[isolated-app] supervisor and app output, last ${DIAG_TAIL_CHARS} chars at most, credentials redacted:`,
    indent('stdout',out),indent('stderr',err)].join('\n'));
  };
- for(let i=0;i<attempts;i++){
-  if(dead){await Promise.race([closed,new Promise(r=>setTimeout(r,1000))]);report('the isolated app exited before it was ready');throw new Error('The isolated app exited before it was ready (is the production build present? run npm run build).');}
-  probes++;
-  try{const r=await fetch(base+'/login');last=`HTTP ${r.status}`;if(r.ok)return {base,stop};}catch(e){last=`connection error ${describeProbeError(e)}`;}
-  await new Promise(r=>setTimeout(r,intervalMs));
- }
- report('the isolated app did not become ready in time');
- stop();throw new Error('The isolated app did not become ready in time.');
+ const onSignal=signal=>{report(`the importer received ${signal} while waiting for the isolated app; stopping (this is best effort: SIGKILL cannot be logged)`);stop();process.exit(SIGNAL_EXIT[signal]);};
+ const handlers=Object.keys(SIGNAL_EXIT).map(sig=>[sig,()=>onSignal(sig)]);
+ for(const [sig,h] of handlers)process.on(sig,h);
+ const release=()=>{for(const [sig,h] of handlers)process.off(sig,h);};
+ log(`[isolated-app] starting: GET /login on 127.0.0.1:${port}, wall-clock budget ${Math.round(budgetMs/1000)}s, importer pid ${process.pid}`);
+ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+ try{
+  while(Date.now()<deadline){
+   if(dead){await Promise.race([closed,sleep(1000)]);report('the isolated app exited before it was ready');throw new Error('The isolated app exited before it was ready (is the production build present? run npm run build).');}
+   const limit=Math.max(1,Math.min(probeTimeoutMs,deadline-Date.now())),ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),limit);
+   probes++;
+   const probe=fetch(base+'/login',{signal:ctl.signal}).then(r=>{r.body?.cancel().catch(()=>{});return {ok:r.ok,text:`HTTP ${r.status}`};},
+    e=>({ok:false,text:ctl.signal.aborted?`no response within ${limit} ms (probe cancelled)`:`connection error ${describeProbeError(e)}`}));
+   const outcome=await Promise.race([probe,exited]);
+   clearTimeout(timer);
+   if(outcome==='exited'){ctl.abort();last=`probe ${probes} was still outstanding when the supervisor exited`;await Promise.race([closed,sleep(1000)]);report('the isolated app exited before it was ready');throw new Error('The isolated app exited before it was ready (is the production build present? run npm run build).');}
+   last=outcome.text;if(outcome.ok)return {base,stop};
+   await Promise.race([sleep(Math.max(0,Math.min(intervalMs,deadline-Date.now()))),exited]);
+  }
+  report('the isolated app did not become ready in time');
+  stop();throw new Error('The isolated app did not become ready in time.');
+ }finally{release();}
 }

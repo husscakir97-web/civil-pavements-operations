@@ -165,7 +165,7 @@ try{
   // the loader refuses to fingerprint, plan or apply unless the freeze is in force and long enough
   const w2=await world(c.name);
   for(const [label,over,re] of [['no maintenance window',{MAINTENANCE_UNTIL:''},/not set/],['an expired window',{MAINTENANCE_UNTIL:soon(-60e3)},/ended/],['an invalid window',{MAINTENANCE_UNTIL:'soon'},/valid/],['a window with under 5 minutes left',{MAINTENANCE_UNTIL:soon(120e3)},/less than \d+ minutes/],['an unbounded window (13 hours)',{MAINTENANCE_UNTIL:soon(13*3600e3)},/more than 12 hours/]])
-   for(const mode of ['fingerprint','plan','apply']){x=startCmd(hostedEnv(c,aC,{...over,EXISTING_TENANT_LOAD:mode,EXISTING_TENANT_PLAN_HASH:'a'.repeat(64),DEMO_SEED_PASSWORD:password,EXISTING_TENANT_BACKUP_EVIDENCE_JSON:'{}'}));await waitFor(()=>/refused|finished|nothing was done/.test(x.log),60000);
+   for(const mode of ['fingerprint','plan','apply']){x=startCmd(hostedEnv(c,aC,{...over,EXISTING_TENANT_LOAD:mode,EXISTING_TENANT_PLAN_HASH:'a'.repeat(64),DEMO_SEED_PASSWORD:password,EXISTING_TENANT_BACKUP_EVIDENCE_JSON:'{}'}));await waitFor(()=>/runtime child exit:/.test(x.log),60000);   // the refusal is several lines and is relayed line by line: wait for the closing exit line, not the first 'refused'
     check(`the loader refuses ${mode} with ${label}: the freeze is not in force, nothing is connected or written`,/write freeze is not in force/.test(x.log)&&re.test(x.log)&&!/finished with exit code 0/.test(x.log),x.log.replace(/\s+/g,' ').slice(-120));await killGroup(x);}
   check('after all those refusals the control database is unchanged',(await world(c.name))===w2);
 

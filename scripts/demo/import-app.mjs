@@ -86,7 +86,7 @@ export async function startIsolatedApp(source=process.env,{attempts=180,interval
    if(dead){await Promise.race([closed,sleep(1000)]);report('the isolated app exited before it was ready');throw new Error('The isolated app exited before it was ready (is the production build present? run npm run build).');}
    const limit=Math.max(1,Math.min(probeTimeoutMs,deadline-Date.now())),ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),limit);
    probes++;
-   const probe=fetch(base+'/login',{signal:ctl.signal}).then(r=>{r.body?.cancel().catch(()=>{});return {ok:r.ok,text:`HTTP ${r.status}`};},
+   const probe=fetch(base+'/login',{signal:ctl.signal}).then(r=>({ok:r.ok,text:`HTTP ${r.status}`}),
     e=>({ok:false,text:ctl.signal.aborted?`no response within ${limit} ms (probe cancelled)`:`connection error ${describeProbeError(e)}`}));
    const outcome=await Promise.race([probe,exited]);
    clearTimeout(timer);

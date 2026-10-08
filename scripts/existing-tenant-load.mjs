@@ -9,7 +9,7 @@
 //   plan          read-only: prints the plan, its conflicts and its hash
 //   apply         the reviewed import; needs EXISTING_TENANT_PLAN_HASH, EXISTING_TENANT_BACKUP_EVIDENCE_JSON (first apply), DEMO_SEED_PASSWORD
 //   verify        read-only verification of the demonstration records
-//   app-check     read-only: proves the importer's private app accepts TCP connections on this host (no sign-in, no writes), before any apply
+//   app-check     read-only: proves the importer's private app accepts connections on this host, over loopback TCP or a unix socket (no sign-in, no writes), before any apply
 import {spawn} from 'node:child_process';
 import {mkdtempSync,writeFileSync,existsSync,readFileSync,mkdirSync,chmodSync,rmSync} from 'node:fs';
 import {tmpdir,homedir} from 'node:os';

@@ -76,6 +76,17 @@ jobs:
           mysql -h 127.0.0.1 -uroot -pintegration-only -e "CREATE DATABASE import_check_test CHARACTER SET utf8mb4; CREATE DATABASE import_review_test CHARACTER SET utf8mb4;"
           MYSQL_DATABASE=import_check_test npm run test:import-demo
           MYSQL_DATABASE=import_review_test npm run test:import-review
+      - name: Importer end to end over the unix-socket transport (what a host that refuses loopback TCP uses; disposable databases)
+        env:
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: integration-only
+          PRIVATE_APP_TRANSPORT: unix
+        run: |
+          mysql -h 127.0.0.1 -uroot -pintegration-only -e "CREATE DATABASE import_check_unix_test CHARACTER SET utf8mb4; CREATE DATABASE import_review_unix_test CHARACTER SET utf8mb4;"
+          MYSQL_DATABASE=import_check_unix_test npm run test:import-demo
+          MYSQL_DATABASE=import_review_unix_test npm run test:import-review
       - name: Hosted-import path suites (existing tenant + staging, incl. maintenance freeze and SIGKILL interruption/resume; disposable databases)
         env:
           MYSQL_HOST: 127.0.0.1

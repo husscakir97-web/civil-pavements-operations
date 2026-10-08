@@ -40,7 +40,8 @@ test('normal host: the bare child and the private app both accept TCP, result PA
   assert.equal(code,0,log);
   assert.match(log,/bare node child on 127\.0\.0\.1:\d+: child reports address \{"address":"127\.0\.0\.1".*"port":\d+\}; TCP connected; GET \/ HTTP 200/);
   assert.match(log,/tcp LISTEN 127\.0\.0\.1:\d+/);
-  assert.match(log,/private app at http:\/\/127\.0\.0\.1:\d+: TCP connected; GET \/ HTTP 200/);
+  assert.match(log,/private app over http:\/\/127\.0\.0\.1:\d+: TCP connected; GET \/ HTTP 200/);
+  assert.match(log,/transports a child process can be reached on from this process: loopback TCP: works; unix socket: works/);
   assert.match(log,/RESULT: PASS .* An apply attempt can proceed\./);
   assert.match(log,/node v\d+\.\d+\.\d+ \(node\)/);
   await new Promise(r=>setTimeout(r,800));assert.deepEqual(leftovers(f.root),[],'private app must be stopped');
@@ -50,7 +51,7 @@ test('normal host: the bare child and the private app both accept TCP, result PA
 test('a private app that accepts TCP and answers HTTP 500 elsewhere still passes: the check proves the socket, not the pages',async()=>{
  const f=await fixture(`import {createServer} from 'node:http';
  createServer((q,r)=>{r.statusCode=q.url==='/login'?200:500;r.end('x');}).listen(Number(process.env.PORT),process.env.HOSTNAME);`);
- try{const {code,log}=await run(f,fast);assert.equal(code,0,log);assert.match(log,/private app at .*TCP connected; GET \/ HTTP 500/);assert.match(log,/RESULT: PASS/);}finally{f.done();}
+ try{const {code,log}=await run(f,fast);assert.equal(code,0,log);assert.match(log,/private app over .*TCP connected; GET \/ HTTP 500/);assert.match(log,/RESULT: PASS/);}finally{f.done();}
 });
 
 test('hosted symptom reproduced: Ready banner and a 127.0.0.1 URL, but a unix socket - the check FAILS and says exactly that',async()=>{
@@ -63,7 +64,7 @@ test('hosted symptom reproduced: Ready banner and a 127.0.0.1 URL, but a unix so
   assert.match(log,/unix LISTEN ac-hijack-\d+\.sock/,'the /proc inventory shows the real listener');
   assert.ok(!/tcp LISTEN 127\.0\.0\.1:\d+.*\n.*\[isolated-app\]/.test(log.split('sockets owned')[1]||''),'no TCP listener for the private app');
   assert.match(log,/bare node child .*TCP connected/);
-  assert.match(log,/RESULT: FAIL .*private app does NOT accept TCP connections\. The bare child works, so the cause is in the private app's own launch/);
+  assert.match(log,/RESULT: FAIL .*the private app does NOT accept connections although a bare child does, so the cause is in the private app's own launch/);
   assert.ok(!log.includes(PASSWORD),'credential leaked');
  }finally{for(const pid of leftovers(f.root))try{process.kill(pid,'SIGKILL');}catch{/* gone */}f.done();}
 });

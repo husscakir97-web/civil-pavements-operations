@@ -6,9 +6,10 @@ import {spawn} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
 import {createServer} from 'node:net';
 import {fileURLToPath} from 'node:url';
-import {resolve} from 'node:path';
+import {resolve,basename} from 'node:path';
+import {readdirSync,readFileSync,readlinkSync} from 'node:fs';
 
-const freePort=()=>new Promise((resolve,reject)=>{const s=createServer();s.listen(0,'127.0.0.1',()=>{const {port}=s.address();s.close(()=>resolve(port));});s.on('error',reject);});
+export const freePort=()=>new Promise((resolve,reject)=>{const s=createServer();s.listen(0,'127.0.0.1',()=>{const {port}=s.address();s.close(()=>resolve(port));});s.on('error',reject);});
 
 /** Environment for the isolated app: copied database settings, nothing else from the importer's environment. */
 export function isolatedAppEnv(source,base){
@@ -45,6 +46,54 @@ export function outputTail(secrets,cap=DIAG_RAW_CAP,max=DIAG_TAIL_CHARS){
 }
 const describeProbeError=e=>String(e?.cause?.code||e?.code||e?.name||'error').replace(/[^\w.-]/g,'').slice(0,40)||'error';
 
+// ---- what is actually listening (Linux /proc; read-only, names and ports only) ----
+// A printed "Local: http://127.0.0.1:<port>" is the requested address, not proof of a socket: Next only takes the port from server.address() when that is an object.
+// This reads the sockets the isolated app's process tree really owns, so a log can say "TCP LISTEN 127.0.0.1:<port>" or "unix LISTEN <name>" or "none".
+const readText=p=>{try{return readFileSync(p,'utf8');}catch{return '';}};
+const ipv4=h=>[6,4,2,0].map(i=>parseInt(h.slice(i,i+2),16)).join('.');
+function tcpAddress(hex){
+ if(hex.length===8)return ipv4(hex);
+ if(/^0+$/.test(hex))return '::';
+ if(/^0{24}01000000$/i.test(hex))return '::1';
+ const m=/^0{16}ffff0000([0-9a-f]{8})$/i.exec(hex);return m?'::ffff:'+ipv4(m[1]):'ipv6';
+}
+function tcpTable(file){
+ const out=new Map();
+ for(const line of readText(file).split('\n').slice(1)){const f=line.trim().split(/\s+/);if(f.length<10)continue;const [a,port]=f[1].split(':');out.set(f[9],{kind:'tcp',listen:f[3]==='0A',addr:tcpAddress(a),port:parseInt(port,16)});}
+ return out;
+}
+function unixTable(file){
+ const out=new Map();
+ for(const line of readText(file).split('\n').slice(1)){const f=line.trim().split(/\s+/);if(f.length<7)continue;
+  const path=f[7]||'';out.set(f[6],{kind:'unix',listen:(parseInt(f[3],16)&0x10000)!==0,name:path?(path.startsWith('@')?'@abstract':basename(path)):'(unnamed)'});}
+ return out;
+}
+const HOST_ENV_NAMES=/^(NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|PASSENGER\w*|IS_PASSENGER|LSNODE\w*|LSAPI\w*|LS_\w+|PHUSION\w*)$/;
+/** argv basenames (first 4) and the NAMES (never values) of hosting-related environment variables of one process. */
+export function describeProcess(pid,proc='/proc'){
+ const argv=readText(`${proc}/${pid}/cmdline`).split('\0').filter(Boolean).slice(0,4).map(a=>basename(a).slice(0,40));
+ const envNames=readText(`${proc}/${pid}/environ`).split('\0').map(e=>e.split('=')[0]).filter(n=>HOST_ENV_NAMES.test(n)).sort();
+ return {pid:Number(pid),argv,envNames};
+}
+/** The process tree rooted at rootPid and the sockets each process owns. Returns [] when /proc is unavailable. */
+export function listenerInventory(rootPid,proc='/proc'){
+ let pids;try{pids=readdirSync(proc).filter(n=>/^\d+$/.test(n));}catch{return [];}
+ const parent=new Map();
+ for(const n of pids){const st=readText(`${proc}/${n}/stat`);if(!st)continue;const rest=st.slice(st.lastIndexOf(')')+2).split(' ');parent.set(Number(n),Number(rest[1]));}
+ const tree=[Number(rootPid)];for(let i=0;i<tree.length&&tree.length<20;i++)for(const [pid,pp] of parent)if(pp===tree[i]&&!tree.includes(pid))tree.push(pid);
+ const sockets=new Map([...tcpTable(`${proc}/net/tcp`),...tcpTable(`${proc}/net/tcp6`),...unixTable(`${proc}/net/unix`)]);
+ return tree.filter(pid=>parent.has(pid)).map(pid=>{
+  const owned=[];
+  try{for(const fd of readdirSync(`${proc}/${pid}/fd`)){let l='';try{l=readlinkSync(`${proc}/${pid}/fd/${fd}`);}catch{continue;}const m=/^socket:\[(\d+)\]$/.exec(l);const s=m&&sockets.get(m[1]);if(s&&s.listen)owned.push(s);}}catch{/* not readable */}
+  return {...describeProcess(pid,proc),listeners:owned};
+ });
+}
+const formatListener=l=>l.kind==='tcp'?`tcp LISTEN ${l.addr}:${l.port}`:`unix LISTEN ${l.name}`;
+export function formatInventory(entries){
+ if(!entries.length)return ['(process table not readable here)'];
+ return entries.map(e=>`pid ${e.pid} [${e.argv.join(' ')||'?'}] listening: ${e.listeners.length?e.listeners.map(formatListener).join(', '):'none'}${e.envNames.length?` | hosting-related env names: ${e.envNames.join(',')}`:''}`);
+}
+
 export const READINESS_PROBE_TIMEOUT_MS=5000;
 const SIGNAL_EXIT={SIGTERM:143,SIGHUP:129};
 
@@ -73,7 +122,8 @@ export async function startIsolatedApp(source=process.env,{attempts=180,interval
    `[isolated-app] elapsed=${Date.now()-t0}ms probes=${probes} supervisor=${dead?'exited'+(exit?(exit.error?` (spawn error ${exit.error})`:` code=${exit.code} signal=${exit.signal}`):''):'running'} probe=GET /login on 127.0.0.1 (port ${port})`,
    `[isolated-app] last readiness probe: ${last}`,
    `[isolated-app] supervisor and app output, last ${DIAG_TAIL_CHARS} chars at most, credentials redacted:`,
-   indent('stdout',out),indent('stderr',err)].join('\n'));
+   indent('stdout',out),indent('stderr',err),
+   '[isolated-app] sockets owned by the supervisor and its children (read from /proc, not from what the app printed):',...(dead?['(the supervisor had already exited)']:formatInventory(child.pid?listenerInventory(child.pid):[])).map(l=>`[isolated-app]   ${l}`)].join('\n'));
  };
  const onSignal=signal=>{report(`the importer received ${signal} while waiting for the isolated app; stopping (this is best effort: SIGKILL cannot be logged)`);stop();process.exit(SIGNAL_EXIT[signal]);};
  const handlers=Object.keys(SIGNAL_EXIT).map(sig=>[sig,()=>onSignal(sig)]);

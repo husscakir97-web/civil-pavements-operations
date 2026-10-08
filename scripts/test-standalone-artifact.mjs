@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {createServer} from 'node:net';
+import {createServer,connect} from 'node:net';
 import {cpSync,existsSync,mkdtempSync,readdirSync,rmSync,lstatSync,renameSync,symlinkSync,writeFileSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -55,7 +55,8 @@ try{
  const {startIsolatedApp}=await import(pathToFileURL(join(root,'scripts/demo/import-app.mjs')).href);
  const app=await startIsolatedApp({PATH:process.env.PATH,EXISTING_TENANT_RUNTIME_ENABLE:'true',EXISTING_TENANT_LOAD:'apply',NODE_OPTIONS:'invalid'});
  try{assert.equal(new URL(app.base).hostname,'127.0.0.1');assert.equal((await fetch(app.base+'/login')).status,200);}
- finally{app.stop();await waitFor(async()=>{try{await fetch(app.base+'/login');return false;}catch{return true;}});}
+ // 'stopped' means a NEW TCP connection is refused. (A pooled keep-alive fetch can still be answered by a server that is mid graceful shutdown, which made this check timing-dependent.)
+ finally{app.stop();await waitFor(()=>new Promise(res=>{const sock=connect({host:'127.0.0.1',port:Number(new URL(app.base).port)});sock.once('connect',()=>{sock.destroy();res(false);});sock.once('error',()=>res(true));}));}
  console.log('PASS detached artifact isolated standalone child startup and shutdown');
 }finally{
  for(const c of processes)await stop(c);

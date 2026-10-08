@@ -1,3 +1,4 @@
+// Planning regression suite: exercises estimate approval, award, and shift readiness.
 const ts = require('typescript');
 const fs = require('node:fs');
 const path = require('node:path');

@@ -207,8 +207,8 @@ try{
  await killGroup(h);
  // app-check: read-only proof that the importer's private app really accepts TCP connections, run through the real loader, the real Next app and the log relay
  h=startCmd(hostedEnv(f,allow,{EXISTING_TENANT_LOAD:'app-check'}));await finished(h,'app-check',150000);
- check('hosted flow: app-check proves the private app and a bare node child accept TCP connections (a real tcp LISTEN on 127.0.0.1 is read from /proc), writes nothing and signs nobody in',
-  exitOk(h,'app-check')&&/RESULT: PASS/.test(h.log)&&/private app at http:\/\/127\.0\.0\.1:\d+: TCP connected; GET \/ HTTP \d{3}/.test(h.log)&&/bare node child on 127\.0\.0\.1:\d+: .*TCP connected/.test(h.log)&&!/sign-in|Pre-import baseline/.test(h.log)&&(await world(f.name))===w0,h.log.replace(/\s+/g,' ').slice(-260));
+ check('hosted flow: app-check proves the private app and a bare node child accept connections (the transport probe picks loopback TCP here; a real tcp LISTEN on 127.0.0.1 is read from /proc), writes nothing and signs nobody in',
+  exitOk(h,'app-check')&&/RESULT: PASS/.test(h.log)&&/private app over http:\/\/127\.0\.0\.1:\d+: TCP connected; GET \/ HTTP \d{3}/.test(h.log)&&/bare node child on 127\.0\.0\.1:\d+: .*TCP connected/.test(h.log)&&!/sign-in|Pre-import baseline/.test(h.log)&&(await world(f.name))===w0,h.log.replace(/\s+/g,' ').slice(-260));
  await killGroup(h);
  const evJson=JSON.stringify(await evidenceFor(f,{fingerprint:fp}));
  h=startCmd(hostedEnv(f,allow,{EXISTING_TENANT_LOAD:'apply',EXISTING_TENANT_PLAN_HASH:ph,EXISTING_TENANT_BACKUP_EVIDENCE_JSON:evJson}));

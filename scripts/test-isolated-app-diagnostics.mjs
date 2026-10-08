@@ -147,8 +147,9 @@ test('a probe is never allowed past the deadline even when the per-probe cap is 
 test('the supervisor exiting during an outstanding probe ends the wait at once and says so',async()=>{
  const f=await fixture(HANG);const logs=[];const t0=Date.now();let msg='';
  const run=f.startIsolatedApp(source,{attempts:200,intervalMs:100,probeTimeoutMs:30000,log:(...a)=>logs.push(a.join(' '))}).catch(e=>{msg=e.message;});
- await new Promise(r=>setTimeout(r,1200));
- const sup=execSync(`ps -eo pid,args | grep -F '${f.root}' | grep 'app-supervisor.mjs' | grep -v grep | awk '{print $1}'`).toString().trim().split('\n').map(Number);
+ // wait for the supervisor and an outstanding probe (the transport probe before it takes a moment, longer on a busy machine)
+ let sup=[];for(let i=0;i<100&&sup.length!==1;i++){await new Promise(r=>setTimeout(r,100));sup=execSync(`ps -eo pid,args | grep -F '${f.root}' | grep 'app-supervisor.mjs' | grep -v grep | awk '{print $1}' || true`).toString().trim().split('\n').filter(Boolean).map(Number);}
+ await new Promise(r=>setTimeout(r,700));
  assert.equal(sup.length,1);process.kill(sup[0],'SIGKILL');
  await run;const log=logs.join('\n');
  try{

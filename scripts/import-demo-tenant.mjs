@@ -148,12 +148,12 @@ try{
   if(!owner||owner.organisation_id!==org||owner.role!=='admin'){console.error('Refusing to apply: the signed-in account must be an administrator of the named organisation. Nothing was changed.');process.exit(2);}
   // a private app instance bound to this database and configuration, then proof that it really is
   app=await startIsolatedApp(process.env);
-  let r;for(let i=0;i<6;i++){r=await fetch(app.base+'/api/auth/sign-in/email',{method:'POST',headers:{origin:app.base,'Content-Type':'application/json'},body:JSON.stringify({email,password})});if(r.status!==429)break;await new Promise(x=>setTimeout(x,(Number(r.headers.get('retry-after'))||15)*1000));}
+  let r;for(let i=0;i<6;i++){r=await app.fetch('/api/auth/sign-in/email',{method:'POST',headers:{origin:app.base,'Content-Type':'application/json'},body:JSON.stringify({email,password})});if(r.status!==429)break;await new Promise(x=>setTimeout(x,(Number(r.headers.get('retry-after'))||15)*1000));}
   if(!r.ok){console.error('Refusing to apply: sign-in failed ('+r.status+').');process.exit(2);}
   const cookie=r.headers.getSetCookie().map(c=>c.split(';')[0]).join('; ');
   await verifyBinding(raw,cookie,owner.id);
-  const rawCall=async(path,method='GET',body)=>{const res=await fetch(app.base+path,{method,headers:{origin:app.base,cookie,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const text=await res.text();let json;try{json=JSON.parse(text);}catch{json=text;}return {status:res.status,body:json};};
-  const rawForm=async(path,fields)=>{const f=new FormData();for(const [k,v] of Object.entries(fields))f.set(k,typeof v==='string'?v:JSON.stringify(v));const res=await fetch(app.base+path,{method:'POST',headers:{origin:app.base,cookie},body:f});const text=await res.text();let json;try{json=JSON.parse(text);}catch{json=text;}return {status:res.status,body:json};};
+  const rawCall=async(path,method='GET',body)=>{const res=await app.fetch(path,{method,headers:{origin:app.base,cookie,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const text=await res.text();let json;try{json=JSON.parse(text);}catch{json=text;}return {status:res.status,body:json};};
+  const rawForm=async(path,fields)=>{const f=new FormData();for(const [k,v] of Object.entries(fields))f.set(k,typeof v==='string'?v:JSON.stringify(v));const res=await app.fetch(path,{method:'POST',headers:{origin:app.base,cookie},body:f});const text=await res.text();let json;try{json=JSON.parse(text);}catch{json=text;}return {status:res.status,body:json};};
 
   // The baseline is the state of the whole database BEFORE the first change, stored as salted digests only (no raw records, no
   // secrets; session and token tables are never read). A resumed import reuses it, so the final comparison is always against the
